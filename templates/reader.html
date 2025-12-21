@@ -89,10 +89,42 @@
             font-size: 14px; opacity: 0; transition: opacity 0.5s;
         }
         #toast.show { visibility: visible; opacity: 1; }
+        /* === 新增：同步提示横幅 === */
+        .sync-alert {
+            position: fixed; top: -60px; left: 0; width: 100%;
+            background-color: rgba(0, 123, 255, 0.95); /* 半透明蓝色 */
+            color: white; z-index: 2000;
+            display: flex; justify-content: center; align-items: center;
+            padding: 12px 0;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            transition: top 0.5s ease-in-out; /* 顺滑的滑入动画 */
+            backdrop-filter: blur(5px);
+        }
+        .sync-alert.active { top: 0; }
+        .sync-content { font-size: 14px; display: flex; align-items: center; gap: 15px; }
+        .sync-btn {
+            background: white; color: #007bff; border: none;
+            padding: 4px 12px; border-radius: 20px;
+            font-size: 12px; font-weight: bold; cursor: pointer;
+            text-decoration: none; display: inline-block;
+        }
+        .sync-btn:hover { background: #f0f0f0; transform: scale(1.05); }
+        .sync-close {
+            background: none; border: none; color: rgba(255,255,255,0.7);
+            cursor: pointer; font-size: 18px; margin-left: 10px;
+        }
+        .sync-close:hover { color: white; }
     </style>
 </head>
 <body>
-
+    <!-- 同步提示横幅 -->
+    <div id="syncAlert" class="sync-alert">
+        <div class="sync-content">
+            <span>📢 检测到其他设备更新了进度！</span>
+            <a id="syncLink" href="#" class="sync-btn">跳转到最新章节</a>
+            <button class="sync-close" onclick="dismissSync()">×</button>
+        </div>
+    </div>
 <div class="navbar">
     <div class="nav-title">
         {% if db_key %}
@@ -159,6 +191,149 @@
 <script>
     const dbKey = "{{ db_key }}";
     const currentUrl = "{{ current_url }}";
+    let isSyncDismissed = false; // 用户是否手动关闭了提示
+
+    // === 1. 核心：多端同步检测 ===
+    function checkRemoteProgress() {
+        if (!dbKey || isSyncDismissed) return;
+
+        fetch('/api/get_value', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: dbKey })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.status === 'success') {
+                const remoteUrl = data.value;
+                // 如果服务器记录的 URL 和当前 URL 不一致，且不是空
+                // 注意：我们需要解码 URL 来对比，防止编码差异
+                if (remoteUrl && remoteUrl !== currentUrl && decodeURIComponent(remoteUrl) !== decodeURIComponent(currentUrl)) {
+                    showSyncAlert(remoteUrl);
+                } else {
+                    hideSyncAlert(); // 如果又同步了，自动隐藏
+                }
+            }
+        })
+        .catch(e => console.log("同步检测跳过(网络微瑕)"));
+    }
+
+    function showSyncAlert(newUrl) {
+        const alertBox = document.getElementById('syncAlert');
+        const linkBtn = document.getElementById('syncLink');
+        
+        // 设置跳转链接
+        linkBtn.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+        
+        // 显示横幅 (添加 active 类)
+        alertBox.classList.add('active');
+    }
+
+    function hideSyncAlert() {
+        document.getElementById('syncAlert').classList.remove('active');
+    }
+
+    function dismissSync() {
+        isSyncDismissed = true; // 本次阅读不再提示
+        hideSyncAlert();
+    }
+
+    // === 2. 页面加载逻辑 ===
+    // window.addEventListener('load', function() {
+    //     // A. 自动保存当前进度 (上报到云端)
+    //     autoSyncProgress();
+
+    //     // B. 启动轮询 (每5秒检查一次)
+    //     setInterval(checkRemoteProgress, 5000);
+
+    //     // C. 绑定键盘事件
+    //     document.addEventListener('keydown', function(event) {
+    //         const prevBtn = document.getElementById('link-prev');
+    //         const nextBtn = document.getElementById('link-next');
+    //         if (event.key === "ArrowLeft" && prevBtn) {
+    //             prevBtn.classList.add('active');
+    //             showToast("正在跳转上一章...");
+    //             setTimeout(() => window.location.href = prevBtn.href, 100);
+    //         } 
+    //         else if (event.key === "ArrowRight" && nextBtn) {
+    //             nextBtn.classList.add('active');
+    //             showToast("正在跳转下一章...");
+    //             setTimeout(() => window.location.href = nextBtn.href, 100);
+    //         }
+    //     });
+    // });
+
+    // === 3. 之前的辅助函数 ===
+    // === 3. 之前的辅助函数 (修改版：支持静默保存) ===
+    
+    // isSilent: true = 静默保存(不成功不弹窗), false = 手动保存(成功也要弹窗)
+    function autoSyncProgress(isSilent = true) {
+        if (!dbKey) return; 
+        
+        // 1. 上报 Last Read (始终静默)
+        fetch('/api/last_read', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: dbKey })
+        }).catch(err => console.error(err));
+        
+        // 2. 更新章节进度
+        fetch('/update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: dbKey, value: currentUrl })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if(data.status === 'success') {
+                console.log("✅ 进度已同步");
+                // 【核心修改】只有在非静默模式（手动点击）下，才显示成功提示
+                if (!isSilent) {
+                    showToast("💾 进度已云端同步");
+                }
+            } else {
+                // 【核心修改】失败了无论如何都要提示
+                showToast("❌ 保存失败: " + (data.message || "未知错误"));
+            }
+        })
+        .catch(err => {
+            console.error(err);
+            // 网络错误也要提示
+            showToast("❌ 网络错误: 无法同步进度");
+        });
+    }
+
+    // 手动点击按钮时调用的函数
+    function syncProgress() {
+        // 传入 false，表示“我要看到反馈”
+        autoSyncProgress(false); 
+    }
+
+    // === 2. 页面加载逻辑 ===
+    window.addEventListener('load', function() {
+        // A. 自动保存当前进度 (传入 true，表示静默模式)
+        autoSyncProgress(true);
+
+        // B. 启动轮询 (每5秒检查一次)
+        setInterval(checkRemoteProgress, 5000);
+
+        // ... (键盘事件保持不变) ...
+        document.addEventListener('keydown', function(event) {
+            // ... (保持原有的键盘逻辑) ...
+            const prevBtn = document.getElementById('link-prev');
+            const nextBtn = document.getElementById('link-next');
+            if (event.key === "ArrowLeft" && prevBtn) {
+                prevBtn.classList.add('active');
+                showToast("正在跳转上一章...");
+                setTimeout(() => window.location.href = prevBtn.href, 100);
+            } 
+            else if (event.key === "ArrowRight" && nextBtn) {
+                nextBtn.classList.add('active');
+                showToast("正在跳转下一章...");
+                setTimeout(() => window.location.href = nextBtn.href, 100);
+            }
+        });
+    });
 
     function showToast(msg) {
         var x = document.getElementById("toast");
@@ -167,59 +342,13 @@
         setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
     }
 
-    function syncProgress() {
-        if (!dbKey) return;
-        
-        showToast("⏳ 正在保存...");
-
-        fetch('/update', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ key: dbKey, value: currentUrl })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if(data.status === 'success') {
-                showToast("✅ 进度已保存: " + data.message);
-            } else {
-                showToast("❌ 保存失败");
-            }
-        })
-        .catch(error => showToast("❌ 网络错误"));
-    }
-
-    // === 新增：键盘监听逻辑 ===
-    document.addEventListener('keydown', function(event) {
-        // 获取按钮元素
-        const prevBtn = document.getElementById('link-prev');
-        const nextBtn = document.getElementById('link-next');
-
-        // 左箭头
-        if (event.key === "ArrowLeft") {
-            if (prevBtn) {
-                prevBtn.classList.add('active'); // 添加按压效果
-                showToast("正在跳转上一章...");
-                setTimeout(() => window.location.href = prevBtn.href, 100);
-            }
-        } 
-        // 右箭头
-        else if (event.key === "ArrowRight") {
-            if (nextBtn) {
-                nextBtn.classList.add('active'); // 添加按压效果
-                showToast("正在跳转下一章...");
-                setTimeout(() => window.location.href = nextBtn.href, 100);
-            }
-        }
-    });
+    // (保留 toggleTheme, forceRefresh 等其他函数...)
     function toggleTheme() {
         const body = document.body;
         const container = document.querySelector('.container');
         const navbar = document.querySelector('.navbar');
-        const content = document.querySelector('.content');
         
-        // 简单的黑白反转逻辑
         if (body.style.backgroundColor === 'rgb(34, 34, 34)' || body.style.backgroundColor === '#222') {
-            // 切换回日间
             body.style.backgroundColor = '#e6e6e6';
             container.style.backgroundColor = '#f7f7f7';
             container.style.color = '#333';
@@ -229,27 +358,25 @@
             document.querySelectorAll('p').forEach(p => p.style.color = '#222');
             showToast("☀️ 日间模式");
         } else {
-            // 切换到夜间
             body.style.backgroundColor = '#222';
             container.style.backgroundColor = '#2c2c2c';
             container.style.color = '#adb5bd';
             navbar.style.backgroundColor = '#1a1a1a';
             navbar.style.color = '#adb5bd';
             document.querySelectorAll('a').forEach(a => a.style.color = '#adb5bd');
-            document.querySelectorAll('p').forEach(p => p.style.color = '#ccc'); // 文字稍微调亮一点
+            document.querySelectorAll('p').forEach(p => p.style.color = '#ccc');
             showToast("🌙 夜间模式");
         }
     }
+
     function forceRefresh() {
         showToast("🔄 正在强制刷新...");
-        // 获取当前 URL 对象
         let url = new URL(window.location.href);
-        // 添加 force=true 参数
         url.searchParams.set('force', 'true');
-        // 重新加载页面
         window.location.href = url.toString();
     }
+    
+    // function syncProgress() {
+    //     autoSyncProgress(); // 手动点按钮也触发同样的逻辑
+    // }
 </script>
-
-</body>
-</html>

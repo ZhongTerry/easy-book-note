@@ -15,7 +15,7 @@
         }
 
         body {
-            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+            font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
             margin: 0; padding: 30px 20px;
             background-color: var(--bg); color: #333;
         }
@@ -87,6 +87,180 @@
         .r-title { font-weight: bold; color: #007bff; font-size: 15px; }
         .r-url { font-size: 12px; color: #999; margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
         .r-key { font-size: 12px; color: #28a745; margin-top: 2px; }
+
+        /* === 深度分析模态框 (Insight) === */
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.4); backdrop-filter: blur(5px); z-index: 2000;
+            justify-content: center; align-items: center;
+        }
+        .insight-card {
+            background: white; width: 90%; max-width: 700px; 
+            border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.15);
+            overflow: hidden; animation: popIn 0.3s ease-out;
+            display: flex; flex-direction: column;
+        }
+        @keyframes popIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        
+        .insight-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px 25px; color: white; display: flex; justify-content: space-between; align-items: center;
+        }
+        
+        .insight-header h2 { 
+            margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px;
+        }
+        
+        /* 修复后的关闭按钮样式 */
+        /* 修复后的关闭按钮样式 */
+        .close-btn { 
+            /* === 关键修复：重置全局 button 样式 === */
+            flex: none;        /* 禁止自动伸缩 */
+            min-width: auto;   /* 取消 80px 的最小宽度限制 */
+            background: rgba(255,255,255,0.2); 
+            border: none; 
+            color: white; 
+            
+            /* 强制固定宽高，现在 min-width 被取消了，这里才会生效 */
+            width: 32px; 
+            height: 32px; 
+            
+            border-radius: 50%; 
+            cursor: pointer; 
+            padding: 0; 
+            margin-left: 15px;
+            
+            /* 使用 Flex 完美居中符号 */
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            
+            /* 字体设置 */
+            font-family: Arial, sans-serif; 
+            font-size: 20px; 
+            line-height: 1;
+            
+            transition: all 0.2s ease;
+        }
+        
+        .close-btn:hover { 
+            background: rgba(255,255,255,0.4); 
+            transform: rotate(90deg); 
+        }
+        
+        .close-btn:active { transform: scale(0.9); }
+        
+        .insight-body { padding: 30px; display: grid; gap: 25px; }
+        
+        /* 数据概览卡片 */
+        .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+        .stat-box {
+            background: #f8f9fa; border-radius: 12px; padding: 15px; text-align: center;
+            border: 1px solid #eee; transition: transform 0.2s;
+        }
+        .stat-box:hover { transform: translateY(-3px); border-color: #dbe4ff; background: #f0f7ff; }
+        .stat-num { font-size: 24px; font-weight: 700; color: #2c3e50; margin-bottom: 5px; }
+        .stat-label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+
+        /* 热力图 */
+        .heatmap-container { margin-top: 10px; }
+        .heatmap-title { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 10px; display: flex; justify-content: space-between;}
+        .heatmap-grid {
+            display: flex; gap: 4px; height: 60px; align-items: flex-end; justify-content: space-between;
+        }
+        .heat-bar {
+            flex: 1; background: #e9ecef; border-radius: 3px; position: relative;
+            transition: height 0.5s ease; min-height: 4px;
+        }
+        .heat-bar:hover::after {
+            content: attr(data-date) " : " attr(data-count) "章";
+            position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+            background: #333; color: white; padding: 4px 8px; border-radius: 4px;
+            font-size: 10px; white-space: nowrap; pointer-events: none; margin-bottom: 5px; z-index: 10;
+        }
+
+        /* 关键词 */
+        .tags-cloud { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px; }
+        .tag-pill {
+            background: white; border: 1px solid #e0e0e0; color: #555;
+            padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
+        }
+        .tag-pill.top-1 { background: #fff0f6; border-color: #ffadd2; color: #c41d7f; }
+        .tag-pill.top-2 { background: #e6f7ff; border-color: #91d5ff; color: #096dd9; }
+        .tag-pill.top-3 { background: #f6ffed; border-color: #b7eb8f; color: #389e0d; }
+        /* === 视图切换按钮 === */
+        .view-toggle {
+            display: flex; justify-content: flex-end; margin-bottom: 15px;
+        }
+        .toggle-btn {
+            background: transparent; border: 1px solid #ddd; color: #666;
+            padding: 5px 10px; cursor: pointer; margin-left: -1px;
+            font-size: 14px; min-width: auto;
+        }
+        .toggle-btn.active {
+            background: #e9ecef; color: #333; font-weight: bold; border-color: #ccc;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .toggle-btn:first-child { border-radius: 4px 0 0 4px; }
+        .toggle-btn:last-child { border-radius: 0 4px 4px 0; }
+
+        /* === 网格书架模式 === */
+        .bookshelf-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 20px; padding: 10px 0;
+        }
+        
+        .book-card {
+            background: white; border-radius: 8px; overflow: hidden;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer; position: relative;
+            display: flex; flex-direction: column;
+            aspect-ratio: 2 / 3; /* 黄金比例书籍尺寸 */
+        }
+        .book-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.12);
+        }
+        
+        .book-cover {
+            flex: 1; padding: 15px;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; color: white;
+            background: linear-gradient(135deg, #667eea, #764ba2); /* 默认背景，会被JS覆盖 */
+            position: relative;
+        }
+        
+        /* 书脊效果 */
+        .book-cover::before {
+            content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+            background: rgba(255,255,255,0.2);
+            box-shadow: 1px 0 2px rgba(0,0,0,0.1);
+        }
+        
+        .book-title-card {
+            font-size: 16px; font-weight: bold; line-height: 1.4;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            word-break: break-all;
+            display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+        }
+        
+        .book-author-card {
+            font-size: 10px; margin-top: 8px; opacity: 0.8;
+            font-family: monospace;
+        }
+
+        .book-info-row {
+            padding: 10px; background: white; border-top: 1px solid #f0f0f0;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .book-key-tag {
+            font-size: 10px; background: #f0f0f0; color: #666; padding: 2px 6px; border-radius: 4px;
+        }
+        .book-action-icon {
+            font-size: 14px; color: #999; text-decoration: none;
+        }
+        .book-action-icon:hover { color: var(--primary); }
     </style>
 </head>
 <body>
@@ -112,12 +286,21 @@
             
             <button class="btn-ghost" onclick="doAction('list')">List All</button>
             <button class="btn-ghost" onclick="doRollback()" style="color: #e67e22; border-color: #e67e22;">⏪ Undo</button>
-            <button class="btn-ghost" onclick="clearInputs()">Clear</button>
+            <!-- <button class="btn-ghost" onclick="clearInputs()">Clear</button> -->
+            <!-- 原有的按钮... -->
+            <button onclick="openInsight()" style="background: linear-gradient(45deg, #11998e, #38ef7d);">📊 阅读洞察</button>
             <button class="btn-danger" onclick="doAction('remove')">Remove</button>
         </div>
 
         <div class="output">
+            <!-- 视图切换器 -->
+            <div class="view-toggle">
+                <button class="toggle-btn active" onclick="switchView('list')" title="列表视图">☰ List</button>
+                <button class="toggle-btn" onclick="switchView('grid')" title="网格书架">☷ Grid</button>
+            </div>
+
             <div id="msgBox" class="msg"></div>
+            <!-- 这里容器不变，内容由JS决定渲染什么 -->
             <div id="tableContainer"></div>
         </div>
     </div>
@@ -138,36 +321,126 @@
             </div>
         </div>
     </div>
-
+    <!-- 深度分析模态框 -->
+    <div id="insightModal" class="modal-overlay">
+        <div class="insight-card">
+            <div class="insight-header">
+                <h2>Reading Insights</h2>
+                <button class="close-btn" onclick="closeInsight()">×</button>
+            </div>
+            <div class="insight-body">
+                <!-- 1. 核心指标 -->
+                <div class="stats-row">
+                    <div class="stat-box">
+                        <div class="stat-num" id="st-books">-</div>
+                        <div class="stat-label">在读书籍</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-num" id="st-words">-</div>
+                        <div class="stat-label">累计字数(万)</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-num" id="st-days">-</div>
+                        <div class="stat-label">缓存章节</div>
+                    </div>
+                </div>
+    
+                <!-- 2. 活跃度热力图 -->
+                <div class="heatmap-container">
+                    <div class="heatmap-title">
+                        <span>近30天阅读活跃度</span>
+                        <span style="font-size:12px; color:#999; font-weight:400">基于本地缓存数据</span>
+                    </div>
+                    <div class="heatmap-grid" id="heatmapGrid">
+                        <!-- JS 生成柱状图 -->
+                    </div>
+                </div>
+    
+                <!-- 3. 阅读偏好 -->
+                <div style="text-align: center; margin-top: 10px;">
+                    <div class="heatmap-title" style="justify-content: center;">阅读口味关键词</div>
+                    <div class="tags-cloud" id="tagsCloud">
+                        <!-- JS 生成 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
     <script>
         const API_URL = 'http://127.0.0.1:5000';
+        let currentView = 'list'; // 默认视图
+        let currentData = {};     // 保存当前数据，方便切换视图时不用重新请求
 
+        // 根据字符串生成固定的柔和颜色
+        function stringToColor(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            // 使用 HSL 颜色空间，确保颜色好看 (饱和度 60-80%, 亮度 40-60%)
+            const h = Math.abs(hash) % 360;
+            const s = 60 + (Math.abs(hash) % 20); 
+            const l = 40 + (Math.abs(hash) % 20);
+            return `hsl(${h}, ${s}%, ${l}%)`;
+        }
+
+        function switchView(view) {
+            currentView = view;
+            // 更新按钮状态
+            document.querySelectorAll('.toggle-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.innerText.toLowerCase().includes(view));
+            });
+            // 重新渲染
+            if (currentData) renderTable(currentData);
+        }
         function handleEnter(e) {
             if (e.key !== 'Enter') return;
             if (e.target.id === 'value') doAction('insert');
             else if (e.target.id === 'key') doAction('find');
         }
 
-        async function doAction(action) {
-            const key = document.getElementById('key').value.trim();
-            const value = document.getElementById('value').value.trim();
-            
-            if (action !== 'list' && !key) return showMsg('Please enter a Key', 'error');
+async function doAction(action) {
+    const key = document.getElementById('key').value.trim();
+    const value = document.getElementById('value').value.trim();
+    
+    if (action !== 'list' && action !== 'find' && !key) return showMsg('Please enter a Key', 'error');
 
-            try {
-                const res = await fetch(`${API_URL}/${action}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ key, value })
-                });
-                const result = await res.json();
-                showMsg(result.message || action + ' done', result.status);
-                if (result.data) renderTable(result.data);
-                else if (action === 'insert' || action === 'remove' || action === 'list') doAction('list');
-            } catch (err) {
-                showMsg('Connection Error', 'error');
+    try {
+        const res = await fetch(`${API_URL}/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, value })
+        });
+        const result = await res.json();
+        
+        showMsg(result.message || action + ' done', result.status);
+
+        // === 逻辑修改点 ===
+        
+        if (['insert', 'update', 'remove', 'rollback'].includes(action)) {
+            if(result.status === 'success') {
+                // 1. 如果是 保存(Insert) 或 更新(Update)
+                //    直接调用 find，展示刚才操作的那条记录
+                if (action === 'insert' || action === 'update') {
+                    doAction('find'); 
+                } 
+                // 2. 如果是 删除(Remove) 或 回滚(Rollback)
+                //    还是刷新全列表比较直观
+                else {
+                    doAction('list');
+                }
             }
         }
+        
+        else if ((action === 'list' || action === 'find') && result.data) {
+            renderTable(result.data);
+        }
+
+    } catch (err) {
+        console.error(err);
+        showMsg('Connection Error', 'error');
+    }
+}
 
         async function doRollback() {
             if(!confirm("确定回退到上一步吗？")) return;
@@ -248,11 +521,21 @@
         }
 
         function renderTable(data) {
+            currentData = data; // 保存数据
             const container = document.getElementById('tableContainer');
+            
             if (Object.keys(data).length === 0) {
-                container.innerHTML = '<div style="text-align:center;color:#999">No data found</div>';
+                container.innerHTML = '<div style="text-align:center;color:#999;padding:40px;">书架空空如也</div>';
                 return;
             }
+
+            // === 分流逻辑 ===
+            if (currentView === 'grid') {
+                renderGrid(data, container);
+                return;
+            }
+
+            // === 原有的列表渲染逻辑 (保持不变) ===
             let html = '<table><thead><tr><th width="30%">Key / Tags</th><th>Value & Actions</th></tr></thead><tbody>';
             Object.keys(data).sort().forEach(k => {
                 const v = data[k];
@@ -271,8 +554,175 @@
             html += '</tbody></table>';
             container.innerHTML = html;
         }
+
+        // === 新增：网格渲染函数 ===
+        function renderGrid(data, container) {
+            let html = '<div class="bookshelf-grid">';
+            
+            Object.keys(data).sort().forEach(k => {
+                const v = data[k];
+                // 从 Key 中提取书名 (取最后一个斜杠后的部分)
+                const parts = k.split('/');
+                const titleKey = parts[parts.length - 1]; 
+                
+                // 自动生成背景色
+                const bgStyle = `background: linear-gradient(135deg, ${stringToColor(titleKey)}, ${stringToColor(titleKey + 'dark')});`;
+                
+                // 尝试解析中文名 (如果是拼音, 暂时显示拼音, 以后可以结合 AI 翻译)
+                const displayName = titleKey.toUpperCase(); 
+
+                const isLink = v.startsWith('http');
+                const clickAction = isLink ? `window.open('/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}', '_blank')` : `copyText('${v}')`;
+
+                html += `
+                    <div class="book-card" onclick="${clickAction}">
+                        <div class="book-cover" style="${bgStyle}">
+                            <div class="book-title-card">${displayName}</div>
+                            <div class="book-author-card">TXT</div>
+                        </div>
+                        <div class="book-info-row">
+                            <span class="book-key-tag">${titleKey}</span>
+                            ${isLink ? '<span class="book-action-icon" title="阅读">📖</span>' : '<span class="book-action-icon" title="复制">📋</span>'}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
         
-        window.onload = () => doAction('list');
+// 页面加载时自动执行
+// 页面加载时自动执行
+window.onload = function() {
+    // 1. 从服务器获取最后阅读记录
+    fetch('/api/last_read')
+        .then(res => res.json())
+        .then(async data => { // 注意这里加了 async
+            const lastKey = data.key;
+            
+            if (lastKey) {
+                // 2. 填入 Key
+                document.getElementById('key').value = lastKey;
+                
+                // 3. [新增] 精确获取对应的 Value 并填入输入框
+                try {
+                    const valRes = await fetch('/api/get_value', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ key: lastKey })
+                    });
+                    const valData = await valRes.json();
+                    if (valData.status === 'success') {
+                        document.getElementById('value').value = valData.value;
+                    }
+                } catch(e) { console.error("获取Value失败", e); }
+
+                // 4. 触发查找，显示列表
+                doAction('find');
+                
+                const msgBox = document.getElementById('msgBox');
+                msgBox.innerText = `☁️ 云端同步成功，已定位到：${lastKey}`;
+                msgBox.className = 'msg success';
+                msgBox.style.display = 'block';
+            } else {
+                // 5. 如果是第一次来，就列出所有书
+                doAction('list');
+            }
+        })
+        .catch(err => {
+            console.error("无法连接服务器获取同步信息");
+            doAction('list');
+        });
+};
+// === 深度分析逻辑 ===
+        function openInsight() {
+            const modal = document.getElementById('insightModal');
+            modal.style.display = 'flex';
+            
+            // 加载动画
+            document.getElementById('st-books').innerText = '...';
+            document.getElementById('heatmapGrid').innerHTML = '<div style="width:100%;text-align:center;font-size:12px;color:#999;line-height:60px;">正在分析本地数据...</div>';
+
+            fetch(`${API_URL}/api/analyze_stats`)
+                .then(res => res.json())
+                .then(res => {
+                    if (res.status === 'success') {
+                        renderStats(res.stats);
+                    } else {
+                        alert("分析失败");
+                    }
+                });
+        }
+
+        function closeInsight() {
+            document.getElementById('insightModal').style.display = 'none';
+        }
+
+        function renderStats(stats) {
+            // 1. 渲染数字
+            animateValue("st-books", 0, stats.books, 800);
+            animateValue("st-words", 0, Math.round(stats.words / 10000), 1000); // 转为万字
+            animateValue("st-days", 0, stats.chapters, 800);
+
+            // 2. 渲染热力图 (简单的柱状图)
+            const grid = document.getElementById('heatmapGrid');
+            grid.innerHTML = '';
+            
+            // 找出最大值用于归一化高度
+            const maxCount = Math.max(...stats.heatmap.map(d => d.count)) || 1;
+            
+            stats.heatmap.forEach(d => {
+                const bar = document.createElement('div');
+                bar.className = 'heat-bar';
+                // 计算高度百分比，最少 10%
+                const height = d.count > 0 ? (d.count / maxCount * 100) : 5; 
+                bar.style.height = `${height}%`;
+                
+                // 颜色深度：读得越多颜色越深
+                const opacity = d.count > 0 ? 0.3 + (d.count / maxCount * 0.7) : 0.1;
+                bar.style.backgroundColor = `rgba(102, 126, 234, ${opacity})`;
+                
+                bar.setAttribute('data-date', d.date.slice(5)); // 只显示 MM-DD
+                bar.setAttribute('data-count', d.count);
+                grid.appendChild(bar);
+            });
+
+            // 3. 渲染关键词
+            const cloud = document.getElementById('tagsCloud');
+            cloud.innerHTML = '';
+            if (stats.keywords.length === 0) {
+                cloud.innerHTML = '<span style="font-size:12px;color:#ccc">暂无足够数据分析</span>';
+            } else {
+                stats.keywords.forEach((item, index) => {
+                    const pill = document.createElement('span');
+                    pill.className = `tag-pill top-${index+1}`;
+                    pill.innerText = `${item[0]} (${item[1]})`;
+                    cloud.appendChild(pill);
+                });
+            }
+        }
+
+        // 数字滚动动画效果
+        function animateValue(id, start, end, duration) {
+            const obj = document.getElementById(id);
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                obj.innerHTML = Math.floor(progress * (end - start) + start);
+                if (progress < 1) {
+                    window.requestAnimationFrame(step);
+                }
+            };
+            window.requestAnimationFrame(step);
+        }
+        
+        // 点击遮罩关闭
+        document.getElementById('insightModal').addEventListener('click', function(e) {
+            if (e.target === this) closeInsight();
+        });
+        // window.onload = () => 
     </script>
 </body>
 </html>

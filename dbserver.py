@@ -13,6 +13,8 @@ import time
 import random
 import threading # 新增：用于后台下载
 from pypinyin import pinyin, lazy_pinyin, Style # 新增：拼音库
+import glob # 用于查找文件列表
+from datetime import datetime, timedelta # 用于生成时间戳
 
 # --- 0. 缓存管理器 (保持不变) ---
 class CacheManager:
@@ -265,13 +267,20 @@ class NovelCrawler:
         return data
 
 # --- 2. 数据库逻辑 (保持不变) ---
+# --- 2. 数据库逻辑 (带版本控制版) ---
 class SimpleDB:
-    # ... (保持不变) ...
     def __init__(self, db_name="mydatabase"):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.filename = os.path.join(self.base_dir, db_name + ".db")
+        
+        # 创建备份目录
+        self.backup_dir = os.path.join(self.base_dir, "backups")
+        if not os.path.exists(self.backup_dir):
+            os.makedirs(self.backup_dir)
+            
         self.data = {}
         self.load()
+
     def load(self):
         if os.path.exists(self.filename):
             try:
@@ -279,27 +288,86 @@ class SimpleDB:
                     for line in f:
                         line = line.strip()
                         if not line: continue
+                        # 兼容带冒号的内容，只分割第一个冒号
                         parts = line.split(':', 1)
                         if len(parts) == 2: self.data[parts[0]] = parts[1]
-            except: pass
+            except Exception as e:
+                print(f"[DB] Load Error: {e}")
+
+    def _manage_backups(self):
+        """核心功能：创建备份并限制数量"""
+        if not os.path.exists(self.filename):
+            return
+
+        # 1. 生成带时间戳的备份文件名 (精确到毫秒，防止操作太快文件名冲突)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_name = f"mydatabase_{timestamp}.bak"
+        backup_path = os.path.join(self.backup_dir, backup_name)
+
+        try:
+            # 2. 复制当前数据库文件作为备份
+            shutil.copy2(self.filename, backup_path)
+            print(f"[Backup] Created: {backup_name}")
+
+            # 3. 清理旧备份 (保留最新的10个)
+            # 获取所有 .bak 文件
+            pattern = os.path.join(self.backup_dir, "mydatabase_*.bak")
+            backups = sorted(glob.glob(pattern)) # 默认按文件名排序（也就是按时间排序）
+            
+            max_versions = 10
+            if len(backups) > max_versions:
+                # 计算需要删除的数量
+                to_delete = backups[:len(backups) - max_versions]
+                for f in to_delete:
+                    os.remove(f)
+                    print(f"[Backup] Pruned old version: {os.path.basename(f)}")
+
+        except Exception as e:
+            print(f"[Backup] Error: {e}")
+
     def save(self):
+        # === 在保存新数据之前，先对旧数据进行备份 ===
+        self._manage_backups()
+
+        # === 正常的保存逻辑 ===
         temp_file = self.filename + ".tmp"
         try:
             with open(temp_file, 'w', encoding='utf-8') as f:
+                # 排序后写入，保持文件整洁
                 for key in sorted(self.data.keys()):
                     f.write(f"{key}:{self.data[key]}\n")
-            if os.path.exists(self.filename): os.remove(self.filename)
+            
+            # 原子操作：先写临时文件，成功后再重命名覆盖
+            if os.path.exists(self.filename):
+                os.remove(self.filename)
             os.rename(temp_file, self.filename)
-        except Exception as e: print(e)
+        except Exception as e:
+            print(f"[DB] Save Error: {e}")
+
+    # 以下 CRUD 方法保持不变，它们会自动调用上面的 save()
     def insert(self, key, value):
-        self.data[key] = value; self.save(); return {"status": "success", "message": f"Saved: {key}", "data": {key: value}}
+        self.data[key] = value
+        self.save() 
+        return {"status": "success", "message": f"Saved: {key}", "data": {key: value}}
+
     def update(self, key, value):
-        if key in self.data: self.data[key] = value; self.save(); return {"status": "success", "message": f"Updated: {key}", "data": {key: value}}
+        if key in self.data:
+            self.data[key] = value
+            self.save()
+            return {"status": "success", "message": f"Updated: {key}", "data": {key: value}}
         return {"status": "error", "message": "Key not found!"}
+
     def remove(self, key):
-        if key in self.data: del self.data[key]; self.save(); return {"status": "success"}
+        if key in self.data:
+            del self.data[key]
+            self.save()
+            return {"status": "success"}
         return {"status": "error"}
-    def list_all(self): return {"status": "success", "data": self.data}
+
+    def list_all(self):
+        user_data = {k: v for k, v in self.data.items() if not k.startswith('@')}
+        return {"status": "success", "data": user_data}
+
     def find(self, term):
         res = {k:v for k,v in self.data.items() if term.lower() in k.lower() or term.lower() in v.lower()}
         return {"status": "success", "data": res} if res else {"status": "error"}
@@ -464,6 +532,14 @@ def toc_page():
 
 # === 新增：下载相关 API ===
 
+# === 新增：精确获取 Key 对应的 Value (用于同步检测) ===
+@app.route('/api/get_value', methods=['POST'])
+def api_get_value():
+    key = request.json.get('key')
+    if key in db.data:
+        return jsonify({"status": "success", "value": db.data[key]})
+    return jsonify({"status": "error", "message": "Key not found"})
+
 @app.route('/api/download', methods=['POST'])
 def start_download():
     """启动下载任务"""
@@ -513,10 +589,106 @@ def update(): return jsonify(db.update(request.json.get('key'), request.json.get
 def remove(): return jsonify(db.remove(request.json.get('key')))
 @app.route('/find', methods=['POST'])
 def find(): return jsonify(db.find(request.json.get('key', '')))
+
+# === 新增：深度分析接口 ===
+@app.route('/api/analyze_stats', methods=['GET'])
+def api_analyze_stats():
+    try:
+        # 1. 基础数据
+        all_books = [k for k in db.data.keys() if not k.startswith('@')]
+        total_books = len(all_books)
+        
+        # 2. 缓存分析 (计算字数和活跃度)
+        cache_files = glob.glob(os.path.join(cache.cache_dir, "*.json"))
+        total_chapters = len(cache_files)
+        
+        # 估算总字数 (通过文件大小估算，避免打开所有文件导致慢)
+        # 假设 JSON 中 70% 是正文，UTF-8 中文平均 3 字节
+        total_size = sum(os.path.getsize(f) for f in cache_files)
+        estimated_words = int(total_size * 0.7 / 3)
+        
+        # 3. 热力图数据 (过去30天活跃度)
+        # 读取缓存文件的修改时间 (mtime)
+        activity = {}
+        now = time.time()
+        days_30 = 30 * 24 * 3600
+        
+        for f in cache_files:
+            mtime = os.path.getmtime(f)
+            if now - mtime < days_30:
+                date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
+                activity[date_str] = activity.get(date_str, 0) + 1
+        
+        # 填补最近30天的数据，没有阅读的日子填0
+        heatmap_data = []
+        today = datetime.now()
+        for i in range(29, -1, -1):
+            day = today - timedelta(days=i)
+            date_str = day.strftime('%Y-%m-%d')
+            count = activity.get(date_str, 0)
+            heatmap_data.append({"date": date_str, "count": count})
+
+        # 4. 口味提取 (简单的关键词频率)
+        keywords = {}
+        target_words = ["修仙", "重生", "系统", "穿越", "都市", "玄幻", "言情", "末世", "高武", "反派", "直播", "无限", "神豪", "娱乐"]
+        
+        # 从书名(Key)和Value(URL里的标题猜测)中提取
+        # 这里简单分析 DB 中的 Key (通常是拼音) 和 cache 中的 title
+        # 为了简单且丰富，我们分析 cache 中记录的书名
+        
+        # 随机抽样 50 个缓存文件来分析书名，避免全量遍历太慢
+        sample_files = random.sample(cache_files, min(len(cache_files), 50))
+        for f in sample_files:
+            try:
+                with open(f, 'r', encoding='utf-8') as jf:
+                    data = json.load(jf)
+                    title = data.get('title', '')
+                    for word in target_words:
+                        if word in title:
+                            keywords[word] = keywords.get(word, 0) + 1
+            except: pass
+            
+        # 格式化关键词
+        top_keywords = sorted(keywords.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        return jsonify({
+            "status": "success",
+            "stats": {
+                "books": total_books,
+                "chapters": total_chapters,
+                "words": estimated_words,
+                "heatmap": heatmap_data,
+                "keywords": top_keywords
+            }
+        })
+    except Exception as e:
+        print(f"Analysis Error: {e}")
+        return jsonify({"status": "error", "message": str(e)})
 @app.route('/list', methods=['POST'])
-def list_all(): return jsonify(db.list_all())
+def list_all(): 
+    # print("[Debug] ", db.list_all())
+    return jsonify(db.list_all())
+# === 新增：多端同步“最后阅读”接口 ===
+@app.route('/api/last_read', methods=['GET', 'POST'])
+def handle_last_read():
+    # 获取最后阅读的书
+    if request.method == 'GET':
+        last_key = db.data.get('@last_read')
+        return jsonify({"status": "success", "key": last_key})
+    
+    # 设置最后阅读的书
+    if request.method == 'POST':
+        key = request.json.get('key')
+        if key:
+            # 使用特殊的 Key 存储，不影响普通书签
+            db.insert('@last_read', key) 
+            return jsonify({"status": "success"})
+        return jsonify({"status": "error"})
+
+
 
 if __name__ == '__main__':
     if not os.path.exists(template_dir): os.makedirs(template_dir)
-    print("Server running on http://127.0.0.1:5000")
-    app.run(debug=True, port=5000)
+    print("Server running on http://0.0.0.0:5000") # 提示改为 0.0.0.0
+    # host='0.0.0.0' 允许局域网其他设备访问
+    app.run(debug=True, port=5000, host='0.0.0.0')
