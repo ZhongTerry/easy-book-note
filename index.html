@@ -260,7 +260,15 @@
         .book-action-icon {
             font-size: 14px; color: #999; text-decoration: none;
         }
-        .book-action-icon:hover { color: var(--primary); }
+        .book-action-icon:hover { color: var(--primary); }/* === 拖拽上传样式 === */
+        /* 当文件拖入 Value 输入框时的状态 */
+        #value.drag-over {
+            border-color: #28a745 !important; /* 变成绿色 */
+            background-color: #f0fff4;        /* 极淡的绿色背景 */
+            box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.2);
+            color: #28a745;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -273,8 +281,9 @@
         </div>
         
         <div class="input-group">
-            <label>Value (链接)</label>
-            <input type="text" id="value" placeholder="https://..." onkeydown="handleEnter(event)">
+            <label>Value (链接 或 拖入EPUB文件)</label> <!-- 修改 Label -->
+            <!-- 修改 Placeholder -->
+            <input type="text" id="value" placeholder="https://... 或将 .epub 拖入此处" onkeydown="handleEnter(event)">
         </div>
 
         <div class="btn-row">
@@ -529,24 +538,40 @@ async function doAction(action) {
                 return;
             }
 
-            // === 分流逻辑 ===
+            // === 分流逻辑：如果是网格模式，去调用 renderGrid ===
             if (currentView === 'grid') {
                 renderGrid(data, container);
                 return;
             }
 
-            // === 原有的列表渲染逻辑 (保持不变) ===
+            // === 列表模式渲染 ===
             let html = '<table><thead><tr><th width="30%">Key / Tags</th><th>Value & Actions</th></tr></thead><tbody>';
+            
             Object.keys(data).sort().forEach(k => {
                 const v = data[k];
+
+                // --- 1. 找回丢失的 keyHtml 生成逻辑 ---
                 const parts = k.split('/');
                 let keyHtml = '';
                 parts.forEach((part, index) => {
                     if (index === parts.length - 1) keyHtml += `<span class="key-final">${part}</span>`;
                     else keyHtml += `<span class="tag-part">${part}</span>`;
                 });
-                const isLink = v.startsWith('http');
-                let valHtml = isLink ? `<a href="${v}" target="_blank" style="color:#999;font-size:12px;margin-right:10px;">[源] ${v.substring(0, 30)}...</a>` : `<span style="color:#333">${v}</span>`;
+
+                // --- 2. 判断链接类型 ---
+                const isLink = v.startsWith('http') || v.startsWith('epub:');
+                
+                // --- 3. 生成 Value 的显示 HTML ---
+                let valHtml;
+                if (v.startsWith('http')) {
+                    valHtml = `<a href="${v}" target="_blank" style="color:#999;font-size:12px;margin-right:10px;">[源] ${v.substring(0, 30)}...</a>`;
+                } else if (v.startsWith('epub:')) {
+                    valHtml = `<span style="color:#28a745;font-size:12px;margin-right:10px;font-weight:bold;">[📦 本地 EPUB]</span>`;
+                } else {
+                    valHtml = `<span style="color:#333">${v}</span>`;
+                }
+
+                // --- 4. 生成操作按钮 ---
                 let actionHtml = isLink ? `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="btn-read" target="_blank">📖 纯净阅读</a>` : '';
                 
                 html += `<tr><td>${keyHtml}</td><td style="display:flex; justify-content:space-between;"><div>${valHtml}</div><div>${actionHtml}<button class="copy-btn" onclick="copyText('${v}')">Copy</button></div></td></tr>`;
@@ -555,7 +580,7 @@ async function doAction(action) {
             container.innerHTML = html;
         }
 
-        // === 新增：网格渲染函数 ===
+        // === 网格渲染函数 (完整版) ===
         function renderGrid(data, container) {
             let html = '<div class="bookshelf-grid">';
             
@@ -568,21 +593,28 @@ async function doAction(action) {
                 // 自动生成背景色
                 const bgStyle = `background: linear-gradient(135deg, ${stringToColor(titleKey)}, ${stringToColor(titleKey + 'dark')});`;
                 
-                // 尝试解析中文名 (如果是拼音, 暂时显示拼音, 以后可以结合 AI 翻译)
+                // 显示名称
                 const displayName = titleKey.toUpperCase(); 
 
-                const isLink = v.startsWith('http');
+                const isLink = v.startsWith('http') || v.startsWith('epub:');
+                
+                // 点击操作
                 const clickAction = isLink ? `window.open('/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}', '_blank')` : `copyText('${v}')`;
+                
+                // 图标区分
+                let icon = '📋';
+                if (v.startsWith('http')) icon = '☁️'; 
+                else if (v.startsWith('epub:')) icon = '📦';
 
                 html += `
                     <div class="book-card" onclick="${clickAction}">
                         <div class="book-cover" style="${bgStyle}">
                             <div class="book-title-card">${displayName}</div>
-                            <div class="book-author-card">TXT</div>
+                            <div class="book-author-card">EPUB / TXT</div>
                         </div>
                         <div class="book-info-row">
                             <span class="book-key-tag">${titleKey}</span>
-                            ${isLink ? '<span class="book-action-icon" title="阅读">📖</span>' : '<span class="book-action-icon" title="复制">📋</span>'}
+                            <span class="book-action-icon">${icon}</span>
                         </div>
                     </div>
                 `;
@@ -723,6 +755,84 @@ window.onload = function() {
             if (e.target === this) closeInsight();
         });
         // window.onload = () => 
+        // === 拖拽上传逻辑 ===
+        const valueInput = document.getElementById('value');
+
+        // 1. 阻止浏览器默认行为 (否则浏览器会直接下载/打开文件)
+        ;['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            valueInput.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        // 2. 视觉反馈：拖进来变色，拖出去变回原样
+        valueInput.addEventListener('dragenter', () => valueInput.classList.add('drag-over'));
+        valueInput.addEventListener('dragover', () => valueInput.classList.add('drag-over'));
+        
+        valueInput.addEventListener('dragleave', () => valueInput.classList.remove('drag-over'));
+        
+        // 3. 核心：处理文件放置 (Drop)
+        valueInput.addEventListener('drop', handleDrop);
+
+        async function handleDrop(e) {
+            // 移除高亮样式
+            valueInput.classList.remove('drag-over');
+            
+            const dt = e.dataTransfer;
+            const files = dt.files;
+
+            if (files.length > 0) {
+                const file = files[0];
+                // 简单的格式检查
+                if (file.name.toLowerCase().endsWith('.epub')) {
+                    // 开始上传
+                    uploadEpubFile(file);
+                } else {
+                    showMsg("⚠️ 仅支持 .epub 格式的书籍", "error");
+                }
+            }
+        }
+
+        // 4. 执行上传 (复用之前的逻辑)
+        async function uploadEpubFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            // 界面反馈：Value 框里显示正在上传
+            valueInput.value = `⏳ 正在解析: ${file.name}...`;
+            valueInput.disabled = true; // 暂时禁用防止误触
+
+            try {
+                const res = await fetch(`${API_URL}/api/upload_epub`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await res.json();
+
+                if (result.status === 'success') {
+                    showMsg(`✅ 导入成功! Key: ${result.key}`, "success");
+                    
+                    // 自动填入结果
+                    document.getElementById('key').value = result.key;
+                    valueInput.value = result.value;
+                    
+                    // 自动保存并展示 (模拟点击 Save)
+                    doAction('insert'); 
+                } else {
+                    showMsg("❌ 上传失败: " + result.message, "error");
+                    valueInput.value = ''; // 失败清空
+                }
+            } catch (err) {
+                console.error(err);
+                showMsg("❌ 网络错误", "error");
+                valueInput.value = '';
+            } finally {
+                valueInput.disabled = false; // 恢复输入框
+            }
+        }
     </script>
 </body>
 </html>

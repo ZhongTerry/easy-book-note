@@ -15,6 +15,9 @@ import threading # 新增：用于后台下载
 from pypinyin import pinyin, lazy_pinyin, Style # 新增：拼音库
 import glob # 用于查找文件列表
 from datetime import datetime, timedelta # 用于生成时间戳
+import ebooklib
+from ebooklib import epub
+from werkzeug.utils import secure_filename # 用于安全保存文件
 
 # --- 0. 缓存管理器 (保持不变) ---
 class CacheManager:
@@ -266,6 +269,124 @@ class NovelCrawler:
             else: data['toc_url'] = url.rsplit('/', 1)[0] + '/'
         return data
 
+# --- 1.5 EPUB 处理器 (本地阅读核心) ---
+class EpubHandler:
+    def __init__(self):
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.lib_dir = os.path.join(self.base_dir, "library")
+        if not os.path.exists(self.lib_dir): os.makedirs(self.lib_dir)
+
+    def save_file(self, file_obj):
+        """保存上传的文件，返回文件名"""
+        filename = secure_filename(file_obj.filename)
+        # 避免文件名中文乱码或丢失，简单处理：如果 secure 后为空，用时间戳
+        if not filename: filename = f"book_{int(time.time())}.epub"
+        filepath = os.path.join(self.lib_dir, filename)
+        file_obj.save(filepath)
+        return filename
+
+    def get_toc(self, filename):
+        """获取 EPUB 目录 (基于 Spine 线性顺序)"""
+        filepath = os.path.join(self.lib_dir, filename)
+        if not os.path.exists(filepath): return None
+        
+        try:
+            book = epub.read_epub(filepath)
+            # 1. 提取元数据标题
+            title = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else filename
+            
+            # 2. 构建线性目录 (Spine 是最准确的阅读顺序)
+            chapters = []
+            for i, item_id in enumerate(book.spine):
+                # item_id 格式通常是 ('itemid', 'yes/no')
+                item = book.get_item_with_id(item_id[0])
+                if not item: continue
+                
+                # 这是一个简化的标题获取逻辑，EPUB 的目录结构非常复杂(ncx/nav)，
+                # 为了不让代码太复杂，我们这里简单命名为 "第 X 章"
+                # 如果你想更完美，需要解析 book.toc，但那个树状结构很难扁平化
+                chap_title = f"第 {i+1} 节" 
+                
+                # 我们构造一个伪链接: epub:文件名:章节索引
+                chapters.append({
+                    'title': chap_title,
+                    'url': f"epub:{filename}:{i}" 
+                })
+            
+            return {'title': title, 'chapters': chapters}
+        except Exception as e:
+            print(f"[EPUB] TOC Error: {e}")
+            return None
+
+    def get_chapter_content(self, filename, chapter_index):
+        """读取特定章节的内容并清洗"""
+        filepath = os.path.join(self.lib_dir, filename)
+        
+        # 1. 检查文件是否存在
+        if not os.path.exists(filepath):
+            return f"Error: File not found at {filepath}"
+
+        try:
+            # 2. 读取 EPUB
+            book = epub.read_epub(filepath)
+            
+            # 3. 检查章节索引是否越界
+            if chapter_index < 0 or chapter_index >= len(book.spine):
+                return f"Error: Chapter index {chapter_index} out of range (Total: {len(book.spine)})"
+
+            spine_item = book.spine[chapter_index]
+            item = book.get_item_with_id(spine_item[0])
+            
+            if not item:
+                return f"Error: Item with ID {spine_item[0]} not found in manifest"
+
+            # 获取原始 HTML
+            content_bytes = item.get_content()
+            if not content_bytes:
+                return "Error: Empty content in this chapter"
+                
+            raw_html = content_bytes.decode('utf-8', errors='ignore') # 忽略解码错误
+            
+            # === 纯净阅读核心：使用 BeautifulSoup 清洗 ===
+            soup = BeautifulSoup(raw_html, 'html.parser')
+            
+            # 提取标题
+            title = f"第 {chapter_index+1} 节"
+            h_tag = soup.find(['h1', 'h2', 'h3'])
+            if h_tag: title = h_tag.get_text(strip=True)
+            
+            # 提取正文
+            lines = []
+            for tag in soup.select('script, style, img, svg'): tag.decompose()
+            for p in soup.find_all(['p', 'div', 'h1', 'h2', 'h3', 'h4']):
+                text = p.get_text(strip=True)
+                if text: lines.append(text)
+                
+            if not lines:
+                lines = [line.strip() for line in soup.get_text().split('\n') if line.strip()]
+
+            # 计算链接
+            prev_url = f"epub:{filename}:{chapter_index-1}" if chapter_index > 0 else None
+            next_url = f"epub:{filename}:{chapter_index+1}" if chapter_index < len(book.spine) - 1 else None
+            toc_url = f"epub:{filename}:toc"
+
+            return {
+                'title': title,
+                'content': lines,
+                'prev': prev_url,
+                'next': next_url,
+                'toc_url': toc_url
+            }
+
+        except Exception as e:
+            # 返回具体的异常信息
+            import traceback
+            traceback.print_exc() # 在控制台打印堆栈
+            return f"System Error: {str(e)}"
+
+# 初始化
+epub_handler = EpubHandler()
+
 # --- 2. 数据库逻辑 (保持不变) ---
 # --- 2. 数据库逻辑 (带版本控制版) ---
 class SimpleDB:
@@ -499,35 +620,104 @@ def add_cors(resp):
 def index():
     return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'index.html'))
 
-# ... (保留 /read, /toc 等路由，这里只列出新增的) ...
+@app.route('/api/upload_epub', methods=['POST'])
+def api_upload_epub():
+    if 'file' not in request.files:
+        return jsonify({"status": "error", "message": "No file part"})
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"})
+    
+    if file:
+        filename = epub_handler.save_file(file)
+        # 自动生成 Key (拼音)
+        raw_name = os.path.splitext(filename)[0]
+        key = searcher.get_pinyin_key(raw_name)
+        # 构造特殊的 Value
+        value = f"epub:{filename}:toc"
+        
+        # 自动存入数据库
+        db.insert(key, value)
+        
+        return jsonify({
+            "status": "success", 
+            "message": "Upload successful",
+            "key": key,
+            "value": value
+        })
+
+# === 修改后的 Read 路由 (修复 Invalid EPUB link 问题) ===
+@app.route('/read')
+# === 修改后的 Read 路由 (增强版：显示具体错误) ===
 @app.route('/read')
 def read_mode():
     target_url = request.args.get('url')
     db_key = request.args.get('key', '')
+    
+    # [EPUB 处理分支]
+    if target_url.startswith('epub:'):
+        # 更安全的解析方式：去除 'epub:' 前缀，然后从右边切分一次
+        # target_url 示例: epub:Book_Name.epub:22
+        
+        content_part = target_url[5:] # 去掉 'epub:' -> Book_Name.epub:22
+        if ':' not in content_part:
+            return f"Invalid EPUB link format: {target_url}"
+            
+        filename, index_str = content_part.rsplit(':', 1)
+        
+        # 跳转目录
+        if index_str == 'toc':
+            return redirect(url_for('toc_page', url=target_url, key=db_key))
+        
+        try:
+            idx = int(index_str)
+            article_data = epub_handler.get_chapter_content(filename, idx)
+            
+            # 如果返回的是字符串，说明出错了，直接显示错误信息
+            if isinstance(article_data, str):
+                return f"<h1>EPUB Load Failed</h1><p>{article_data}</p><p>File: {filename}</p><p>Index: {idx}</p>"
+                
+            return render_template('reader.html', article=article_data, current_url=target_url, db_key=db_key)
+        except ValueError:
+            return f"Invalid chapter index format: {index_str}"
+        except Exception as e:
+            return f"Route Error: {str(e)}"
+
+    # ... (保留原有的网络爬虫逻辑，不需要动) ...
     force_update = request.args.get('force') == 'true'
-    if not target_url: return "Error: No URL provided."
     article_data = None
     if not force_update: article_data = cache.get(target_url)
     if not article_data:
+        if not target_url.startswith('http'): return "Invalid URL scheme"
         print(f"[Crawler] Fetching: {target_url}")
         article_data = crawler.run(target_url)
         if article_data and article_data.get('content'): cache.set(target_url, article_data)
+    
     if not article_data: return "Error: Failed to fetch content."
     return render_template('reader.html', article=article_data, current_url=target_url, db_key=db_key)
 
+# === 修改：TOC 路由 (支持 EPUB) ===
 @app.route('/toc')
 def toc_page():
     toc_url = request.args.get('url')
     db_key = request.args.get('key', '')
+    
+    # [新增] EPUB 处理分支
+    if toc_url.startswith('epub:'):
+        parts = toc_url.split(':')
+        filename = parts[1]
+        toc_data = epub_handler.get_toc(filename)
+        if not toc_data: return "Error loading EPUB TOC"
+        return render_template('toc.html', toc=toc_data, toc_url=toc_url, db_key=db_key)
+
+    # ... (保留原有的网络爬虫逻辑) ...
     force_update = request.args.get('force') == 'true'
-    if not toc_url: return "Error: No TOC URL provided."
     toc_data = None
     if not force_update: toc_data = cache.get(toc_url)
     if not toc_data:
-        print(f"[Crawler] Fetching TOC: {toc_url}")
         toc_data = crawler.get_toc(toc_url)
         if toc_data and toc_data['chapters']: cache.set(toc_url, toc_data)
-    if not toc_data: return f"Error: Failed to fetch TOC. <a href='{toc_url}'>Original Site</a>"
+    if not toc_data: return f"Error: Failed to fetch TOC."
     return render_template('toc.html', toc=toc_data, toc_url=toc_url, db_key=db_key)
 
 # === 新增：下载相关 API ===
