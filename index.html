@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart NoteDB</title>
+    <style>
+        :root {
+            --primary: #007bff;
+            --primary-hover: #0069d9;
+            --danger: #dc3545;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --border: #dee2e6;
+        }
+
+        body {
+            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+            margin: 0; padding: 30px 20px;
+            background-color: var(--bg); color: #333;
+        }
+
+        .container {
+            max-width: 800px; margin: 0 auto;
+            background: var(--card-bg); padding: 30px;
+            border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+        }
+
+        h1 { margin-top: 0; color: #2c3e50; text-align: center; font-size: 26px; }
+
+        .input-group { margin-bottom: 15px; position: relative; }
+        label { display: block; margin-bottom: 5px; font-weight: 600; color: #555; font-size: 13px;}
+        input[type="text"] {
+            width: 100%; padding: 10px; border: 1px solid var(--border);
+            border-radius: 5px; font-size: 15px; font-family: monospace;
+            box-sizing: border-box;
+        }
+        input[type="text"]:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,123,255,0.1); }
+
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+        button {
+            flex: 1; min-width: 80px; padding: 10px; border: none; border-radius: 5px;
+            background: var(--primary); color: white; cursor: pointer; font-weight: 500;
+            transition: 0.2s;
+        }
+        button:hover { background: var(--primary-hover); transform: translateY(-1px); }
+        .btn-danger { background: var(--danger); }
+        .btn-danger:hover { background: #c82333; }
+        .btn-ghost { background: transparent; color: #666; border: 1px solid #ddd; }
+        .btn-ghost:hover { background: #eee; color: #333; }
+        
+        /* 搜索按钮 */
+        .btn-search-online {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white; font-weight: bold;
+        }
+
+        /* 结果区域 */
+        .output { margin-top: 25px; border-top: 1px solid #eee; padding-top: 20px; }
+        .msg { padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 14px; display: none;}
+        .msg.success { background: #d4edda; color: #155724; display: block; }
+        .msg.error { background: #f8d7da; color: #721c24; display: block; }
+
+        /* 表格样式 */
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        th { text-align: left; padding: 10px; background: #f1f3f5; color: #495057; }
+        td { padding: 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
+        .tag-part { display: inline-block; background: #e9ecef; color: #495057; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 4px; }
+        .key-final { font-weight: bold; color: #2c3e50; }
+        .btn-read { background-color: #6f42c1; color: white; padding: 4px 10px; text-decoration: none; border-radius: 4px; font-size: 12px; margin-right: 5px; display: inline-block; }
+        .copy-btn { background: none; border: 1px solid #ddd; color: #666; padding: 2px 8px; font-size: 11px; border-radius: 3px; cursor: pointer; margin-left: 8px; }
+
+        /* === 搜索模态框 === */
+        #searchModal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;
+        }
+        .search-box {
+            background: white; width: 90%; max-width: 600px; padding: 20px; border-radius: 10px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 80vh; display: flex; flex-direction: column;
+        }
+        .search-results { overflow-y: auto; margin-top: 15px; flex: 1; border-top: 1px solid #eee; }
+        .result-item {
+            padding: 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s;
+        }
+        .result-item:hover { background: #f8f9fa; }
+        .r-title { font-weight: bold; color: #007bff; font-size: 15px; }
+        .r-url { font-size: 12px; color: #999; margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        .r-key { font-size: 12px; color: #28a745; margin-top: 2px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ Smart NoteDB</h1>
+        
+        <div class="input-group">
+            <label>Key (拼音缩写，支持 "/" 分类)</label>
+            <input type="text" id="key" placeholder="例如: frxxz (凡人修仙传)" onkeydown="handleEnter(event)">
+        </div>
+        
+        <div class="input-group">
+            <label>Value (链接)</label>
+            <input type="text" id="value" placeholder="https://..." onkeydown="handleEnter(event)">
+        </div>
+
+        <div class="btn-row">
+            <button onclick="doAction('insert')">Save / Insert</button>
+            <button onclick="doAction('find')" style="background-color: #17a2b8;">Search DB</button>
+            
+            <!-- 新增搜索按钮 -->
+            <button onclick="openSearchModal()" class="btn-search-online">🔍 搜小说</button>
+            
+            <button class="btn-ghost" onclick="doAction('list')">List All</button>
+            <button class="btn-ghost" onclick="doRollback()" style="color: #e67e22; border-color: #e67e22;">⏪ Undo</button>
+            <button class="btn-ghost" onclick="clearInputs()">Clear</button>
+            <button class="btn-danger" onclick="doAction('remove')">Remove</button>
+        </div>
+
+        <div class="output">
+            <div id="msgBox" class="msg"></div>
+            <div id="tableContainer"></div>
+        </div>
+    </div>
+
+    <!-- 搜索模态框 -->
+    <div id="searchModal">
+        <div class="search-box">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 style="margin:0;">全网搜书</h3>
+                <button onclick="closeSearchModal()" style="background:none; color:#999; width:auto; padding:0; font-size:20px;">×</button>
+            </div>
+            <div style="display:flex; gap:10px;">
+                <input type="text" id="onlineSearchInput" placeholder="输入小说名，如：凡人修仙传" onkeydown="if(event.key==='Enter') doOnlineSearch()">
+                <button onclick="doOnlineSearch()" style="flex:0 0 80px;">搜索</button>
+            </div>
+            <div class="search-results" id="searchResults">
+                <div style="text-align:center; padding:20px; color:#999;">请输入书名搜索...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://127.0.0.1:5000';
+
+        function handleEnter(e) {
+            if (e.key !== 'Enter') return;
+            if (e.target.id === 'value') doAction('insert');
+            else if (e.target.id === 'key') doAction('find');
+        }
+
+        async function doAction(action) {
+            const key = document.getElementById('key').value.trim();
+            const value = document.getElementById('value').value.trim();
+            
+            if (action !== 'list' && !key) return showMsg('Please enter a Key', 'error');
+
+            try {
+                const res = await fetch(`${API_URL}/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key, value })
+                });
+                const result = await res.json();
+                showMsg(result.message || action + ' done', result.status);
+                if (result.data) renderTable(result.data);
+                else if (action === 'insert' || action === 'remove' || action === 'list') doAction('list');
+            } catch (err) {
+                showMsg('Connection Error', 'error');
+            }
+        }
+
+        async function doRollback() {
+            if(!confirm("确定回退到上一步吗？")) return;
+            const res = await fetch(`${API_URL}/rollback`, { method: 'POST' });
+            const result = await res.json();
+            showMsg(result.message, result.status);
+            if(result.status === 'success') doAction('list');
+        }
+
+        // === 搜索功能相关 ===
+        function openSearchModal() {
+            document.getElementById('searchModal').style.display = 'flex';
+            document.getElementById('onlineSearchInput').focus();
+        }
+        function closeSearchModal() {
+            document.getElementById('searchModal').style.display = 'none';
+        }
+
+        async function doOnlineSearch() {
+            const keyword = document.getElementById('onlineSearchInput').value.trim();
+            if (!keyword) return;
+            
+            const resultsDiv = document.getElementById('searchResults');
+            resultsDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">🔍 正在搜索 Bing...</div>';
+
+            try {
+                const res = await fetch(`${API_URL}/api/search_novel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keyword })
+                });
+                const result = await res.json();
+                
+                if (result.data && result.data.length > 0) {
+                    let html = '';
+                    result.data.forEach(item => {
+                        html += `
+                            <div class="result-item" onclick="selectResult('${item.suggested_key}', '${item.url}')">
+                                <div class="r-title">${item.title}</div>
+                                <div class="r-url">${item.url}</div>
+                                <div class="r-key">建议 Key: <b>${item.suggested_key}</b></div>
+                            </div>
+                        `;
+                    });
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">未找到相关结果，请换个词试试。</div>';
+                }
+            } catch (e) {
+                resultsDiv.innerHTML = '<div style="text-align:center; padding:20px; color:red;">搜索失败，请检查网络。</div>';
+            }
+        }
+
+        function selectResult(key, url) {
+            // 自动填入主界面
+            document.getElementById('key').value = key;
+            document.getElementById('value').value = url;
+            closeSearchModal();
+            showMsg(`✨ 已自动填入: ${key}`, 'success');
+        }
+
+        // === 通用函数 ===
+        function showMsg(text, type) {
+            const box = document.getElementById('msgBox');
+            box.innerText = text;
+            box.className = `msg ${type}`;
+        }
+
+        function clearInputs() {
+            document.getElementById('key').value = '';
+            document.getElementById('value').value = '';
+            document.getElementById('tableContainer').innerHTML = '';
+            document.getElementById('msgBox').className = 'msg';
+        }
+
+        function copyText(text) {
+            navigator.clipboard.writeText(text).then(() => showMsg('Copied!', 'success'));
+        }
+
+        function renderTable(data) {
+            const container = document.getElementById('tableContainer');
+            if (Object.keys(data).length === 0) {
+                container.innerHTML = '<div style="text-align:center;color:#999">No data found</div>';
+                return;
+            }
+            let html = '<table><thead><tr><th width="30%">Key / Tags</th><th>Value & Actions</th></tr></thead><tbody>';
+            Object.keys(data).sort().forEach(k => {
+                const v = data[k];
+                const parts = k.split('/');
+                let keyHtml = '';
+                parts.forEach((part, index) => {
+                    if (index === parts.length - 1) keyHtml += `<span class="key-final">${part}</span>`;
+                    else keyHtml += `<span class="tag-part">${part}</span>`;
+                });
+                const isLink = v.startsWith('http');
+                let valHtml = isLink ? `<a href="${v}" target="_blank" style="color:#999;font-size:12px;margin-right:10px;">[源] ${v.substring(0, 30)}...</a>` : `<span style="color:#333">${v}</span>`;
+                let actionHtml = isLink ? `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="btn-read" target="_blank">📖 纯净阅读</a>` : '';
+                
+                html += `<tr><td>${keyHtml}</td><td style="display:flex; justify-content:space-between;"><div>${valHtml}</div><div>${actionHtml}<button class="copy-btn" onclick="copyText('${v}')">Copy</button></div></td></tr>`;
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+        
+        window.onload = () => doAction('list');
+    </script>
+</body>
+</html>

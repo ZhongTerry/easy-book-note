@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Database</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .output {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Simple Database</h1>
+        <div class="form-group">
+            <label for="key">Key:</label>
+            <input type="text" id="key" placeholder="Enter key">
+        </div>
+        <div class="form-group">
+            <label for="value">Value:</label>
+            <input type="text" id="value" placeholder="Enter value">
+        </div>
+        <button onclick="insert()">Insert</button>
+        <button onclick="update()">Update</button>
+        <button onclick="remove()">Remove</button>
+        <button onclick="find()">Find</button>
+        <button onclick="list()">List All</button>
+	<button onclick="cclear()">Clear</button>
+
+        <div class="output" id="output">
+            <!-- Output will be displayed here -->
+        </div>
+    </div>
+
+    <script>
+	function n2br(jso) {
+	    let replaceRegex = /(\n\r|\r\n|\r|\n)/g; 
+	    let str = jso.result;
+            let newStr = str.replace(replaceRegex, '<br/>');
+	    document.getElementById('output').innerText = str
+	    console.log(jso)
+	    return newStr;
+	}
+        async function sendRequest(action, key = "", value = "") {
+            const response = await fetch(`http://localhost:5000/${action}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ key, value }),
+            });
+            const result = await response.json();
+            //if (action != "list")document.getElementById('output').innerHTML = JSON.stringify(result, null, 2);
+	    n2br(result);
+        }
+
+        function insert() {
+            const key = document.getElementById('key').value;
+            const value = document.getElementById('value').value;
+            sendRequest('insert', key, value);
+        }
+
+        function update() {
+            const key = document.getElementById('key').value;
+            const value = document.getElementById('value').value;
+            sendRequest('update', key, value);
+        }
+
+        function remove() {
+            const key = document.getElementById('key').value;
+            sendRequest('remove', key);
+        }
+
+        function find() {
+            const key = document.getElementById('key').value;
+            sendRequest('find', key);
+        }
+
+        function list() {
+            sendRequest('list');
+        }
+
+	function cclear() {
+	    document.getElementById('output').innerText = ""
+	    document.getElementById('value').value = ""
+	    console.log("Success!")
+	}
+    </script>
+</body>
+</html>

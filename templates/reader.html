@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ article.title }} - PureRead</title>
+    <style>
+        body {
+            background-color: #e6e6e6; 
+            font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 0;
+            color: #333;
+            line-height: 1.8;
+        }
+
+        /* 顶部导航条 */
+        .navbar {
+            background: #fff;
+            padding: 10px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            position: fixed;
+            top: 0;
+            width: 100%;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 100;
+        }
+
+        .nav-title { font-weight: bold; color: #555; font-size: 14px; }
+        .nav-links a { color: #666; text-decoration: none; margin-left: 15px; font-size: 14px;}
+        .nav-links a:hover { color: #007bff; }
+        
+        .btn-sync {
+            background-color: #28a745; color: white; border: none;
+            padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+        .btn-sync:hover { background-color: #218838; }
+
+        /* 阅读容器 */
+        .container {
+            max-width: 800px;
+            margin: 80px auto 40px; 
+            background-color: #f7f7f7; 
+            padding: 60px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            min-height: 80vh;
+        }
+        
+        @media (max-width: 768px) {
+            .container { padding: 20px; margin-top: 60px; }
+            h1 { font-size: 20px; }
+            .pagination { flex-direction: column; gap: 10px; text-align: center;}
+        }
+
+        h1 {
+            text-align: center; color: #333; margin-bottom: 40px;
+            font-weight: 400; border-bottom: 1px solid #ddd; padding-bottom: 20px;
+        }
+
+        .content p {
+            margin-bottom: 20px;
+            font-size: 18px; 
+            text-align: justify;
+            color: #222;
+        }
+
+        /* 底部翻页 */
+        .pagination {
+            display: flex; justify-content: space-between; margin-top: 50px;
+            border-top: 1px solid #ddd; padding-top: 30px;
+        }
+        .page-btn {
+            text-decoration: none; color: #555; background: #fff;
+            padding: 10px 20px; border: 1px solid #ddd; border-radius: 5px;
+            transition: 0.2s;
+            display: inline-block;
+        }
+        .page-btn:hover, .page-btn.active { background: #e2e6ea; border-color: #adb5bd; }
+        .disabled { color: #ccc; pointer-events: none; border-color: #eee; background: #f9f9f9; }
+
+        /* 提示框 */
+        #toast {
+            visibility: hidden; min-width: 250px; background-color: #333; color: #fff;
+            text-align: center; border-radius: 4px; padding: 16px; position: fixed;
+            z-index: 1000; left: 50%; bottom: 30px; transform: translateX(-50%);
+            font-size: 14px; opacity: 0; transition: opacity 0.5s;
+        }
+        #toast.show { visibility: visible; opacity: 1; }
+    </style>
+</head>
+<body>
+
+<div class="navbar">
+    <div class="nav-title">
+        {% if db_key %}
+        📚 正在阅读: {{ db_key }}
+        {% else %}
+        📖 纯净预览模式
+        {% endif %}
+    </div>
+    <div class="nav-links">
+        <a href="/">返回主页</a>
+        
+        <!-- 强制刷新按钮 -->
+        <button class="btn-sync" onclick="forceRefresh()" style="background:#17a2b8; margin-left:5px;" title="重新从网络下载本章">🔄 刷新</button>
+        
+        <!-- 夜间模式按钮 -->
+        <button class="btn-sync" onclick="toggleTheme()" style="background:#343a40; margin-left:5px;">🌙</button>
+
+        {% if db_key %}
+        {% if article.content and article.content|length > 1 %} 
+        <button class="btn-sync" onclick="syncProgress()">💾 更新书签进度</button>
+        {% else %}
+            <button class="btn-sync" style="background:#999; cursor:not-allowed;" title="内容过短，禁止更新">🚫 内容无效</button>
+        {% endif %}
+        {% endif %}
+        
+        <a href="{{ current_url }}" target="_blank" style="margin-left: 10px;">源网页</a>
+    </div>
+</div>
+
+<div class="container">
+    <h1>{{ article.title }}</h1>
+    
+    <div class="content">
+        {% for line in article.content %}
+            <p>{{ line }}</p>
+        {% endfor %}
+    </div>
+
+    <div class="pagination">
+        <!-- 增加了 id 方便 JS 调用 -->
+        {% if article.prev %}
+            <a id="link-prev" href="/read?url={{ article.prev }}&key={{ db_key }}" class="page-btn">← 上一章 (←)</a>
+        {% else %}
+            <span class="page-btn disabled">没有了</span>
+        {% endif %}
+
+        <!-- 如果爬虫提取到了 toc_url，就跳转到目录页，否则回主页 -->
+        {% if article.toc_url %}
+            <a href="/toc?url={{ article.toc_url }}&key={{ db_key }}" class="page-btn">📖 目录</a>
+        {% else %}
+            <a href="/" class="page-btn">🏠 主页</a>
+        {% endif %}
+
+        {% if article.next %}
+            <a id="link-next" href="/read?url={{ article.next }}&key={{ db_key }}" class="page-btn">下一章 (→) →</a>
+        {% else %}
+            <span class="page-btn disabled">没有了</span>
+        {% endif %}
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+    const dbKey = "{{ db_key }}";
+    const currentUrl = "{{ current_url }}";
+
+    function showToast(msg) {
+        var x = document.getElementById("toast");
+        x.className = "show";
+        x.innerText = msg;
+        setTimeout(function(){ x.className = x.className.replace("show", ""); }, 3000);
+    }
+
+    function syncProgress() {
+        if (!dbKey) return;
+        
+        showToast("⏳ 正在保存...");
+
+        fetch('/update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: dbKey, value: currentUrl })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.status === 'success') {
+                showToast("✅ 进度已保存: " + data.message);
+            } else {
+                showToast("❌ 保存失败");
+            }
+        })
+        .catch(error => showToast("❌ 网络错误"));
+    }
+
+    // === 新增：键盘监听逻辑 ===
+    document.addEventListener('keydown', function(event) {
+        // 获取按钮元素
+        const prevBtn = document.getElementById('link-prev');
+        const nextBtn = document.getElementById('link-next');
+
+        // 左箭头
+        if (event.key === "ArrowLeft") {
+            if (prevBtn) {
+                prevBtn.classList.add('active'); // 添加按压效果
+                showToast("正在跳转上一章...");
+                setTimeout(() => window.location.href = prevBtn.href, 100);
+            }
+        } 
+        // 右箭头
+        else if (event.key === "ArrowRight") {
+            if (nextBtn) {
+                nextBtn.classList.add('active'); // 添加按压效果
+                showToast("正在跳转下一章...");
+                setTimeout(() => window.location.href = nextBtn.href, 100);
+            }
+        }
+    });
+    function toggleTheme() {
+        const body = document.body;
+        const container = document.querySelector('.container');
+        const navbar = document.querySelector('.navbar');
+        const content = document.querySelector('.content');
+        
+        // 简单的黑白反转逻辑
+        if (body.style.backgroundColor === 'rgb(34, 34, 34)' || body.style.backgroundColor === '#222') {
+            // 切换回日间
+            body.style.backgroundColor = '#e6e6e6';
+            container.style.backgroundColor = '#f7f7f7';
+            container.style.color = '#333';
+            navbar.style.backgroundColor = '#fff';
+            navbar.style.color = '#333';
+            document.querySelectorAll('a').forEach(a => a.style.color = '#666');
+            document.querySelectorAll('p').forEach(p => p.style.color = '#222');
+            showToast("☀️ 日间模式");
+        } else {
+            // 切换到夜间
+            body.style.backgroundColor = '#222';
+            container.style.backgroundColor = '#2c2c2c';
+            container.style.color = '#adb5bd';
+            navbar.style.backgroundColor = '#1a1a1a';
+            navbar.style.color = '#adb5bd';
+            document.querySelectorAll('a').forEach(a => a.style.color = '#adb5bd');
+            document.querySelectorAll('p').forEach(p => p.style.color = '#ccc'); // 文字稍微调亮一点
+            showToast("🌙 夜间模式");
+        }
+    }
+    function forceRefresh() {
+        showToast("🔄 正在强制刷新...");
+        // 获取当前 URL 对象
+        let url = new URL(window.location.href);
+        // 添加 force=true 参数
+        url.searchParams.set('force', 'true');
+        // 重新加载页面
+        window.location.href = url.toString();
+    }
+</script>
+
+</body>
+</html>

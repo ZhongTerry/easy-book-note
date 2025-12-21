@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bookmark Manager</title>
+    <style>
+        :root {
+            --primary: #007bff;
+            --primary-hover: #0069d9;
+            --danger: #dc3545;
+            --danger-hover: #c82333;
+            --gray: #6c757d;
+            --bg: #f4f6f8;
+            --card-bg: #ffffff;
+            --border: #dee2e6;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+            background-color: var(--bg);
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 640px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            border: 1px solid var(--border);
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 24px;
+            color: #2c3e50;
+            margin-bottom: 25px;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            color: #555;
+        }
+
+        /* 输入框优化：保持两行显示，适合长链接 */
+        input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            box-sizing: border-box;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 16px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            font-family: monospace; /* 对于URL，等宽字体通常更好辨认 */
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.15);
+        }
+
+        /* 按钮容器：Flex布局确保在一行 */
+        .button-group {
+            display: flex;
+            gap: 10px; /* 按钮之间的间距 */
+            flex-wrap: nowrap; /* 尽量不换行 */
+            overflow-x: auto; /* 极小屏幕下允许横向滚动而不是破坏布局 */
+            padding-bottom: 5px;
+        }
+
+        button {
+            flex: 1; /* 让按钮平均分配宽度，或者去掉这行让按钮随文字宽度自适应 */
+            padding: 10px 15px;
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+            transition: background-color 0.2s, transform 0.1s;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        /* 针对不同功能的按钮设置不同颜色 */
+        button.btn-danger {
+            background-color: var(--danger);
+        }
+        button.btn-danger:hover {
+            background-color: var(--danger-hover);
+        }
+
+        button.btn-secondary {
+            background-color: var(--gray);
+        }
+        button.btn-secondary:hover {
+            background-color: #5a6268;
+        }
+
+        /* 输出区域优化 */
+        .output {
+            margin-top: 25px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            min-height: 50px;
+            font-size: 14px;
+            color: #333;
+            /* 关键优化：保留换行符，无需JS正则替换 */
+            white-space: pre-wrap; 
+            word-break: break-all; /* 防止长URL撑破容器 */
+        }
+        
+        /* 简单的链接样式 */
+        .output a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+        .output a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Bookmark Manager</h1>
+        
+        <div class="form-group">
+            <label for="key">书签名称 (Key):</label>
+            <input type="text" id="key" placeholder="例如: Google">
+        </div>
+        
+        <div class="form-group">
+            <label for="value">书签链接 (Value):</label>
+            <input type="text" id="value" placeholder="https://...">
+        </div>
+
+        <div class="button-group">
+            <button onclick="insert()">Insert</button>
+            <button onclick="update()">Update</button>
+            <button onclick="find()">Find</button>
+            <button onclick="list()">List All</button>
+            <button class="btn-danger" onclick="remove()">Remove</button>
+            <button class="btn-secondary" onclick="cclear()">Clear</button>
+        </div>
+
+        <div class="output" id="output">
+            <!-- Output results here -->
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000';
+
+        // 渲染函数：优化显示，支持简单的链接识别
+        function renderOutput(data) {
+            const outputDiv = document.getElementById('output');
+            
+            // 如果数据为空
+            if (!data || (data.result === undefined && !Array.isArray(data))) {
+                outputDiv.innerText = typeof data === 'string' ? data : JSON.stringify(data);
+                return;
+            }
+
+            let content = data.result || data;
+
+            // 如果是 List 结果，通常是长文本，尝试美化一下
+            if (typeof content === 'string') {
+                // 简单的判断：如果内容包含 http，尝试把它们变成链接显示
+                // 这里做一个简易处理，不仅显示文本，如果是 URL 则允许点击
+                if (content.startsWith('http')) {
+                    outputDiv.innerHTML = `<a href="${content}" target="_blank">${content}</a>`;
+                } else {
+                    // 默认文本显示，利用 CSS 的 pre-wrap 处理换行
+                    outputDiv.innerText = content; 
+                }
+            } else {
+                // 如果是对象或数组，格式化显示
+                outputDiv.innerText = JSON.stringify(content, null, 2);
+            }
+        }
+
+        async function sendRequest(action, key = "", value = "") {
+            const outputDiv = document.getElementById('output');
+            outputDiv.innerText = "Processing...";
+            
+            try {
+                const response = await fetch(`${API_URL}/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key, value }),
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                }
+
+                const result = await response.json();
+                renderOutput(result);
+                
+            } catch (error) {
+                outputDiv.innerText = "Error: " + error.message;
+                console.error(error);
+            }
+        }
+
+        function insert() {
+            const key = document.getElementById('key').value;
+            const value = document.getElementById('value').value;
+            if(!key) return alert("请输入 Key");
+            sendRequest('insert', key, value);
+        }
+
+        function update() {
+            const key = document.getElementById('key').value;
+            const value = document.getElementById('value').value;
+            if(!key) return alert("请输入 Key");
+            sendRequest('update', key, value);
+        }
+
+        function remove() {
+            const key = document.getElementById('key').value;
+            if(!key) return alert("请输入 Key");
+            sendRequest('remove', key);
+        }
+
+        function find() {
+            const key = document.getElementById('key').value;
+            if(!key) return alert("请输入 Key");
+            sendRequest('find', key);
+        }
+
+        function list() {
+            sendRequest('list');
+        }
+
+        function cclear() {
+            document.getElementById('output').innerText = "";
+            document.getElementById('key').value = "";
+            document.getElementById('value').value = "";
+        }
+    </script>
+</body>
+</html>
