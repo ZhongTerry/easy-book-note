@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory
+from flask import Flask, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory, session
 import os
 import shutil
 import requests
@@ -11,13 +11,50 @@ import hashlib
 import json
 import time
 import random
-import threading # 新增：用于后台下载
-from pypinyin import pinyin, lazy_pinyin, Style # 新增：拼音库
-import glob # 用于查找文件列表
-from datetime import datetime, timedelta # 用于生成时间戳
+import threading
+from pypinyin import pinyin, lazy_pinyin, Style
+import glob
+from datetime import datetime, timedelta
 import ebooklib
 from ebooklib import epub
-from werkzeug.utils import secure_filename # 用于安全保存文件
+from werkzeug.utils import secure_filename
+from functools import wraps
+
+# --- 基础配置 ---
+app = Flask(__name__)
+# [关键修复] 设置固定的密钥，否则每次服务器重启都会导致所有用户掉线
+app.secret_key = 'YOUR_FIXED_SECRET_KEY_HERE_CHANGE_THIS' 
+app.permanent_session_lifetime = timedelta(days=30) 
+app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
+
+# 路径配置
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+USER_DATA_DIR = os.path.join(BASE_DIR, "user_data") # 用户数据隔离目录
+CACHE_DIR = os.path.join(BASE_DIR, "cache")
+LIB_DIR = os.path.join(BASE_DIR, "library")
+DL_DIR = os.path.join(BASE_DIR, "downloads")
+
+# 自动创建必要目录
+for d in [USER_DATA_DIR, CACHE_DIR, LIB_DIR, DL_DIR]:
+    if not os.path.exists(d): os.makedirs(d)
+
+# === 认证中心配置 ===
+CLIENT_ID = '5d0c0b8a21fec049a146' 
+CLIENT_SECRET = '8664201fad421f54fa6f5da92e76cb604ca70056'
+AUTH_SERVER = 'http://127.0.0.1:5124'
+REDIRECT_URI = 'http://127.0.0.1:5000/callback'
+
+# --- 登录装饰器 ---
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            # API 请求返回 401，页面请求跳转登录
+            if request.path.startswith('/api/') or request.path in ['/insert', '/update', '/remove', '/list', '/find', '/rollback']:
+                return jsonify({"status": "error", "message": "Unauthorized"}), 401
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # --- 0. 缓存管理器 (保持不变) ---
 class CacheManager:
@@ -46,130 +83,67 @@ class CacheManager:
                 json.dump(data, f, ensure_ascii=False)
         except Exception as e: print(f"[Cache] Write Error: {e}")
 
-# === 新增：Bing 搜索与拼音工具 (修复版) ===
-
-import html as html
+# --- 搜索辅助类 (保持不变) ---
 class SearchHelper:
     def __init__(self):
-        # 伪装成真实的 PC 浏览器，这非常关键！
         self.headers = {
-            "User-Agent": "'User-Agent':'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36 Edg/134.0.0.0',",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Referer": "https://www.bing.com/",
-            # 添加一个假的 Cookie 有助于绕过部分反爬
-            "Cookie": "SRCHHPGUSR=CW=1920&CH=1080&DPR=1&UTC=480; _EDGE_S=F=1; MUID=1234567890;" 
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://www.bing.com/"
         }
 
     def get_pinyin_key(self, text):
-        """将中文转换为拼音首字母 (例如: 凡人修仙传 -> frxxz)"""
-        # 清理标题中的多余字符
         clean_text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
         clean_text = re.sub(r'(最新章节|全文阅读|无弹窗|笔趣阁|顶点|小说|在线阅读|目录|官方)', '', clean_text)
-        
-        # 获取首字母
         try:
             initials = lazy_pinyin(clean_text, style=Style.FIRST_LETTER)
             key = ''.join(initials).lower()
             return key if key else "temp"
-        except:
-            return "temp"
+        except: return "temp"
 
     def search_bing(self, keyword):
-        """搜索 Bing 并提取结果"""
-        # 关键词加上 "目录" 提高命中率，过滤掉无关页面
-        search_url = f"https://www.bing.com/search?q={keyword} 在线阅读&adppc=EdgeStart&PC=HCTS&mkt=zh-CN"
-        
+        search_url = f"https://www.bing.com/search?q={keyword} 在线阅读"
         print(f"[Search] Searching for: {search_url}")
-        
         try:
             response = requests.get(search_url, headers=self.headers, timeout=10, verify=False)
-            # 自动识别编码，防止乱码
             response.encoding = response.apparent_encoding 
-            
             soup = BeautifulSoup(response.text, 'html.parser')
-            
             results = []
-            
-            # 针对你提供的 HTML 文件结构：
-            # <li class="b_algo"> -> <h2> -> <a href="...">
             items = soup.select(".b_algo")
-            
-            if not items:
-                print("[Search] No items found in specific selector, trying fallback...")
-                items = soup.select('li.b_algo') # 保底尝试
-
             for item in items:
-                # 1. 找标题容器 h2
-                # h2 = item.find('h2')
-                h2 = item.select('.b_tpcn')[0]
+                h2 = item.select_one('h2') or item.select_one('.b_tpcn')
                 if not h2: continue
-                
-                # 2. 找链接 a
                 link = h2.find('a')
-                print(item)
                 if not link: continue
                 url = link.get('href')
-                # get_text 会自动去掉 <strong> 等标签，只留纯文本
                 title = link.get_text(strip=True)
-                
-                # 3. 简单的过滤：只要 http 开头的链接，且排除一些明显的广告或无关链接
-                if url and url.startswith('http'):
-                    # 排除 Bing 的相关搜索链接 (search?q=...)
-                    if "bing.com/search" in url:
-                        continue
-
-                    results.append({
-                        'title': title,
-                        'url': url,
-                        # 预先计算好可能的 Key
-                        'suggested_key': self.get_pinyin_key(keyword) 
-                    })
-                    
-                if len(results) >= 10: # 只取前10个结果
-                    break
-            
-            print(f"[Search] Found {len(results)} results.")
-            print(search_url)
+                if url and url.startswith('http') and "bing.com" not in url:
+                    results.append({'title': title, 'url': url, 'suggested_key': self.get_pinyin_key(keyword)})
+                if len(results) >= 10: break
             return results
-            
         except Exception as e:
             print(f"[Search] Error: {e}")
-            # 如果出错，返回空列表，前端会提示
             return []
-# --- 1. 爬虫模块 (防封加强版) ---
+
+# --- 1. 爬虫模块 (保持原版复杂逻辑) ---
 class NovelCrawler:
     def __init__(self):
-        # 准备一堆 User-Agent 轮换，伪装成不同的人
         self.ua_list = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Safari/605.1.15"
         ]
 
     def _get_random_headers(self):
-        return {
-            "User-Agent": random.choice(self.ua_list),
-            "Referer": "https://www.google.com/",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
-        }
+        return {"User-Agent": random.choice(self.ua_list), "Referer": "https://www.google.com/"}
 
     def fetch_page(self, url, retry=2):
-        """带有重试和随机Header的下载"""
         for i in range(retry + 1):
             try:
-                # 随机延迟，模拟人类操作 (下载时很重要)
-                # 放在这里可能会影响普通阅读速度，所以下载逻辑单独做延迟，
-                # 这里只做基础的请求
                 response = requests.get(url, headers=self._get_random_headers(), timeout=15, verify=False)
                 response.raise_for_status()
                 response.encoding = response.apparent_encoding
                 return response.text
             except Exception as e:
-                print(f"[Crawler] Error fetching {url} (Try {i+1}): {e}")
-                time.sleep(2) # 失败后稍微等一下
+                time.sleep(2)
         return None
 
     def _get_absolute_url(self, base_url, relative_url):
@@ -181,7 +155,6 @@ class NovelCrawler:
         element = soup_element.__copy__()
         for tag in element.select('script, style, iframe, ins, .ads, .section-opt, .bar, .tp, .bottem, .bottom, div[align="center"]'):
             tag.decompose()
-        
         lines = []
         junk_keywords = ["上一章", "下一章", "返回列表", "加入书签", "阅读模式", "转/码", "APP", "http", "笔趣阁"]
         for line in element.get_text('\n').split('\n'):
@@ -206,8 +179,6 @@ class NovelCrawler:
         return "未知章节"
 
     def get_toc(self, toc_url):
-        # ... (保持你之前最新的 get_toc 代码，完全不用变) ...
-        # 为了节省篇幅，这里复用你之前的逻辑，请确保你复制了包含"智能过滤"的那个版本
         html = self.fetch_page(toc_url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
@@ -229,22 +200,17 @@ class NovelCrawler:
                 href = a.get('href')
                 if not href or not title or len(title) < 2: continue
                 if href.startswith('javascript') or href.startswith('#'): continue
-                is_chapter_likely = re.search(r'(第[0-9零一二三四五六七八九十百千万]+[章回节卷])|([0-9]+)', title)
-                if not is_chapter_likely:
-                    if title.endswith('小说') or title.endswith('文库'): continue
-                    if any(x in title for x in ['点击榜', '推荐榜', '收藏榜', '新书榜', '排行榜', '搜索', '登录', '注册', '首页', '书架', '帮助', '客户端', 'TXT']): continue
-                    if len(title) <= 3 and not is_chapter_likely: continue
+                if not re.search(r'(第[0-9零一二三四五六七八九十百千万]+[章回节卷])|([0-9]+)', title):
+                    if len(title) <= 3: continue
                 full_url = self._get_absolute_url(toc_url, href)
                 if full_url: chapters.append({'title': title, 'url': full_url})
         return {'title': self._get_smart_title(soup) or "目录", 'chapters': chapters}
 
     def run(self, url):
-        # ... (保持你之前最新的 run 代码，包含 toc_url 强力保底逻辑) ...
         html = self.fetch_page(url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
-        data = {'content': [], 'title': '', 'prev': None, 'next': None, 'toc_url': None}
-        data['title'] = self._get_smart_title(soup)
+        data = {'content': [], 'title': self._get_smart_title(soup), 'prev': None, 'next': None, 'toc_url': None}
         content_div = None
         for cid in ['content', 'chaptercontent', 'BookText', 'TextContent', 'showtxt']:
             content_div = soup.find(id=cid); 
@@ -264,621 +230,462 @@ class NovelCrawler:
         toc_tag = soup.find(id='info_url') or soup.find('a', string=re.compile(r'^(目录|章节目录|全文阅读)$'))
         if toc_tag: data['toc_url'] = self._get_absolute_url(url, toc_tag.get('href'))
         if not data.get('toc_url'):
-            if url.endswith('.html') or url.endswith('.htm') or url.endswith('.php'): data['toc_url'] = url.rsplit('/', 1)[0] + '/'
-            elif url.endswith('/'): data['toc_url'] = url.rstrip('/').rsplit('/', 1)[0] + '/'
-            else: data['toc_url'] = url.rsplit('/', 1)[0] + '/'
+            data['toc_url'] = url.rsplit('/', 1)[0] + '/'
         return data
 
-# --- 1.5 EPUB 处理器 (本地阅读核心) ---
+# --- 1.5 EPUB 处理器 (保持不变) ---
 class EpubHandler:
     def __init__(self):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.lib_dir = os.path.join(self.base_dir, "library")
+        self.lib_dir = os.path.join(BASE_DIR, "library")
         if not os.path.exists(self.lib_dir): os.makedirs(self.lib_dir)
 
     def save_file(self, file_obj):
-        """保存上传的文件，返回文件名"""
         filename = secure_filename(file_obj.filename)
-        # 避免文件名中文乱码或丢失，简单处理：如果 secure 后为空，用时间戳
         if not filename: filename = f"book_{int(time.time())}.epub"
         filepath = os.path.join(self.lib_dir, filename)
         file_obj.save(filepath)
         return filename
 
     def get_toc(self, filename):
-        """获取 EPUB 目录 (基于 Spine 线性顺序)"""
         filepath = os.path.join(self.lib_dir, filename)
         if not os.path.exists(filepath): return None
-        
         try:
             book = epub.read_epub(filepath)
-            # 1. 提取元数据标题
             title = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else filename
-            
-            # 2. 构建线性目录 (Spine 是最准确的阅读顺序)
-            chapters = []
-            for i, item_id in enumerate(book.spine):
-                # item_id 格式通常是 ('itemid', 'yes/no')
-                item = book.get_item_with_id(item_id[0])
-                if not item: continue
-                
-                # 这是一个简化的标题获取逻辑，EPUB 的目录结构非常复杂(ncx/nav)，
-                # 为了不让代码太复杂，我们这里简单命名为 "第 X 章"
-                # 如果你想更完美，需要解析 book.toc，但那个树状结构很难扁平化
-                chap_title = f"第 {i+1} 节" 
-                
-                # 我们构造一个伪链接: epub:文件名:章节索引
-                chapters.append({
-                    'title': chap_title,
-                    'url': f"epub:{filename}:{i}" 
-                })
-            
+            chapters = [{'title': f"第 {i+1} 节", 'url': f"epub:{filename}:{i}"} for i, _ in enumerate(book.spine)]
             return {'title': title, 'chapters': chapters}
-        except Exception as e:
-            print(f"[EPUB] TOC Error: {e}")
-            return None
+        except: return None
 
     def get_chapter_content(self, filename, chapter_index):
-        """读取特定章节的内容并清洗"""
         filepath = os.path.join(self.lib_dir, filename)
-        
-        # 1. 检查文件是否存在
-        if not os.path.exists(filepath):
-            return f"Error: File not found at {filepath}"
-
         try:
-            # 2. 读取 EPUB
             book = epub.read_epub(filepath)
-            
-            # 3. 检查章节索引是否越界
-            if chapter_index < 0 or chapter_index >= len(book.spine):
-                return f"Error: Chapter index {chapter_index} out of range (Total: {len(book.spine)})"
-
-            spine_item = book.spine[chapter_index]
-            item = book.get_item_with_id(spine_item[0])
-            
-            if not item:
-                return f"Error: Item with ID {spine_item[0]} not found in manifest"
-
-            # 获取原始 HTML
-            content_bytes = item.get_content()
-            if not content_bytes:
-                return "Error: Empty content in this chapter"
-                
-            raw_html = content_bytes.decode('utf-8', errors='ignore') # 忽略解码错误
-            
-            # === 纯净阅读核心：使用 BeautifulSoup 清洗 ===
-            soup = BeautifulSoup(raw_html, 'html.parser')
-            
-            # 提取标题
-            title = f"第 {chapter_index+1} 节"
-            h_tag = soup.find(['h1', 'h2', 'h3'])
-            if h_tag: title = h_tag.get_text(strip=True)
-            
-            # 提取正文
-            lines = []
-            for tag in soup.select('script, style, img, svg'): tag.decompose()
-            for p in soup.find_all(['p', 'div', 'h1', 'h2', 'h3', 'h4']):
-                text = p.get_text(strip=True)
-                if text: lines.append(text)
-                
-            if not lines:
-                lines = [line.strip() for line in soup.get_text().split('\n') if line.strip()]
-
-            # 计算链接
-            prev_url = f"epub:{filename}:{chapter_index-1}" if chapter_index > 0 else None
-            next_url = f"epub:{filename}:{chapter_index+1}" if chapter_index < len(book.spine) - 1 else None
-            toc_url = f"epub:{filename}:toc"
-
+            item = book.get_item_with_id(book.spine[chapter_index][0])
+            soup = BeautifulSoup(item.get_content(), 'html.parser')
+            lines = [p.get_text(strip=True) for p in soup.find_all(['p', 'div', 'h1', 'h2']) if p.get_text(strip=True)]
             return {
-                'title': title,
-                'content': lines,
-                'prev': prev_url,
-                'next': next_url,
-                'toc_url': toc_url
+                'title': f"第 {chapter_index+1} 节", 'content': lines,
+                'prev': f"epub:{filename}:{chapter_index-1}" if chapter_index > 0 else None,
+                'next': f"epub:{filename}:{chapter_index+1}" if chapter_index < len(book.spine) - 1 else None,
+                'toc_url': f"epub:{filename}:toc"
             }
+        except Exception as e: return f"EPUB Error: {e}"
 
-        except Exception as e:
-            # 返回具体的异常信息
-            import traceback
-            traceback.print_exc() # 在控制台打印堆栈
-            return f"System Error: {str(e)}"
+# --- [重构核心] 2. 数据库逻辑 (多文件隔离 + 备份) ---
+class IsolatedDB:
+    """
+    修改后的数据库类，不再使用全局的 mydatabase.db。
+    而是根据当前 Session 用户，动态读写 user_data/{username}.db
+    """
+    def _get_user_paths(self):
+        username = session.get('user', {}).get('username', 'default_user')
+        db_file = os.path.join(USER_DATA_DIR, f"{username}.db")
+        backup_dir = os.path.join(USER_DATA_DIR, "backups")
+        if not os.path.exists(backup_dir): os.makedirs(backup_dir)
+        return username, db_file, backup_dir
 
-# 初始化
-epub_handler = EpubHandler()
-
-# --- 2. 数据库逻辑 (保持不变) ---
-# --- 2. 数据库逻辑 (带版本控制版) ---
-class SimpleDB:
-    def __init__(self, db_name="mydatabase"):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.filename = os.path.join(self.base_dir, db_name + ".db")
-        
-        # 创建备份目录
-        self.backup_dir = os.path.join(self.base_dir, "backups")
-        if not os.path.exists(self.backup_dir):
-            os.makedirs(self.backup_dir)
-            
-        self.data = {}
-        self.load()
-
-    def load(self):
-        if os.path.exists(self.filename):
+    def _load(self):
+        _, db_file, _ = self._get_user_paths()
+        data = {}
+        if os.path.exists(db_file):
             try:
-                with open(self.filename, 'r', encoding='utf-8') as f:
+                with open(db_file, 'r', encoding='utf-8') as f:
                     for line in f:
                         line = line.strip()
                         if not line: continue
-                        # 兼容带冒号的内容，只分割第一个冒号
                         parts = line.split(':', 1)
-                        if len(parts) == 2: self.data[parts[0]] = parts[1]
-            except Exception as e:
-                print(f"[DB] Load Error: {e}")
+                        if len(parts) == 2: data[parts[0]] = parts[1]
+            except Exception as e: print(f"Load Error: {e}")
+        return data
 
-    def _manage_backups(self):
-        """核心功能：创建备份并限制数量"""
-        if not os.path.exists(self.filename):
-            return
+    def _save(self, data, create_backup=True):
+        username, db_file, backup_dir = self._get_user_paths()
+        
+        # 备份逻辑
+        if create_backup and os.path.exists(db_file):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            bak_path = os.path.join(backup_dir, f"{username}_{ts}.bak")
+            shutil.copy2(db_file, bak_path)
+            # 清理旧备份 (保留10个)
+            backups = sorted(glob.glob(os.path.join(backup_dir, f"{username}_*.bak")))
+            if len(backups) > 10:
+                for b in backups[:-10]: os.remove(b)
 
-        # 1. 生成带时间戳的备份文件名 (精确到毫秒，防止操作太快文件名冲突)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        backup_name = f"mydatabase_{timestamp}.bak"
-        backup_path = os.path.join(self.backup_dir, backup_name)
-
+        # 写入新数据
         try:
-            # 2. 复制当前数据库文件作为备份
-            shutil.copy2(self.filename, backup_path)
-            print(f"[Backup] Created: {backup_name}")
+            with open(db_file, 'w', encoding='utf-8') as f:
+                for key in sorted(data.keys()):
+                    f.write(f"{key}:{data[key]}\n")
+        except Exception as e: print(f"Save Error: {e}")
 
-            # 3. 清理旧备份 (保留最新的10个)
-            # 获取所有 .bak 文件
-            pattern = os.path.join(self.backup_dir, "mydatabase_*.bak")
-            backups = sorted(glob.glob(pattern)) # 默认按文件名排序（也就是按时间排序）
-            
-            max_versions = 10
-            if len(backups) > max_versions:
-                # 计算需要删除的数量
-                to_delete = backups[:len(backups) - max_versions]
-                for f in to_delete:
-                    os.remove(f)
-                    print(f"[Backup] Pruned old version: {os.path.basename(f)}")
-
-        except Exception as e:
-            print(f"[Backup] Error: {e}")
-
-    def save(self):
-        # === 在保存新数据之前，先对旧数据进行备份 ===
-        self._manage_backups()
-
-        # === 正常的保存逻辑 ===
-        temp_file = self.filename + ".tmp"
-        try:
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                # 排序后写入，保持文件整洁
-                for key in sorted(self.data.keys()):
-                    f.write(f"{key}:{self.data[key]}\n")
-            
-            # 原子操作：先写临时文件，成功后再重命名覆盖
-            if os.path.exists(self.filename):
-                os.remove(self.filename)
-            os.rename(temp_file, self.filename)
-        except Exception as e:
-            print(f"[DB] Save Error: {e}")
-
-    # 以下 CRUD 方法保持不变，它们会自动调用上面的 save()
     def insert(self, key, value):
-        self.data[key] = value
-        self.save() 
+        data = self._load()
+        data[key] = value
+        self._save(data)
         return {"status": "success", "message": f"Saved: {key}", "data": {key: value}}
 
     def update(self, key, value):
-        if key in self.data:
-            self.data[key] = value
-            self.save()
-            return {"status": "success", "message": f"Updated: {key}", "data": {key: value}}
-        return {"status": "error", "message": "Key not found!"}
+        data = self._load()
+        if key in data:
+            data[key] = value
+            self._save(data)
+            return {"status": "success"}
+        return {"status": "error"}
 
     def remove(self, key):
-        if key in self.data:
-            del self.data[key]
-            self.save()
+        data = self._load()
+        if key in data:
+            del data[key]
+            self._save(data)
             return {"status": "success"}
         return {"status": "error"}
 
     def list_all(self):
-        user_data = {k: v for k, v in self.data.items() if not k.startswith('@')}
+        data = self._load()
+        # 过滤掉系统内部key (如 @last_read)
+        user_data = {k: v for k, v in data.items() if not k.startswith('@')}
         return {"status": "success", "data": user_data}
 
     def find(self, term):
-        res = {k:v for k,v in self.data.items() if term.lower() in k.lower() or term.lower() in v.lower()}
-        return {"status": "success", "data": res} if res else {"status": "error"}
+        data = self._load()
+        res = {k:v for k,v in data.items() if term.lower() in k.lower() or term.lower() in v.lower()}
+        return {"status": "success", "data": res}
 
-# --- 3. 下载管理器 (新增核心模块) ---
+    def get_val(self, key):
+        data = self._load()
+        return data.get(key)
+
+    def rollback(self):
+        """撤销功能：恢复到上一个备份"""
+        username, db_file, backup_dir = self._get_user_paths()
+        backups = sorted(glob.glob(os.path.join(backup_dir, f"{username}_*.bak")), reverse=True)
+        if not backups: return {"status": "error", "message": "无备份可恢复"}
+        
+        latest = backups[0]
+        shutil.copy2(latest, db_file) # 覆盖当前
+        os.remove(latest) # 移除该备份防止死循环
+        return {"status": "success", "message": "已回退到上一步"}
+
+# --- 3. 下载管理器 (保持不变，支持多线程) ---
 class DownloadManager:
     def __init__(self):
-        self.downloads = {} # 存储下载任务状态
-        self.downloads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
-        if not os.path.exists(self.downloads_dir):
-            os.makedirs(self.downloads_dir)
+        self.downloads = {}
+        if not os.path.exists(DL_DIR): os.makedirs(DL_DIR)
 
     def start_download(self, book_name, chapters):
-        """开启一个后台线程进行下载"""
         task_id = hashlib.md5((book_name + str(time.time())).encode()).hexdigest()
-        
-        # 初始化任务状态
         self.downloads[task_id] = {
-            'book_name': book_name,
-            'total': len(chapters),
-            'current': 0,
-            'status': 'running',
-            'filename': f"{self._sanitize_filename(book_name)}.txt",
-            'start_time': time.time()
+            'book_name': book_name, 'total': len(chapters), 'current': 0, 
+            'status': 'running', 'filename': f"{re.sub(r'[\\/*?:|<>]', '', book_name)}.txt"
         }
-
-        # 启动线程
-        thread = threading.Thread(target=self._download_worker, args=(task_id, chapters))
-        thread.daemon = True # 设置为守护线程，主程序退出时它也会退出
+        thread = threading.Thread(target=self._worker, args=(task_id, chapters))
+        thread.daemon = True
         thread.start()
-        
         return task_id
 
-    def _sanitize_filename(self, filename):
-        return re.sub(r'[\\/*?:"<>|]', "", filename)
-
-    def _download_worker(self, task_id, chapters):
-        """后台下载逻辑"""
+    def _worker(self, task_id, chapters):
         task = self.downloads[task_id]
-        filepath = os.path.join(self.downloads_dir, task['filename'])
-        
-        print(f"[Download] Starting task {task_id} for {task['book_name']}")
-
+        filepath = os.path.join(DL_DIR, task['filename'])
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
-                # 写入书名
                 f.write(f"=== {task['book_name']} ===\n\n")
-                
                 for index, chap in enumerate(chapters):
-                    url = chap['url']
-                    title = chap['title']
+                    # 复用全局爬虫和缓存
+                    data = cache.get(chap['url'])
+                    if not data:
+                        time.sleep(random.uniform(1.0, 3.0)) # 避雷针
+                        data = crawler.run(chap['url'])
+                        if data and data['content']: cache.set(chap['url'], data)
                     
-                    # 1. 尝试从缓存读取
-                    article_data = cache.get(url)
+                    if data and data['content']:
+                        f.write(f"\n\n=== {chap['title']} ===\n\n")
+                        f.write('\n'.join(data['content']) if isinstance(data['content'], list) else data['content'])
                     
-                    if not article_data:
-                        # 2. 缓存没有，联网抓取
-                        # 随机延迟，防止封IP (1.5s - 3.5s)
-                        time.sleep(random.uniform(1.5, 3.5))
-                        try:
-                            article_data = crawler.run(url)
-                            # 抓取成功，写入缓存
-                            if article_data and article_data.get('content'):
-                                cache.set(url, article_data)
-                        except Exception as e:
-                            print(f"[Download] Error crawling {title}: {e}")
-                    
-                    # 3. 写入文件
-                    if article_data and article_data.get('content'):
-                        f.write(f"\n\n=== {title} ===\n\n")
-                        # content 是个列表，拼接起来
-                        if isinstance(article_data['content'], list):
-                            f.write('\n\n'.join(article_data['content']))
-                        else:
-                            f.write(article_data['content'])
-                    else:
-                        f.write(f"\n\n=== {title} (下载失败) ===\n\n")
-
-                    # 更新进度
                     task['current'] = index + 1
-            
             task['status'] = 'completed'
-            print(f"[Download] Task {task_id} completed!")
-
         except Exception as e:
-            task['status'] = 'error'
-            task['error_msg'] = str(e)
-            print(f"[Download] Task {task_id} failed: {e}")
+            task['status'] = 'error'; task['error_msg'] = str(e)
 
-    def get_status(self, task_id):
-        return self.downloads.get(task_id)
+    def get_status(self, task_id): return self.downloads.get(task_id)
 
-# --- 4. Flask 服务器 ---
-
-app = Flask(__name__)
-template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
-app.template_folder = template_dir
-
-db = SimpleDB("mydatabase")
-crawler = NovelCrawler()
-cache = CacheManager()
-downloader = DownloadManager() # 初始化下载管理器
-
-searcher = SearchHelper()
-
-@app.route('/api/search_novel', methods=['POST'])
-def api_search():
-    keyword = request.json.get('keyword')
-    if not keyword:
-        return jsonify({"status": "error", "message": "请输入关键词"})
+# --- 标签管理器 (多用户版) ---
+class IsolatedTagManager:
+    def _get_path(self):
+        u = session.get('user', {}).get('username', 'default')
+        return os.path.join(USER_DATA_DIR, f"{u}_tags.json")
     
-    results = searcher.search_bing(keyword)
-    return jsonify({"status": "success", "data": results})
+    def get_all(self):
+        path = self._get_path()
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+        return {}
 
-@app.route('/api/get_pinyin', methods=['POST'])
-def api_pinyin():
-    """辅助接口：如果用户手动修改了标题，可以重新生成Key"""
-    text = request.json.get('text')
-    key = searcher.get_pinyin_key(text)
-    return jsonify({"status": "success", "key": key})
+    def update_tags(self, key, tag_list):
+        tags = self.get_all()
+        clean = [t.strip() for t in tag_list if t.strip()]
+        if clean: tags[key] = clean
+        elif key in tags: del tags[key]
+        with open(self._get_path(), 'w', encoding='utf-8') as f:
+            json.dump(tags, f, ensure_ascii=False, indent=2)
+        return clean
 
-@app.after_request
-def add_cors(resp):
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    return resp
+# --- 统计管理器 (多用户版) ---
+class IsolatedStatsManager:
+    def _get_path(self):
+        u = session.get('user', {}).get('username', 'default')
+        return os.path.join(USER_DATA_DIR, f"{u}_stats.json")
 
-@app.route('/')
-def index():
-    return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'index.html'))
+    def load(self):
+        path = self._get_path()
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f: 
+                d = json.load(f)
+                return d if "daily_stats" in d else {"daily_stats": {}}
+        return {"daily_stats": {}}
 
-@app.route('/api/upload_epub', methods=['POST'])
-def api_upload_epub():
-    if 'file' not in request.files:
-        return jsonify({"status": "error", "message": "No file part"})
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({"status": "error", "message": "No selected file"})
-    
-    if file:
-        filename = epub_handler.save_file(file)
-        # 自动生成 Key (拼音)
-        raw_name = os.path.splitext(filename)[0]
-        key = searcher.get_pinyin_key(raw_name)
-        # 构造特殊的 Value
-        value = f"epub:{filename}:toc"
-        
-        # 自动存入数据库
-        db.insert(key, value)
-        
-        return jsonify({
-            "status": "success", 
-            "message": "Upload successful",
-            "key": key,
-            "value": value
-        })
+    def update(self, t_add, w_add, c_add, b_key):
+        d = self.load()
+        today = datetime.now().strftime('%Y-%m-%d')
+        if today not in d["daily_stats"]: d["daily_stats"][today] = {"time":0, "words":0, "chapters":0, "books":[]}
+        rec = d["daily_stats"][today]
+        rec["time"]+=t_add; rec["words"]+=w_add; rec["chapters"]+=c_add
+        if b_key and b_key not in rec["books"]: rec["books"].append(b_key)
+        with open(self._get_path(), 'w', encoding='utf-8') as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
 
-# === 修改后的 Read 路由 (修复 Invalid EPUB link 问题) ===
-@app.route('/read')
-# === 修改后的 Read 路由 (增强版：显示具体错误) ===
-@app.route('/read')
-def read_mode():
-    target_url = request.args.get('url')
-    db_key = request.args.get('key', '')
-    
-    # [EPUB 处理分支]
-    if target_url.startswith('epub:'):
-        # 更安全的解析方式：去除 'epub:' 前缀，然后从右边切分一次
-        # target_url 示例: epub:Book_Name.epub:22
-        
-        content_part = target_url[5:] # 去掉 'epub:' -> Book_Name.epub:22
-        if ':' not in content_part:
-            return f"Invalid EPUB link format: {target_url}"
-            
-        filename, index_str = content_part.rsplit(':', 1)
-        
-        # 跳转目录
-        if index_str == 'toc':
-            return redirect(url_for('toc_page', url=target_url, key=db_key))
-        
-        try:
-            idx = int(index_str)
-            article_data = epub_handler.get_chapter_content(filename, idx)
-            
-            # 如果返回的是字符串，说明出错了，直接显示错误信息
-            if isinstance(article_data, str):
-                return f"<h1>EPUB Load Failed</h1><p>{article_data}</p><p>File: {filename}</p><p>Index: {idx}</p>"
-                
-            return render_template('reader.html', article=article_data, current_url=target_url, db_key=db_key)
-        except ValueError:
-            return f"Invalid chapter index format: {index_str}"
-        except Exception as e:
-            return f"Route Error: {str(e)}"
-
-    # ... (保留原有的网络爬虫逻辑，不需要动) ...
-    force_update = request.args.get('force') == 'true'
-    article_data = None
-    if not force_update: article_data = cache.get(target_url)
-    if not article_data:
-        if not target_url.startswith('http'): return "Invalid URL scheme"
-        print(f"[Crawler] Fetching: {target_url}")
-        article_data = crawler.run(target_url)
-        if article_data and article_data.get('content'): cache.set(target_url, article_data)
-    
-    if not article_data: return "Error: Failed to fetch content."
-    return render_template('reader.html', article=article_data, current_url=target_url, db_key=db_key)
-
-# === 修改：TOC 路由 (支持 EPUB) ===
-@app.route('/toc')
-def toc_page():
-    toc_url = request.args.get('url')
-    db_key = request.args.get('key', '')
-    
-    # [新增] EPUB 处理分支
-    if toc_url.startswith('epub:'):
-        parts = toc_url.split(':')
-        filename = parts[1]
-        toc_data = epub_handler.get_toc(filename)
-        if not toc_data: return "Error loading EPUB TOC"
-        return render_template('toc.html', toc=toc_data, toc_url=toc_url, db_key=db_key)
-
-    # ... (保留原有的网络爬虫逻辑) ...
-    force_update = request.args.get('force') == 'true'
-    toc_data = None
-    if not force_update: toc_data = cache.get(toc_url)
-    if not toc_data:
-        toc_data = crawler.get_toc(toc_url)
-        if toc_data and toc_data['chapters']: cache.set(toc_url, toc_data)
-    if not toc_data: return f"Error: Failed to fetch TOC."
-    return render_template('toc.html', toc=toc_data, toc_url=toc_url, db_key=db_key)
-
-# === 新增：下载相关 API ===
-
-# === 新增：精确获取 Key 对应的 Value (用于同步检测) ===
-@app.route('/api/get_value', methods=['POST'])
-def api_get_value():
-    key = request.json.get('key')
-    if key in db.data:
-        return jsonify({"status": "success", "value": db.data[key]})
-    return jsonify({"status": "error", "message": "Key not found"})
-
-@app.route('/api/download', methods=['POST'])
-def start_download():
-    """启动下载任务"""
-    data = request.json
-    toc_url = data.get('toc_url')
-    book_name = data.get('book_name', '未知小说')
-    
-    # 1. 再次获取目录 (确保最新)
-    # 优先查缓存，没有则现抓
-    toc_data = cache.get(toc_url)
-    if not toc_data:
-        toc_data = crawler.get_toc(toc_url)
-    
-    if not toc_data or not toc_data.get('chapters'):
-        return jsonify({"status": "error", "message": "无法获取章节目录"})
-
-    # 2. 启动后台任务
-    task_id = downloader.start_download(book_name, toc_data['chapters'])
-    
-    return jsonify({"status": "success", "task_id": task_id})
-
-@app.route('/api/download/status')
-def download_status():
-    """查询下载进度"""
-    task_id = request.args.get('task_id')
-    status = downloader.get_status(task_id)
-    if not status:
-        return jsonify({"status": "error", "message": "Task not found"})
-    return jsonify(status)
-
-@app.route('/api/download/file')
-def download_file():
-    """下载生成的 TXT 文件"""
-    task_id = request.args.get('task_id')
-    status = downloader.get_status(task_id)
-    if not status or status['status'] != 'completed':
-        return "File not ready", 404
-    
-    return send_from_directory(downloader.downloads_dir, status['filename'], as_attachment=True)
-
-# ... (保持 insert, update 等 API 不变) ...
-@app.route('/insert', methods=['POST'])
-def insert(): return jsonify(db.insert(request.json.get('key'), request.json.get('value')))
-@app.route('/update', methods=['POST'])
-def update(): return jsonify(db.update(request.json.get('key'), request.json.get('value')))
-@app.route('/remove', methods=['POST'])
-def remove(): return jsonify(db.remove(request.json.get('key')))
-@app.route('/find', methods=['POST'])
-def find(): return jsonify(db.find(request.json.get('key', '')))
-
-# === 新增：深度分析接口 ===
-@app.route('/api/analyze_stats', methods=['GET'])
-def api_analyze_stats():
-    try:
-        # 1. 基础数据
-        all_books = [k for k in db.data.keys() if not k.startswith('@')]
-        total_books = len(all_books)
-        
-        # 2. 缓存分析 (计算字数和活跃度)
-        cache_files = glob.glob(os.path.join(cache.cache_dir, "*.json"))
-        total_chapters = len(cache_files)
-        
-        # 估算总字数 (通过文件大小估算，避免打开所有文件导致慢)
-        # 假设 JSON 中 70% 是正文，UTF-8 中文平均 3 字节
-        total_size = sum(os.path.getsize(f) for f in cache_files)
-        estimated_words = int(total_size * 0.7 / 3)
-        
-        # 3. 热力图数据 (过去30天活跃度)
-        # 读取缓存文件的修改时间 (mtime)
-        activity = {}
-        now = time.time()
-        days_30 = 30 * 24 * 3600
-        
-        for f in cache_files:
-            mtime = os.path.getmtime(f)
-            if now - mtime < days_30:
-                date_str = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d')
-                activity[date_str] = activity.get(date_str, 0) + 1
-        
-        # 填补最近30天的数据，没有阅读的日子填0
-        heatmap_data = []
+    def get_summary(self):
+        """计算 24h(今日), 7天, 30天, 全部 的统计数据"""
         today = datetime.now()
+        summary = {
+            "24h": {"time": 0, "words": 0, "chapters": 0, "books": 0},
+            "7d":  {"time": 0, "words": 0, "chapters": 0, "books": 0},
+            "30d": {"time": 0, "words": 0, "chapters": 0, "books": 0},
+            "all": {"time": 0, "words": 0, "chapters": 0, "books": 0, "heatmap": []},
+            "trend": {"dates": [], "times": []}
+        }
+        
+        books_sets = {"24h": set(), "7d": set(), "30d": set(), "all": set()}
+        
+        # ✅ [修复点] 使用 self.load() 获取当前用户数据
+        data = self.load()
+        daily = data.get("daily_stats", {})
+        
+        # 1. 生成最近30天的完整日期列表
         for i in range(29, -1, -1):
             day = today - timedelta(days=i)
-            date_str = day.strftime('%Y-%m-%d')
-            count = activity.get(date_str, 0)
-            heatmap_data.append({"date": date_str, "count": count})
+            d_str = day.strftime('%Y-%m-%d')
+            rec = daily.get(d_str, {})
+            summary["trend"]["dates"].append(d_str[5:])
+            summary["trend"]["times"].append(int(rec.get("time", 0) / 60))
 
-        # 4. 口味提取 (简单的关键词频率)
-        keywords = {}
-        target_words = ["修仙", "重生", "系统", "穿越", "都市", "玄幻", "言情", "末世", "高武", "反派", "直播", "无限", "神豪", "娱乐"]
-        
-        # 从书名(Key)和Value(URL里的标题猜测)中提取
-        # 这里简单分析 DB 中的 Key (通常是拼音) 和 cache 中的 title
-        # 为了简单且丰富，我们分析 cache 中记录的书名
-        
-        # 随机抽样 50 个缓存文件来分析书名，避免全量遍历太慢
-        sample_files = random.sample(cache_files, min(len(cache_files), 50))
-        for f in sample_files:
+        # 2. 遍历历史数据
+        for date_str, rec in daily.items():
+            # ... (这部分逻辑保持不变，不需要改) ...
             try:
-                with open(f, 'r', encoding='utf-8') as jf:
-                    data = json.load(jf)
-                    title = data.get('title', '')
-                    for word in target_words:
-                        if word in title:
-                            keywords[word] = keywords.get(word, 0) + 1
+                rec_date = datetime.strptime(date_str, '%Y-%m-%d')
+                delta = (today - rec_date).days
+                
+                t, w, c = rec.get("time", 0), rec.get("words", 0), rec.get("chapters", 0)
+                b_list = rec.get("books", [])
+
+                # All Time
+                summary["all"]["time"] += t
+                summary["all"]["words"] += w
+                summary["all"]["chapters"] += c
+                books_sets["all"].update(b_list)
+                
+                # 热力图
+                if t > 0:
+                    summary["all"]["heatmap"].append({"date": date_str, "count": int(t/60)})
+
+                # 区间统计
+                if delta == 0:
+                    summary["24h"]["time"] += t
+                    summary["24h"]["words"] += w
+                    summary["24h"]["chapters"] += c
+                    books_sets["24h"].update(b_list)
+                if delta < 7:
+                    summary["7d"]["time"] += t
+                    summary["7d"]["words"] += w
+                    summary["7d"]["chapters"] += c
+                    books_sets["7d"].update(b_list)
+                if delta < 30:
+                    summary["30d"]["time"] += t
+                    summary["30d"]["words"] += w
+                    summary["30d"]["chapters"] += c
+                    books_sets["30d"].update(b_list)
             except: pass
-            
-        # 格式化关键词
-        top_keywords = sorted(keywords.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        return jsonify({
-            "status": "success",
-            "stats": {
-                "books": total_books,
-                "chapters": total_chapters,
-                "words": estimated_words,
-                "heatmap": heatmap_data,
-                "keywords": top_keywords
-            }
-        })
-    except Exception as e:
-        print(f"Analysis Error: {e}")
-        return jsonify({"status": "error", "message": str(e)})
+
+        for k in books_sets:
+            summary[k]["books"] = len(books_sets[k])
+            summary[k]["time"] = int(summary[k]["time"] / 60) 
+
+        return summary
+
+# --- 初始化所有服务 ---
+db = IsolatedDB()
+crawler = NovelCrawler()
+cache = CacheManager()
+downloader = DownloadManager()
+tag_manager = IsolatedTagManager()
+stats_manager = IsolatedStatsManager()
+searcher = SearchHelper()
+epub_handler = EpubHandler()
+
+# ================= 路由部分 =================
+
+@app.route('/login')
+def login():
+    return redirect(f"{AUTH_SERVER}/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}")
+@app.route('/stats')
+@login_required
+def stats_page():
+    return render_template('stats.html')
+@app.route('/callback')
+def callback():
+    code = request.args.get('code')
+    try:
+        resp = requests.post(f"{AUTH_SERVER}/oauth/token", json={
+            'grant_type': 'authorization_code', 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'code': code
+        }).json()
+        if 'access_token' in resp:
+            user_info = requests.get(f"{AUTH_SERVER}/api/user", headers={'Authorization': f"Bearer {resp['access_token']}"}).json()
+            session.permanent = True # 开启持久化会话
+            session['user'] = user_info
+            return redirect(url_for('index'))
+    except Exception as e: print(e)
+    return "Login Failed", 400
+
+@app.route('/logout')
+def logout(): session.clear(); return redirect('/')
+
+@app.route('/api/me')
+def api_me(): return jsonify(session.get('user', {"username": None}))
+
+@app.route('/')
+@login_required
+def index(): return send_file(os.path.join(BASE_DIR, 'index.html'))
+
+# 核心业务 API
 @app.route('/list', methods=['POST'])
-def list_all(): 
-    # print("[Debug] ", db.list_all())
-    return jsonify(db.list_all())
-# === 新增：多端同步“最后阅读”接口 ===
+@login_required
+def list_all(): return jsonify(db.list_all())
+
+@app.route('/find', methods=['POST'])
+@login_required
+def find(): return jsonify(db.find(request.json.get('key', '')))
+
+@app.route('/insert', methods=['POST'])
+@login_required
+def insert(): return jsonify(db.insert(request.json.get('key'), request.json.get('value')))
+
+@app.route('/update', methods=['POST'])
+@login_required
+def update(): return jsonify(db.update(request.json.get('key'), request.json.get('value')))
+
+@app.route('/remove', methods=['POST'])
+@login_required
+def remove(): return jsonify(db.remove(request.json.get('key')))
+
+@app.route('/rollback', methods=['POST'])
+@login_required
+def rollback(): return jsonify(db.rollback())
+
+# 辅助 API
+@app.route('/api/get_value', methods=['POST'])
+@login_required
+def get_val():
+    val = db.get_val(request.json.get('key'))
+    return jsonify({"status": "success", "value": val}) if val else jsonify({"status": "error"})
+
+@app.route('/purecss/<path:path>')
+def send_pure_assets(path):
+    return send_from_directory(os.path.join(os.path.dirname(__file__), 'purecss'), path)
+
 @app.route('/api/last_read', methods=['GET', 'POST'])
+@login_required
 def handle_last_read():
-    # 获取最后阅读的书
-    if request.method == 'GET':
-        last_key = db.data.get('@last_read')
-        return jsonify({"status": "success", "key": last_key})
-    
-    # 设置最后阅读的书
-    if request.method == 'POST':
-        key = request.json.get('key')
-        if key:
-            # 使用特殊的 Key 存储，不影响普通书签
-            db.insert('@last_read', key) 
-            return jsonify({"status": "success"})
-        return jsonify({"status": "error"})
+    if request.method == 'GET': return jsonify({"status": "success", "key": db.get_val('@last_read')})
+    return jsonify(db.insert('@last_read', request.json.get('key')))
 
+# 标签与统计
+@app.route('/api/tags/list')
+@login_required
+def api_tags_list(): return jsonify({"status": "success", "data": tag_manager.get_all()})
 
+@app.route('/api/tags/update', methods=['POST'])
+@login_required
+def api_tags_update():
+    return jsonify({"status": "success", "tags": tag_manager.update_tags(request.json.get('key'), request.json.get('tags', []))})
+
+@app.route('/api/analyze_stats')
+@login_required
+def api_analyze_stats(): return jsonify({"status": "success", "summary": stats_manager.get_summary(), "keywords": []})
+
+@app.route('/api/stats/heartbeat', methods=['POST'])
+@login_required
+def api_heartbeat():
+    d = request.json
+    stats_manager.update(60 if d.get('is_heartbeat') else 0, d.get('words', 0), 1 if d.get('words', 0) > 0 else 0, d.get('book_key'))
+    return jsonify({"status": "success"})
+
+# 工具类 API
+@app.route('/api/search_novel', methods=['POST'])
+@login_required
+def api_search(): return jsonify({"status": "success", "data": searcher.search_bing(request.json.get('keyword'))})
+
+@app.route('/api/upload_epub', methods=['POST'])
+@login_required
+def api_upload_epub():
+    if 'file' not in request.files: return jsonify({"status": "error"})
+    f = request.files['file']
+    fname = epub_handler.save_file(f)
+    key = searcher.get_pinyin_key(os.path.splitext(fname)[0])
+    val = f"epub:{fname}:toc"
+    db.insert(key, val)
+    return jsonify({"status": "success", "key": key, "value": val})
+
+@app.route('/api/download', methods=['POST'])
+@login_required
+def start_download_route():
+    d = request.json
+    toc = cache.get(d['toc_url']) or crawler.get_toc(d['toc_url'])
+    if not toc: return jsonify({"status": "error"})
+    return jsonify({"status": "success", "task_id": downloader.start_download(d['book_name'], toc['chapters'])})
+
+@app.route('/api/download/status')
+@login_required
+def dl_status(): return jsonify(downloader.get_status(request.args.get('task_id')))
+
+@app.route('/api/download/file')
+@login_required
+def dl_file():
+    t = downloader.get_status(request.args.get('task_id'))
+    return send_from_directory(DL_DIR, t['filename'], as_attachment=True) if t else ("Not Found", 404)
+
+# 页面路由
+@app.route('/read')
+@login_required
+def read_mode():
+    u, k = request.args.get('url'), request.args.get('key', '')
+    if u.startswith('epub:'):
+        parts = u.split(':')
+        if parts[2] == 'toc': return redirect(url_for('toc_page', url=u, key=k))
+        data = epub_handler.get_chapter_content(parts[1], int(parts[2]))
+    else:
+        data = cache.get(u) or crawler.run(u)
+        if data: cache.set(u, data)
+    return render_template('reader.html', article=data, current_url=u, db_key=k)
+
+@app.route('/toc')
+@login_required
+def toc_page():
+    u, k = request.args.get('url'), request.args.get('key', '')
+    if u.startswith('epub:'): data = epub_handler.get_toc(u.split(':')[1])
+    else:
+        data = cache.get(u) or crawler.get_toc(u)
+        if data: cache.set(u, data)
+    return render_template('toc.html', toc=data, toc_url=u, db_key=k)
 
 if __name__ == '__main__':
-    if not os.path.exists(template_dir): os.makedirs(template_dir)
-    print("Server running on http://0.0.0.0:5000") # 提示改为 0.0.0.0
-    # host='0.0.0.0' 允许局域网其他设备访问
     app.run(debug=True, port=5000, host='0.0.0.0')

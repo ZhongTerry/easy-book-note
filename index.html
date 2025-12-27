@@ -4,834 +4,541 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart NoteDB</title>
+    <!-- 引入 PureUI 样式和脚本 -->
+    <link rel="stylesheet" href="/purecss/pure2.1.css">
+    <script src="/purecss/pure2.1.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
     <style>
+        /* === 布局与容器 (保留原版结构) === */
         :root {
-            --primary: #007bff;
-            --primary-hover: #0069d9;
-            --danger: #dc3545;
             --bg: #f8f9fa;
             --card-bg: #ffffff;
-            --border: #dee2e6;
         }
 
         body {
-            font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            margin: 0; padding: 30px 20px;
+            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+            margin: 0; padding: 0;
             background-color: var(--bg); color: #333;
         }
 
+        /* 顶部用户栏 */
+        #userBar {
+            background: #fff; padding: 10px 20px; border-bottom: 1px solid #eee; 
+            display: flex; justify-content: space-between; align-items: center; 
+            font-size: 14px;
+        }
+
         .container {
-            max-width: 800px; margin: 0 auto;
+            max-width: 800px; margin: 30px auto;
             background: var(--card-bg); padding: 30px;
-            border-radius: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            border-radius: 12px; box-shadow: 0 5px 20px rgba(0,0,0,0.05);
         }
 
-        h1 { margin-top: 0; color: #2c3e50; text-align: center; font-size: 26px; }
+        h1 { margin-top: 0; color: #2c3e50; text-align: center; font-size: 26px; margin-bottom: 25px;}
 
-        .input-group { margin-bottom: 15px; position: relative; }
-        label { display: block; margin-bottom: 5px; font-weight: 600; color: #555; font-size: 13px;}
-        input[type="text"] {
-            width: 100%; padding: 10px; border: 1px solid var(--border);
-            border-radius: 5px; font-size: 15px; font-family: monospace;
-            box-sizing: border-box;
-        }
-        input[type="text"]:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(0,123,255,0.1); }
+        /* 输入组微调 */
+        .input-group { margin-bottom: 15px; }
+        .input-label { display: block; margin-bottom: 6px; font-weight: 600; color: #555; font-size: 13px;}
 
-        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
-        button {
-            flex: 1; min-width: 80px; padding: 10px; border: none; border-radius: 5px;
-            background: var(--primary); color: white; cursor: pointer; font-weight: 500;
-            transition: 0.2s;
-        }
-        button:hover { background: var(--primary-hover); transform: translateY(-1px); }
-        .btn-danger { background: var(--danger); }
-        .btn-danger:hover { background: #c82333; }
-        .btn-ghost { background: transparent; color: #666; border: 1px solid #ddd; }
-        .btn-ghost:hover { background: #eee; color: #333; }
+        /* 按钮行 (Flex布局保持不变) */
+        .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 25px; }
         
-        /* 搜索按钮 */
-        .btn-search-online {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            color: white; font-weight: bold;
+        /* 让 PureUI 的按钮在 flex 容器中自动伸缩 (复原你之前的按钮逻辑) */
+        .btn-row .p-btn { 
+            flex: 1;                /* 让按钮平分宽度 */
+            min-width: fit-content; /* 宽度自适应内容，防止挤压 */
+            white-space: nowrap;    /* 【核心】禁止文字换行 */
+            height: 40px;           /* 【核心】强制统一高度 */
+            padding: 0 10px;        /* 调整内边距 */
+            font-size: 13px;        /* 稍微调小一点字体 */
         }
 
         /* 结果区域 */
         .output { margin-top: 25px; border-top: 1px solid #eee; padding-top: 20px; }
-        .msg { padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 14px; display: none;}
-        .msg.success { background: #d4edda; color: #155724; display: block; }
-        .msg.error { background: #f8d7da; color: #721c24; display: block; }
+        
+        /* 消息框美化 */
+        #msgBox { 
+            padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 14px; display: none; 
+            text-align: center;
+        }
+        #msgBox.success { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+        #msgBox.error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
 
-        /* 表格样式 */
+        /* === 列表/表格样式 (保持原版) === */
         table { width: 100%; border-collapse: collapse; font-size: 14px; }
         th { text-align: left; padding: 10px; background: #f1f3f5; color: #495057; }
-        td { padding: 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
-        .tag-part { display: inline-block; background: #e9ecef; color: #495057; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 4px; }
-        .key-final { font-weight: bold; color: #2c3e50; }
-        .btn-read { background-color: #6f42c1; color: white; padding: 4px 10px; text-decoration: none; border-radius: 4px; font-size: 12px; margin-right: 5px; display: inline-block; }
-        .copy-btn { background: none; border: 1px solid #ddd; color: #666; padding: 2px 8px; font-size: 11px; border-radius: 3px; cursor: pointer; margin-left: 8px; }
+        td { padding: 12px 5px; border-bottom: 1px solid #eee; vertical-align: middle; }
+        
+        .key-final { font-weight: bold; color: #2c3e50; font-size: 15px;}
+        
+        /* 操作按钮组 */
+        .action-group { display: flex; gap: 5px; justify-content: flex-end; align-items: center; }
 
-        /* === 搜索模态框 === */
-        #searchModal {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;
+        /* === 标签筛选栏 === */
+        .filter-bar {
+            display: flex; gap: 8px; overflow-x: auto; padding: 5px 0 15px 0;
+            scrollbar-width: none;
         }
-        .search-box {
-            background: white; width: 90%; max-width: 600px; padding: 20px; border-radius: 10px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 80vh; display: flex; flex-direction: column;
-        }
-        .search-results { overflow-y: auto; margin-top: 15px; flex: 1; border-top: 1px solid #eee; }
-        .result-item {
-            padding: 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s;
-        }
-        .result-item:hover { background: #f8f9fa; }
-        .r-title { font-weight: bold; color: #007bff; font-size: 15px; }
-        .r-url { font-size: 12px; color: #999; margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-        .r-key { font-size: 12px; color: #28a745; margin-top: 2px; }
+        .filter-chip { cursor: pointer; user-select: none; transition: 0.2s; border: 1px solid #eee; }
+        .filter-chip:hover { opacity: 0.8; border-color: #ddd; }
+        .filter-chip.active { background: #4f46e5; color: white; border-color: #4f46e5; }
 
-        /* === 深度分析模态框 (Insight) === */
-        .modal-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.4); backdrop-filter: blur(5px); z-index: 2000;
-            justify-content: center; align-items: center;
-        }
-        .insight-card {
-            background: white; width: 90%; max-width: 700px; 
-            border-radius: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.15);
-            overflow: hidden; animation: popIn 0.3s ease-out;
-            display: flex; flex-direction: column;
-        }
-        @keyframes popIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        
-        .insight-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px 25px; color: white; display: flex; justify-content: space-between; align-items: center;
-        }
-        
-        .insight-header h2 { 
-            margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px;
-        }
-        
-        /* 修复后的关闭按钮样式 */
-        /* 修复后的关闭按钮样式 */
-        .close-btn { 
-            /* === 关键修复：重置全局 button 样式 === */
-            flex: none;        /* 禁止自动伸缩 */
-            min-width: auto;   /* 取消 80px 的最小宽度限制 */
-            background: rgba(255,255,255,0.2); 
-            border: none; 
-            color: white; 
-            
-            /* 强制固定宽高，现在 min-width 被取消了，这里才会生效 */
-            width: 32px; 
-            height: 32px; 
-            
-            border-radius: 50%; 
-            cursor: pointer; 
-            padding: 0; 
-            margin-left: 15px;
-            
-            /* 使用 Flex 完美居中符号 */
-            display: flex; 
-            align-items: center; 
-            justify-content: center;
-            
-            /* 字体设置 */
-            font-family: Arial, sans-serif; 
-            font-size: 20px; 
-            line-height: 1;
-            
-            transition: all 0.2s ease;
-        }
-        
-        .close-btn:hover { 
-            background: rgba(255,255,255,0.4); 
-            transform: rotate(90deg); 
-        }
-        
-        .close-btn:active { transform: scale(0.9); }
-        
-        .insight-body { padding: 30px; display: grid; gap: 25px; }
-        
-        /* 数据概览卡片 */
-        .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
-        .stat-box {
-            background: #f8f9fa; border-radius: 12px; padding: 15px; text-align: center;
-            border: 1px solid #eee; transition: transform 0.2s;
-        }
-        .stat-box:hover { transform: translateY(-3px); border-color: #dbe4ff; background: #f0f7ff; }
-        .stat-num { font-size: 24px; font-weight: 700; color: #2c3e50; margin-bottom: 5px; }
-        .stat-label { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+        /* === 网格书架模式 (保持原版) === */
+        .bookshelf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px; padding: 10px 0; }
+        .book-card { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); transition: transform 0.2s; cursor: pointer; display: flex; flex-direction: column; aspect-ratio: 2 / 3; border: 1px solid #eee; }
+        .book-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.1); border-color: #4f46e5; }
+        .book-cover { flex: 1; padding: 15px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; color: white; background: linear-gradient(135deg, #667eea, #764ba2); position: relative; }
+        .book-title-card { font-size: 16px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2); overflow: hidden; }
+        .book-info-row { padding: 8px; background: white; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #666; border-top: 1px solid #f0f0f0; }
 
-        /* 热力图 */
-        .heatmap-container { margin-top: 10px; }
-        .heatmap-title { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 10px; display: flex; justify-content: space-between;}
-        .heatmap-grid {
-            display: flex; gap: 4px; height: 60px; align-items: flex-end; justify-content: space-between;
-        }
-        .heat-bar {
-            flex: 1; background: #e9ecef; border-radius: 3px; position: relative;
-            transition: height 0.5s ease; min-height: 4px;
-        }
-        .heat-bar:hover::after {
-            content: attr(data-date) " : " attr(data-count) "章";
-            position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
-            background: #333; color: white; padding: 4px 8px; border-radius: 4px;
-            font-size: 10px; white-space: nowrap; pointer-events: none; margin-bottom: 5px; z-index: 10;
-        }
+        /* 拖拽上传样式 */
+        #value.drag-over { border-color: #10b981 !important; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
 
-        /* 关键词 */
-        .tags-cloud { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px; }
-        .tag-pill {
-            background: white; border: 1px solid #e0e0e0; color: #555;
-            padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
-        }
-        .tag-pill.top-1 { background: #fff0f6; border-color: #ffadd2; color: #c41d7f; }
-        .tag-pill.top-2 { background: #e6f7ff; border-color: #91d5ff; color: #096dd9; }
-        .tag-pill.top-3 { background: #f6ffed; border-color: #b7eb8f; color: #389e0d; }
-        /* === 视图切换按钮 === */
-        .view-toggle {
-            display: flex; justify-content: flex-end; margin-bottom: 15px;
-        }
-        .toggle-btn {
-            background: transparent; border: 1px solid #ddd; color: #666;
-            padding: 5px 10px; cursor: pointer; margin-left: -1px;
-            font-size: 14px; min-width: auto;
-        }
-        .toggle-btn.active {
-            background: #e9ecef; color: #333; font-weight: bold; border-color: #ccc;
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
-        }
-        .toggle-btn:first-child { border-radius: 4px 0 0 4px; }
-        .toggle-btn:last-child { border-radius: 0 4px 4px 0; }
+        /* 模态框修正 (适配 PureUI) */
+        .modal-body-custom { padding: 20px; }
+        .search-results { max-height: 300px; overflow-y: auto; margin-top: 10px; border: 1px solid #eee; border-radius: 6px; }
+        .result-item { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; transition: 0.2s; }
+        .result-item:hover { background: #f9fafb; }
 
-        /* === 网格书架模式 === */
-        .bookshelf-grid {
-            display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 20px; padding: 10px 0;
-        }
-        
-        .book-card {
-            background: white; border-radius: 8px; overflow: hidden;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
-            transition: transform 0.2s, box-shadow 0.2s;
-            cursor: pointer; position: relative;
-            display: flex; flex-direction: column;
-            aspect-ratio: 2 / 3; /* 黄金比例书籍尺寸 */
-        }
-        .book-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.12);
-        }
-        
-        .book-cover {
-            flex: 1; padding: 15px;
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-            text-align: center; color: white;
-            background: linear-gradient(135deg, #667eea, #764ba2); /* 默认背景，会被JS覆盖 */
-            position: relative;
-        }
-        
-        /* 书脊效果 */
-        .book-cover::before {
-            content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-            background: rgba(255,255,255,0.2);
-            box-shadow: 1px 0 2px rgba(0,0,0,0.1);
-        }
-        
-        .book-title-card {
-            font-size: 16px; font-weight: bold; line-height: 1.4;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            word-break: break-all;
-            display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-        }
-        
-        .book-author-card {
-            font-size: 10px; margin-top: 8px; opacity: 0.8;
-            font-family: monospace;
-        }
-
-        .book-info-row {
-            padding: 10px; background: white; border-top: 1px solid #f0f0f0;
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .book-key-tag {
-            font-size: 10px; background: #f0f0f0; color: #666; padding: 2px 6px; border-radius: 4px;
-        }
-        .book-action-icon {
-            font-size: 14px; color: #999; text-decoration: none;
-        }
-        .book-action-icon:hover { color: var(--primary); }/* === 拖拽上传样式 === */
-        /* 当文件拖入 Value 输入框时的状态 */
-        #value.drag-over {
-            border-color: #28a745 !important; /* 变成绿色 */
-            background-color: #f0fff4;        /* 极淡的绿色背景 */
-            box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.2);
-            color: #28a745;
-            font-weight: bold;
-        }
+        /* 洞察页面 Grid */
+        .stats-grid-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #eee; }
+        .stat-num { font-size: 24px; font-weight: bold; color: #4f46e5; }
+        .heatmap-grid { display: flex; gap: 2px; height: 60px; align-items: flex-end; margin-top: 10px; }
+        .heat-bar { flex: 1; background: #e5e7eb; border-radius: 2px; transition: height 0.5s; min-height: 2px; }
     </style>
 </head>
 <body>
+
+    <!-- 用户栏 -->
+    <div id="userBar">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <img id="userAvatar" src="" width="32" style="border-radius: 50%; background: #eee;">
+            <span id="userName" style="font-weight: 600;">Loading...</span>
+        </div>
+        <a href="/logout" class="p-btn p-btn-sm p-btn-danger" style="text-decoration: none;">🚪 登出</a>
+    </div>
+
     <div class="container">
         <h1>⚡ Smart NoteDB</h1>
         
+        <!-- 输入区域：使用 PureUI p-input -->
         <div class="input-group">
-            <label>Key (拼音缩写，支持 "/" 分类)</label>
-            <input type="text" id="key" placeholder="例如: frxxz (凡人修仙传)" onkeydown="handleEnter(event)">
+            <label class="input-label">Key (拼音缩写 / 分类)</label>
+            <input type="text" id="key" class="p-input" placeholder="例如: frxxz (凡人修仙传)" onkeydown="handleEnter(event)">
         </div>
         
         <div class="input-group">
-            <label>Value (链接 或 拖入EPUB文件)</label> <!-- 修改 Label -->
-            <!-- 修改 Placeholder -->
-            <input type="text" id="value" placeholder="https://... 或将 .epub 拖入此处" onkeydown="handleEnter(event)">
+            <label class="input-label">Value (链接 / 拖入EPUB)</label>
+            <input type="text" id="value" class="p-input" placeholder="https://... 或将 .epub 拖入此处" onkeydown="handleEnter(event)">
         </div>
 
+        <!-- 按钮行：使用 PureUI p-btn -->
         <div class="btn-row">
-            <button onclick="doAction('insert')">Save / Insert</button>
-            <button onclick="doAction('find')" style="background-color: #17a2b8;">Search DB</button>
+            <button class="p-btn p-btn-primary" onclick="doAction('insert')">💾 保存</button>
+            <button class="p-btn p-btn-primary" style="background:#0ea5e9; border-color:#0ea5e9;" onclick="doAction('find')">🔍 查库</button>
             
-            <!-- 新增搜索按钮 -->
-            <button onclick="openSearchModal()" class="btn-search-online">🔍 搜小说</button>
+            <button class="p-btn p-btn-outline" onclick="openSearchModal()">🌐 搜书</button>
             
-            <button class="btn-ghost" onclick="doAction('list')">List All</button>
-            <button class="btn-ghost" onclick="doRollback()" style="color: #e67e22; border-color: #e67e22;">⏪ Undo</button>
-            <!-- <button class="btn-ghost" onclick="clearInputs()">Clear</button> -->
-            <!-- 原有的按钮... -->
-            <button onclick="openInsight()" style="background: linear-gradient(45deg, #11998e, #38ef7d);">📊 阅读洞察</button>
-            <button class="btn-danger" onclick="doAction('remove')">Remove</button>
+            <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button>
+            <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button>
+            
+            <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
+            
+            <button class="p-btn p-btn-danger" onclick="doAction('remove')">🗑️ 删除</button>
         </div>
 
         <div class="output">
-            <!-- 视图切换器 -->
-            <div class="view-toggle">
-                <button class="toggle-btn active" onclick="switchView('list')" title="列表视图">☰ List</button>
-                <button class="toggle-btn" onclick="switchView('grid')" title="网格书架">☷ Grid</button>
+            <!-- 标签栏 -->
+            <div class="filter-bar" id="filterBar">
+                <span class="p-tag filter-chip active" onclick="filterByTag('all')">全部</span>
             </div>
 
-            <div id="msgBox" class="msg"></div>
-            <!-- 这里容器不变，内容由JS决定渲染什么 -->
+            <!-- 视图切换 (保留简单文本按钮，或者用 p-btn-sm) -->
+            <div style="text-align: right; margin-bottom: 10px;">
+                <button class="p-btn p-btn-sm toggle-btn active" onclick="switchView('list')">☰ 列表</button>
+                <button class="p-btn p-btn-sm toggle-btn" onclick="switchView('grid')">☷ 网格</button>
+            </div>
+
+            <div id="msgBox"></div>
             <div id="tableContainer"></div>
         </div>
     </div>
 
-    <!-- 搜索模态框 -->
-    <div id="searchModal">
-        <div class="search-box">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                <h3 style="margin:0;">全网搜书</h3>
-                <button onclick="closeSearchModal()" style="background:none; color:#999; width:auto; padding:0; font-size:20px;">×</button>
+    <!-- === 模态框: 搜索 (使用 PureUI Modal 结构) === -->
+    <div id="searchModal" class="p-modal">
+        <div class="p-modal-content">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+                <h3 style="margin:0">全网搜书</h3>
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('searchModal')">✕</button>
             </div>
-            <div style="display:flex; gap:10px;">
-                <input type="text" id="onlineSearchInput" placeholder="输入小说名，如：凡人修仙传" onkeydown="if(event.key==='Enter') doOnlineSearch()">
-                <button onclick="doOnlineSearch()" style="flex:0 0 80px;">搜索</button>
+            <div style="display:flex; gap:10px; margin-bottom:10px;">
+                <input type="text" id="onlineSearchInput" class="p-input" placeholder="输入书名..." onkeydown="if(event.key==='Enter') doOnlineSearch()">
+                <button class="p-btn p-btn-primary" onclick="doOnlineSearch()">搜索</button>
             </div>
-            <div class="search-results" id="searchResults">
-                <div style="text-align:center; padding:20px; color:#999;">请输入书名搜索...</div>
-            </div>
-        </div>
-    </div>
-    <!-- 深度分析模态框 -->
-    <div id="insightModal" class="modal-overlay">
-        <div class="insight-card">
-            <div class="insight-header">
-                <h2>Reading Insights</h2>
-                <button class="close-btn" onclick="closeInsight()">×</button>
-            </div>
-            <div class="insight-body">
-                <!-- 1. 核心指标 -->
-                <div class="stats-row">
-                    <div class="stat-box">
-                        <div class="stat-num" id="st-books">-</div>
-                        <div class="stat-label">在读书籍</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-num" id="st-words">-</div>
-                        <div class="stat-label">累计字数(万)</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-num" id="st-days">-</div>
-                        <div class="stat-label">缓存章节</div>
-                    </div>
-                </div>
-    
-                <!-- 2. 活跃度热力图 -->
-                <div class="heatmap-container">
-                    <div class="heatmap-title">
-                        <span>近30天阅读活跃度</span>
-                        <span style="font-size:12px; color:#999; font-weight:400">基于本地缓存数据</span>
-                    </div>
-                    <div class="heatmap-grid" id="heatmapGrid">
-                        <!-- JS 生成柱状图 -->
-                    </div>
-                </div>
-    
-                <!-- 3. 阅读偏好 -->
-                <div style="text-align: center; margin-top: 10px;">
-                    <div class="heatmap-title" style="justify-content: center;">阅读口味关键词</div>
-                    <div class="tags-cloud" id="tagsCloud">
-                        <!-- JS 生成 -->
-                    </div>
-                </div>
+            <div id="searchResults" class="search-results">
+                <div style="padding:10px; text-align:center; color:#999;">请输入书名...</div>
             </div>
         </div>
     </div>
+
+    <!-- === 模态框: 洞察 (Tab页) === -->
+    <div id="insightModal" class="p-modal">
+        <div class="p-modal-content" style="max-width: 600px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+                <h3 style="margin:0">📊 阅读洞察</h3>
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('insightModal')">✕</button>
+            </div>
+            
+            <!-- Tabs -->
+            <div style="display:flex; justify-content:center; gap:10px; margin-bottom:20px;">
+                <button class="p-tag insight-tab active" onclick="switchInsightTab('24h', this)" style="cursor:pointer; border:1px solid #eee;">今日</button>
+                <button class="p-tag insight-tab" onclick="switchInsightTab('7d', this)" style="cursor:pointer; border:1px solid #eee;">7天</button>
+                <button class="p-tag insight-tab" onclick="switchInsightTab('all', this)" style="cursor:pointer; border:1px solid #eee;">全部</button>
+            </div>
+
+            <!-- 数据展示 -->
+            <div class="stats-grid-4">
+                <div class="stat-card"><div class="stat-num" id="s-time">0</div><div style="font-size:12px; color:#888">时长(分)</div></div>
+                <div class="stat-card"><div class="stat-num" id="s-words">0</div><div style="font-size:12px; color:#888">字数</div></div>
+                <div class="stat-card"><div class="stat-num" id="s-chapters">0</div><div style="font-size:12px; color:#888">章节</div></div>
+                <div class="stat-card"><div class="stat-num" id="s-books">0</div><div style="font-size:12px; color:#888">书籍</div></div>
+            </div>
+
+            <!-- 图表 -->
+            <div style="margin-bottom:15px;">
+                <div style="font-size:12px; color:#888; margin-bottom:5px;">活跃度热力图</div>
+                <div class="heatmap-grid" id="heatmapGrid"></div>
+            </div>
+            
+            <div style="height:150px; position:relative;">
+                <canvas id="trendChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- === 模态框: 标签编辑 === -->
+    <div id="tagModal" class="p-modal">
+        <div class="p-modal-content" style="width: 300px;">
+            <h3 style="margin-top:0">🏷️ 编辑标签</h3>
+            <input type="text" id="tagEditInput" class="p-input" style="margin:15px 0;">
+            <input type="hidden" id="tagEditKey">
+            <div style="text-align:right; gap:10px; display:flex; justify-content:flex-end;">
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('tagModal')">取消</button>
+                <button class="p-btn p-btn-sm p-btn-primary" onclick="saveTags()">保存</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const API_URL = 'http://127.0.0.1:5000';
-        let currentView = 'list'; // 默认视图
-        let currentData = {};     // 保存当前数据，方便切换视图时不用重新请求
+        let currentView = 'list';
+        let currentData = {};
+        let globalTags = {}; 
+        let activeFilter = 'all';
+        let insightData = null;
+        let chartInstance = null;
 
-        // 根据字符串生成固定的柔和颜色
+        // 辅助: 颜色生成
         function stringToColor(str) {
-            let hash = 0;
-            for (let i = 0; i < str.length; i++) {
-                hash = str.charCodeAt(i) + ((hash << 5) - hash);
-            }
-            // 使用 HSL 颜色空间，确保颜色好看 (饱和度 60-80%, 亮度 40-60%)
-            const h = Math.abs(hash) % 360;
-            const s = 60 + (Math.abs(hash) % 20); 
-            const l = 40 + (Math.abs(hash) % 20);
-            return `hsl(${h}, ${s}%, ${l}%)`;
+            let hash = 0; for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            return `hsl(${Math.abs(hash) % 360}, ${60 + (Math.abs(hash) % 20)}%, ${40 + (Math.abs(hash) % 20)}%)`;
         }
 
-        function switchView(view) {
-            currentView = view;
-            // 更新按钮状态
-            document.querySelectorAll('.toggle-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.innerText.toLowerCase().includes(view));
-            });
-            // 重新渲染
-            if (currentData) renderTable(currentData);
+        // 显示消息 (兼容 PureUI Toast)
+        function showMsg(text, type='info') {
+            const box = document.getElementById('msgBox');
+            box.innerText = text;
+            box.className = type === 'error' ? 'error' : 'success';
+            box.style.display = 'block';
+            setTimeout(() => box.style.display = 'none', 3000);
         }
+
+        // 初始化
+        window.onload = function() {
+            // 用户
+            fetch('/api/me').then(r=>r.json()).then(user => {
+                if(user.username) {
+                    document.getElementById('userName').innerText = user.username;
+                    if(user.avatar) document.getElementById('userAvatar').src = user.avatar;
+                }
+            });
+
+            // 数据
+            fetch('/api/last_read').then(r=>r.json()).then(async d => {
+                if(d.key) {
+                    document.getElementById('key').value = d.key;
+                    try {
+                        const vRes = await fetch('/api/get_value', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key:d.key})});
+                        const vData = await vRes.json();
+                        if(vData.status==='success') document.getElementById('value').value = vData.value;
+                    } catch(e){}
+                    showMsg(`☁️ 同步到: ${d.key}`, 'success');
+                    doAction('find').then(fetchTags);
+                } else { doAction('list').then(fetchTags); }
+            }).catch(() => doAction('list').then(fetchTags));
+
+            // 拖拽
+            const vInput = document.getElementById('value');
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(e => vInput.addEventListener(e, (ev)=>{ev.preventDefault();ev.stopPropagation()}, false));
+            vInput.addEventListener('dragenter', ()=>vInput.classList.add('drag-over'));
+            vInput.addEventListener('dragover', ()=>vInput.classList.add('drag-over'));
+            vInput.addEventListener('dragleave', ()=>vInput.classList.remove('drag-over'));
+            vInput.addEventListener('drop', handleDrop);
+        };
+
         function handleEnter(e) {
             if (e.key !== 'Enter') return;
-            if (e.target.id === 'value') doAction('insert');
-            else if (e.target.id === 'key') doAction('find');
+            if (e.target.id === 'value') doAction('insert'); else if (e.target.id === 'key') doAction('find');
         }
 
-async function doAction(action) {
-    const key = document.getElementById('key').value.trim();
-    const value = document.getElementById('value').value.trim();
-    
-    if (action !== 'list' && action !== 'find' && !key) return showMsg('Please enter a Key', 'error');
+        // 核心操作
+        async function doAction(action) {
+            const key = document.getElementById('key').value.trim();
+            const value = document.getElementById('value').value.trim();
+            if (action !== 'list' && action !== 'find' && !key) return showMsg('请输入 Key', 'error');
 
-    try {
-        const res = await fetch(`${API_URL}/${action}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key, value })
-        });
-        const result = await res.json();
-        
-        showMsg(result.message || action + ' done', result.status);
+            const btn = document.activeElement; if(btn && btn.tagName === 'BUTTON') btn.classList.add('loading');
 
-        // === 逻辑修改点 ===
-        
-        if (['insert', 'update', 'remove', 'rollback'].includes(action)) {
-            if(result.status === 'success') {
-                // 1. 如果是 保存(Insert) 或 更新(Update)
-                //    直接调用 find，展示刚才操作的那条记录
-                if (action === 'insert' || action === 'update') {
-                    doAction('find'); 
-                } 
-                // 2. 如果是 删除(Remove) 或 回滚(Rollback)
-                //    还是刷新全列表比较直观
-                else {
-                    doAction('list');
+            try {
+                const res = await fetch(`${API_URL}/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) });
+                const result = await res.json();
+                
+                if (['insert', 'update', 'remove', 'rollback'].includes(action)) {
+                    if(result.status === 'success') {
+                        showMsg(action + ' 成功', 'success');
+                        if (action === 'insert' || action === 'update') doAction('find'); else doAction('list');
+                    } else showMsg(result.message || '操作失败', 'error');
+                } else if (result.data) {
+                    renderTable(result.data);
+                    if(action === 'find' && Object.keys(result.data).length === 0) showMsg("未找到相关记录");
                 }
-            }
+            } catch (err) { showMsg('网络错误', 'error'); } 
+            finally { if(btn && btn.tagName === 'BUTTON') btn.classList.remove('loading'); }
         }
-        
-        else if ((action === 'list' || action === 'find') && result.data) {
-            renderTable(result.data);
-        }
-
-    } catch (err) {
-        console.error(err);
-        showMsg('Connection Error', 'error');
-    }
-}
 
         async function doRollback() {
             if(!confirm("确定回退到上一步吗？")) return;
             const res = await fetch(`${API_URL}/rollback`, { method: 'POST' });
             const result = await res.json();
-            showMsg(result.message, result.status);
-            if(result.status === 'success') doAction('list');
+            if(result.status === 'success') { showMsg('已回退', 'success'); doAction('list'); }
+            else showMsg(result.message, 'error');
         }
 
-        // === 搜索功能相关 ===
-        function openSearchModal() {
-            document.getElementById('searchModal').style.display = 'flex';
-            document.getElementById('onlineSearchInput').focus();
-        }
-        function closeSearchModal() {
-            document.getElementById('searchModal').style.display = 'none';
-        }
-
-        async function doOnlineSearch() {
-            const keyword = document.getElementById('onlineSearchInput').value.trim();
-            if (!keyword) return;
-            
-            const resultsDiv = document.getElementById('searchResults');
-            resultsDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">🔍 正在搜索 Bing...</div>';
-
-            try {
-                const res = await fetch(`${API_URL}/api/search_novel`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ keyword })
-                });
-                const result = await res.json();
-                
-                if (result.data && result.data.length > 0) {
-                    let html = '';
-                    result.data.forEach(item => {
-                        html += `
-                            <div class="result-item" onclick="selectResult('${item.suggested_key}', '${item.url}')">
-                                <div class="r-title">${item.title}</div>
-                                <div class="r-url">${item.url}</div>
-                                <div class="r-key">建议 Key: <b>${item.suggested_key}</b></div>
-                            </div>
-                        `;
-                    });
-                    resultsDiv.innerHTML = html;
-                } else {
-                    resultsDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">未找到相关结果，请换个词试试。</div>';
-                }
-            } catch (e) {
-                resultsDiv.innerHTML = '<div style="text-align:center; padding:20px; color:red;">搜索失败，请检查网络。</div>';
+        // 标签系统
+        async function fetchTags() {
+            const res = await fetch(`${API_URL}/api/tags/list`);
+            const json = await res.json();
+            if (json.status === 'success') {
+                globalTags = json.data;
+                renderFilterBar();
+                if (currentData && Object.keys(currentData).length > 0) renderTable(currentData);
             }
         }
 
-        function selectResult(key, url) {
-            // 自动填入主界面
-            document.getElementById('key').value = key;
-            document.getElementById('value').value = url;
-            closeSearchModal();
-            showMsg(`✨ 已自动填入: ${key}`, 'success');
-        }
-
-        // === 通用函数 ===
-        function showMsg(text, type) {
-            const box = document.getElementById('msgBox');
-            box.innerText = text;
-            box.className = `msg ${type}`;
-        }
-
-        function clearInputs() {
-            document.getElementById('key').value = '';
-            document.getElementById('value').value = '';
-            document.getElementById('tableContainer').innerHTML = '';
-            document.getElementById('msgBox').className = 'msg';
-        }
-
-        function copyText(text) {
-            navigator.clipboard.writeText(text).then(() => showMsg('Copied!', 'success'));
-        }
-
-        function renderTable(data) {
-            currentData = data; // 保存数据
-            const container = document.getElementById('tableContainer');
-            
-            if (Object.keys(data).length === 0) {
-                container.innerHTML = '<div style="text-align:center;color:#999;padding:40px;">书架空空如也</div>';
-                return;
-            }
-
-            // === 分流逻辑：如果是网格模式，去调用 renderGrid ===
-            if (currentView === 'grid') {
-                renderGrid(data, container);
-                return;
-            }
-
-            // === 列表模式渲染 ===
-            let html = '<table><thead><tr><th width="30%">Key / Tags</th><th>Value & Actions</th></tr></thead><tbody>';
-            
-            Object.keys(data).sort().forEach(k => {
-                const v = data[k];
-
-                // --- 1. 找回丢失的 keyHtml 生成逻辑 ---
-                const parts = k.split('/');
-                let keyHtml = '';
-                parts.forEach((part, index) => {
-                    if (index === parts.length - 1) keyHtml += `<span class="key-final">${part}</span>`;
-                    else keyHtml += `<span class="tag-part">${part}</span>`;
-                });
-
-                // --- 2. 判断链接类型 ---
-                const isLink = v.startsWith('http') || v.startsWith('epub:');
-                
-                // --- 3. 生成 Value 的显示 HTML ---
-                let valHtml;
-                if (v.startsWith('http')) {
-                    valHtml = `<a href="${v}" target="_blank" style="color:#999;font-size:12px;margin-right:10px;">[源] ${v.substring(0, 30)}...</a>`;
-                } else if (v.startsWith('epub:')) {
-                    valHtml = `<span style="color:#28a745;font-size:12px;margin-right:10px;font-weight:bold;">[📦 本地 EPUB]</span>`;
-                } else {
-                    valHtml = `<span style="color:#333">${v}</span>`;
-                }
-
-                // --- 4. 生成操作按钮 ---
-                let actionHtml = isLink ? `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="btn-read" target="_blank">📖 纯净阅读</a>` : '';
-                
-                html += `<tr><td>${keyHtml}</td><td style="display:flex; justify-content:space-between;"><div>${valHtml}</div><div>${actionHtml}<button class="copy-btn" onclick="copyText('${v}')">Copy</button></div></td></tr>`;
+        function renderFilterBar() {
+            const bar = document.getElementById('filterBar');
+            const allUniqueTags = new Set();
+            Object.values(globalTags).forEach(tags => tags.forEach(t => allUniqueTags.add(t)));
+            let html = `<span class="p-tag filter-chip ${activeFilter === 'all' ? 'active' : ''}" onclick="filterByTag('all')">全部</span>`;
+            Array.from(allUniqueTags).sort().forEach(tag => {
+                const isActive = activeFilter === tag ? 'active' : '';
+                html += `<span class="p-tag filter-chip ${isActive}" onclick="filterByTag('${tag}')">${tag}</span>`;
             });
-            html += '</tbody></table>';
+            bar.innerHTML = html;
+        }
+
+        function filterByTag(tag) { activeFilter = tag; renderFilterBar(); renderTable(currentData); }
+
+        function switchView(view) {
+            currentView = view;
+            document.querySelectorAll('.toggle-btn').forEach(btn => {
+                if(btn.innerText.includes(view === 'list' ? '列表' : '网格')) btn.classList.add('active');
+                else btn.classList.remove('active');
+            });
+            if (currentData) renderTable(currentData);
+        }
+
+        // 列表/网格渲染
+        function renderTable(data) {
+            currentData = data;
+            const container = document.getElementById('tableContainer');
+            let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@'));
+            if (activeFilter !== 'all') filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
+            
+            if (filteredKeys.length === 0) { container.innerHTML = '<div style="text-align:center;padding:40px;color:#999">空空如也</div>'; return; }
+            filteredKeys.sort();
+
+            if (currentView === 'grid') return renderGrid(data, container, filteredKeys);
+
+            let html = '<table>';
+            filteredKeys.forEach(k => {
+                const v = data[k];
+                const tags = globalTags[k] || [];
+                const parts = k.split('/');
+                const displayName = parts[parts.length-1];
+                const isLink = v.startsWith('http') || v.startsWith('epub:');
+                const isEpub = v.startsWith('epub:');
+
+                let tagsHtml = tags.map(t => `<span class="p-tag" style="font-size:10px; margin-right:4px;">${t}</span>`).join('');
+                let linkHtml = isEpub ? `<span style="color:var(--p-success); font-size:12px;">📦 本地</span>` : (isLink ? `<a href="${v}" target="_blank" style="color:#999; font-size:12px;">🔗 链接</a>` : `<span style="color:#333;">${v}</span>`);
+                
+                let btns = `
+                    <button class="p-btn p-btn-sm" style="padding:2px 6px;" onclick="PureUI.copy('${v}')" title="复制">📋</button>
+                    <button class="p-btn p-btn-sm" style="padding:2px 6px;" onclick="openTagModal('${k}')" title="标签">🏷️</button>
+                    ${isLink ? `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary" style="text-decoration:none;" target="_blank">阅读</a>` : ''}
+                `;
+
+                html += `<tr>
+                    <td>
+                        <div class="key-final">${displayName}</div>
+                        <div style="margin-top:4px;">${tagsHtml}</div>
+                    </td>
+                    <td style="text-align:right;">
+                        <div style="margin-bottom:4px;">${linkHtml}</div>
+                        <div class="action-group">${btns}</div>
+                    </td>
+                </tr>`;
+            });
+            html += '</table>';
             container.innerHTML = html;
         }
 
-        // === 网格渲染函数 (完整版) ===
-        function renderGrid(data, container) {
+        function renderGrid(data, container, keys) {
             let html = '<div class="bookshelf-grid">';
-            
-            Object.keys(data).sort().forEach(k => {
+            keys.forEach(k => {
                 const v = data[k];
-                // 从 Key 中提取书名 (取最后一个斜杠后的部分)
                 const parts = k.split('/');
-                const titleKey = parts[parts.length - 1]; 
-                
-                // 自动生成背景色
-                const bgStyle = `background: linear-gradient(135deg, ${stringToColor(titleKey)}, ${stringToColor(titleKey + 'dark')});`;
-                
-                // 显示名称
-                const displayName = titleKey.toUpperCase(); 
-
+                const title = parts[parts.length - 1];
+                const bg = stringToColor(title);
                 const isLink = v.startsWith('http') || v.startsWith('epub:');
+                const clickAction = isLink ? `window.open('/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}', '_blank')` : `PureUI.copy('${v}')`;
                 
-                // 点击操作
-                const clickAction = isLink ? `window.open('/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}', '_blank')` : `copyText('${v}')`;
-                
-                // 图标区分
-                let icon = '📋';
-                if (v.startsWith('http')) icon = '☁️'; 
-                else if (v.startsWith('epub:')) icon = '📦';
-
                 html += `
-                    <div class="book-card" onclick="${clickAction}">
-                        <div class="book-cover" style="${bgStyle}">
-                            <div class="book-title-card">${displayName}</div>
-                            <div class="book-author-card">EPUB / TXT</div>
-                        </div>
-                        <div class="book-info-row">
-                            <span class="book-key-tag">${titleKey}</span>
-                            <span class="book-action-icon">${icon}</span>
-                        </div>
+                <div class="book-card" onclick="${clickAction}">
+                    <div class="book-cover" style="background:${bg}">
+                        <div class="book-title-card">${title.toUpperCase()}</div>
                     </div>
-                `;
+                    <div class="book-info-row">
+                        <span>${title}</span>
+                        <button class="p-btn p-btn-sm" style="padding:2px;" onclick="event.stopPropagation(); openTagModal('${k}')">🏷️</button>
+                    </div>
+                </div>`;
             });
-            
             html += '</div>';
             container.innerHTML = html;
         }
-        
-// 页面加载时自动执行
-// 页面加载时自动执行
-window.onload = function() {
-    // 1. 从服务器获取最后阅读记录
-    fetch('/api/last_read')
-        .then(res => res.json())
-        .then(async data => { // 注意这里加了 async
-            const lastKey = data.key;
-            
-            if (lastKey) {
-                // 2. 填入 Key
-                document.getElementById('key').value = lastKey;
-                
-                // 3. [新增] 精确获取对应的 Value 并填入输入框
-                try {
-                    const valRes = await fetch('/api/get_value', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ key: lastKey })
-                    });
-                    const valData = await valRes.json();
-                    if (valData.status === 'success') {
-                        document.getElementById('value').value = valData.value;
-                    }
-                } catch(e) { console.error("获取Value失败", e); }
 
-                // 4. 触发查找，显示列表
-                doAction('find');
-                
-                const msgBox = document.getElementById('msgBox');
-                msgBox.innerText = `☁️ 云端同步成功，已定位到：${lastKey}`;
-                msgBox.className = 'msg success';
-                msgBox.style.display = 'block';
-            } else {
-                // 5. 如果是第一次来，就列出所有书
-                doAction('list');
-            }
-        })
-        .catch(err => {
-            console.error("无法连接服务器获取同步信息");
-            doAction('list');
-        });
-};
-// === 深度分析逻辑 ===
-        function openInsight() {
-            const modal = document.getElementById('insightModal');
-            modal.style.display = 'flex';
-            
-            // 加载动画
-            document.getElementById('st-books').innerText = '...';
-            document.getElementById('heatmapGrid').innerHTML = '<div style="width:100%;text-align:center;font-size:12px;color:#999;line-height:60px;">正在分析本地数据...</div>';
-
-            fetch(`${API_URL}/api/analyze_stats`)
-                .then(res => res.json())
-                .then(res => {
-                    if (res.status === 'success') {
-                        renderStats(res.stats);
-                    } else {
-                        alert("分析失败");
-                    }
-                });
+        // 标签/搜索/上传 功能
+        function openTagModal(key) {
+            document.getElementById('tagEditKey').value = key;
+            const tags = globalTags[key] || [];
+            document.getElementById('tagEditInput').value = tags.join(', ');
+            PureUI.modal.open('tagModal');
+            setTimeout(()=>document.getElementById('tagEditInput').focus(), 100);
         }
-
-        function closeInsight() {
-            document.getElementById('insightModal').style.display = 'none';
-        }
-
-        function renderStats(stats) {
-            // 1. 渲染数字
-            animateValue("st-books", 0, stats.books, 800);
-            animateValue("st-words", 0, Math.round(stats.words / 10000), 1000); // 转为万字
-            animateValue("st-days", 0, stats.chapters, 800);
-
-            // 2. 渲染热力图 (简单的柱状图)
-            const grid = document.getElementById('heatmapGrid');
-            grid.innerHTML = '';
-            
-            // 找出最大值用于归一化高度
-            const maxCount = Math.max(...stats.heatmap.map(d => d.count)) || 1;
-            
-            stats.heatmap.forEach(d => {
-                const bar = document.createElement('div');
-                bar.className = 'heat-bar';
-                // 计算高度百分比，最少 10%
-                const height = d.count > 0 ? (d.count / maxCount * 100) : 5; 
-                bar.style.height = `${height}%`;
-                
-                // 颜色深度：读得越多颜色越深
-                const opacity = d.count > 0 ? 0.3 + (d.count / maxCount * 0.7) : 0.1;
-                bar.style.backgroundColor = `rgba(102, 126, 234, ${opacity})`;
-                
-                bar.setAttribute('data-date', d.date.slice(5)); // 只显示 MM-DD
-                bar.setAttribute('data-count', d.count);
-                grid.appendChild(bar);
-            });
-
-            // 3. 渲染关键词
-            const cloud = document.getElementById('tagsCloud');
-            cloud.innerHTML = '';
-            if (stats.keywords.length === 0) {
-                cloud.innerHTML = '<span style="font-size:12px;color:#ccc">暂无足够数据分析</span>';
-            } else {
-                stats.keywords.forEach((item, index) => {
-                    const pill = document.createElement('span');
-                    pill.className = `tag-pill top-${index+1}`;
-                    pill.innerText = `${item[0]} (${item[1]})`;
-                    cloud.appendChild(pill);
-                });
-            }
-        }
-
-        // 数字滚动动画效果
-        function animateValue(id, start, end, duration) {
-            const obj = document.getElementById(id);
-            let startTimestamp = null;
-            const step = (timestamp) => {
-                if (!startTimestamp) startTimestamp = timestamp;
-                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-                obj.innerHTML = Math.floor(progress * (end - start) + start);
-                if (progress < 1) {
-                    window.requestAnimationFrame(step);
+        async function saveTags() {
+            const key = document.getElementById('tagEditKey').value;
+            const tags = document.getElementById('tagEditInput').value.split(/[,，]/).map(t=>t.trim()).filter(t=>t);
+            try {
+                const res = await fetch(`${API_URL}/api/tags/update`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, tags }) });
+                if ((await res.json()).status === 'success') {
+                    showMsg("🏷️ 标签已更新", "success");
+                    if (tags.length > 0) globalTags[key] = tags; else delete globalTags[key];
+                    renderFilterBar(); renderTable(currentData);
+                    PureUI.modal.close('tagModal');
                 }
-            };
-            window.requestAnimationFrame(step);
-        }
-        
-        // 点击遮罩关闭
-        document.getElementById('insightModal').addEventListener('click', function(e) {
-            if (e.target === this) closeInsight();
-        });
-        // window.onload = () => 
-        // === 拖拽上传逻辑 ===
-        const valueInput = document.getElementById('value');
-
-        // 1. 阻止浏览器默认行为 (否则浏览器会直接下载/打开文件)
-        ;['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            valueInput.addEventListener(eventName, preventDefaults, false);
-        });
-
-        function preventDefaults(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            } catch(e) { showMsg("保存失败", "error"); }
         }
 
-        // 2. 视觉反馈：拖进来变色，拖出去变回原样
-        valueInput.addEventListener('dragenter', () => valueInput.classList.add('drag-over'));
-        valueInput.addEventListener('dragover', () => valueInput.classList.add('drag-over'));
-        
-        valueInput.addEventListener('dragleave', () => valueInput.classList.remove('drag-over'));
-        
-        // 3. 核心：处理文件放置 (Drop)
-        valueInput.addEventListener('drop', handleDrop);
+        function openSearchModal() { PureUI.modal.open('searchModal'); setTimeout(()=>document.getElementById('onlineSearchInput').focus(), 100); }
+        async function doOnlineSearch() {
+            const k = document.getElementById('onlineSearchInput').value.trim();
+            if(!k) return;
+            const div = document.getElementById('searchResults');
+            div.innerHTML = '<div style="text-align:center; padding:10px;">🔍 搜索中...</div>';
+            const res = await fetch(`${API_URL}/api/search_novel`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({keyword:k})});
+            const d = await res.json();
+            if(d.data && d.data.length > 0) {
+                div.innerHTML = d.data.map(i => `
+                    <div class="result-item" onclick="selectResult('${i.suggested_key}', '${i.url}')">
+                        <div style="font-weight:bold; color:var(--p-primary)">${i.title}</div>
+                        <div style="font-size:12px; color:#888">${i.url}</div>
+                    </div>`).join('');
+            } else div.innerHTML = '<div style="text-align:center; padding:10px;">无结果</div>';
+        }
+        function selectResult(k, v) {
+            document.getElementById('key').value = k; document.getElementById('value').value = v;
+            PureUI.modal.close('searchModal'); showMsg(`已填入: ${k}`, 'success');
+        }
 
         async function handleDrop(e) {
-            // 移除高亮样式
-            valueInput.classList.remove('drag-over');
-            
-            const dt = e.dataTransfer;
-            const files = dt.files;
-
-            if (files.length > 0) {
-                const file = files[0];
-                // 简单的格式检查
-                if (file.name.toLowerCase().endsWith('.epub')) {
-                    // 开始上传
-                    uploadEpubFile(file);
-                } else {
-                    showMsg("⚠️ 仅支持 .epub 格式的书籍", "error");
-                }
-            }
+            document.getElementById('value').classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file && file.name.toLowerCase().endsWith('.epub')) {
+                const fd = new FormData(); fd.append('file', file);
+                const vIn = document.getElementById('value');
+                vIn.value = "上传中...";
+                const res = await fetch(`${API_URL}/api/upload_epub`, { method:'POST', body:fd });
+                const r = await res.json();
+                if(r.status==='success') { showMsg('上传成功', 'success'); document.getElementById('key').value=r.key; vIn.value=r.value; doAction('insert'); }
+                else { showMsg('失败: '+r.message, 'error'); vIn.value=''; }
+            } else showMsg("仅支持 .epub", "error");
         }
 
-        // 4. 执行上传 (复用之前的逻辑)
-        async function uploadEpubFile(file) {
-            const formData = new FormData();
-            formData.append('file', file);
-
-            // 界面反馈：Value 框里显示正在上传
-            valueInput.value = `⏳ 正在解析: ${file.name}...`;
-            valueInput.disabled = true; // 暂时禁用防止误触
-
-            try {
-                const res = await fetch(`${API_URL}/api/upload_epub`, {
-                    method: 'POST',
-                    body: formData
-                });
-                const result = await res.json();
-
-                if (result.status === 'success') {
-                    showMsg(`✅ 导入成功! Key: ${result.key}`, "success");
-                    
-                    // 自动填入结果
-                    document.getElementById('key').value = result.key;
-                    valueInput.value = result.value;
-                    
-                    // 自动保存并展示 (模拟点击 Save)
-                    doAction('insert'); 
-                } else {
-                    showMsg("❌ 上传失败: " + result.message, "error");
-                    valueInput.value = ''; // 失败清空
+        // 洞察 (图表 + Tab)
+        function openInsight() {
+            PureUI.modal.open('insightModal');
+            switchInsightTab('24h', document.querySelector('.insight-tab')); 
+            fetch(`${API_URL}/api/analyze_stats`).then(r=>r.json()).then(res => {
+                if (res.status === 'success') {
+                    insightData = res;
+                    renderHeatmap(res.summary.all.heatmap);
+                    renderChart(res.summary.trend);
+                    switchInsightTab('24h', document.querySelector('.insight-tab.active')); 
                 }
-            } catch (err) {
-                console.error(err);
-                showMsg("❌ 网络错误", "error");
-                valueInput.value = '';
-            } finally {
-                valueInput.disabled = false; // 恢复输入框
+            });
+        }
+        function switchInsightTab(p, btn) {
+            document.querySelectorAll('.insight-tab').forEach(b => b.classList.remove('active'));
+            if(btn) btn.classList.add('active');
+            if (insightData && insightData.summary[p]) {
+                const d = insightData.summary[p];
+                document.getElementById('s-time').innerText = d.time;
+                document.getElementById('s-words').innerText = d.words > 10000 ? (d.words/10000).toFixed(1) + '万' : d.words;
+                document.getElementById('s-chapters').innerText = d.chapters;
+                document.getElementById('s-books').innerText = d.books;
             }
+        }
+        function renderHeatmap(data) {
+            const g = document.getElementById('heatmapGrid'); g.innerHTML = '';
+            const max = Math.max(...data.map(d=>d.count)) || 1;
+            data.slice(-30).forEach(d => {
+                const b = document.createElement('div'); b.className = 'heat-bar';
+                b.style.height = (d.count>0 ? (d.count/max*100) : 5) + '%';
+                b.style.backgroundColor = `rgba(79, 70, 229, ${d.count>0?0.3+(d.count/max*0.7):0.1})`;
+                b.setAttribute('data-date', d.date.slice(5)); b.setAttribute('data-count', d.count+'m');
+                g.appendChild(b);
+            });
+        }
+        function renderChart(trend) {
+            if(chartInstance) chartInstance.destroy();
+            chartInstance = new Chart(document.getElementById('trendChart'), {
+                type: 'line',
+                data: {
+                    labels: trend.dates,
+                    datasets: [{
+                        label: '时长 (分钟)',
+                        data: trend.times,
+                        borderColor: '#4f46e5',
+                        backgroundColor: 'rgba(79, 70, 229, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: {legend:{display:false}}, scales:{x:{display:false}, y:{display:false}} }
+            });
         }
     </script>
 </body>

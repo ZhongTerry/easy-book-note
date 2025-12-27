@@ -5,13 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ article.title }} - PureRead</title>
     <style>
-        /* === 1. 基础变量 (舒适灰配色 + 动态字号) === */
+        /* === 1. 基础变量 === */
         :root {
-            --bg-color: #e6e6e6;       /* 背景灰 */
-            --text-color: #333;        /* 文字深灰 */
-            --container-bg: #f7f7f7;   /* 阅读卡片米白/浅灰 */
-            --accent: #667eea;         /* 强调色 */
-            --font-size: 18px;         /* [修复核心] 定义字号变量 */
+            --bg-color: #e6e6e6;       
+            --text-color: #333;        
+            --container-bg: #f7f7f7;   
+            --accent: #667eea;
+            --font-size: 18px;         
         }
 
         body {
@@ -32,17 +32,26 @@
             z-index: 100; transition: background-color 0.3s;
         }
 
-        .nav-title { font-weight: bold; font-size: 14px; color: #555; max-width: 40%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-        .nav-links { display: flex; align-items: center; gap: 8px; }
-        .nav-links a { color: #666; text-decoration: none; font-size: 14px; margin-right: 5px;}
+        .nav-title { font-weight: bold; font-size: 14px; color: #555; max-width: 30%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        .nav-links { display: flex; align-items: center; gap: 10px; }
+        .nav-links a { color: #666; text-decoration: none; font-size: 14px; margin-right: 5px; font-weight: 500;}
         .nav-links a:hover { color: var(--accent); }
 
-        .btn-icon {
-            background: rgba(0,0,0,0.05); border: 1px solid rgba(0,0,0,0.05); 
-            color: inherit; cursor: pointer; border-radius: 4px;
-            padding: 5px 10px; font-size: 13px; transition: 0.2s;
+        /* [修改] 按钮样式回归：带颜色和文字 */
+        .nav-btn {
+            display: flex; align-items: center; gap: 4px;
+            padding: 6px 12px; border: none; border-radius: 4px;
+            color: white; font-size: 12px; cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            text-decoration: none; font-weight: bold;
         }
-        .btn-icon:hover { background: rgba(0,0,0,0.1); }
+        .nav-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .nav-btn:active { transform: translateY(0); }
+
+        /* 各个按钮的专属色 */
+        .btn-refresh { background-color: #17a2b8; }  /* 蓝色刷新 */
+        .btn-save    { background-color: #28a745; }  /* 绿色保存 */
+        .btn-setting { background-color: #343a40; }  /* 深灰设置 */
 
         /* === 3. 阅读容器 === */
         .container {
@@ -58,13 +67,14 @@
             .container { padding: 20px; margin-top: 60px; margin-bottom: 20px; width: 95%; box-sizing: border-box; }
             h1 { font-size: 20px !important; }
             .nav-title { display: none; }
+            /* 手机上按钮文字隐藏，只留图标，防止挤压 */
+            .nav-btn span { display: none; }
         }
 
         h1 { text-align: center; margin-bottom: 40px; font-weight: 400; border-bottom: 1px solid #ddd; padding-bottom: 20px; }
         
         .content p {
             margin-bottom: 20px; text-align: justify;
-            /* [修复核心] 使用变量，不再写死 18px */
             font-size: var(--font-size); 
             color: var(--text-color);
         }
@@ -121,10 +131,20 @@
 <div class="navbar">
     <div class="nav-title">{% if db_key %}📚 {{ db_key }}{% else %}📖 预览{% endif %}</div>
     <div class="nav-links">
-        <a href="/">书架</a>
-        <button class="btn-icon" onclick="forceRefresh()" title="强制刷新">🔄</button>
-        <button class="btn-icon" onclick="syncProgress(false)" title="保存进度">💾</button>
-        <button class="btn-icon" onclick="toggleSettings()" title="设置">⚙️</button>
+        <a href="/">🏠 书架</a>
+        
+        <!-- [回归] 经典带颜色的按钮 -->
+        <button class="nav-btn btn-refresh" onclick="forceRefresh()" title="强制刷新">
+            🔄 <span>刷新</span>
+        </button>
+        
+        <button class="nav-btn btn-save" onclick="syncProgress(false)" title="保存进度">
+            💾 <span>保存</span>
+        </button>
+        
+        <button class="nav-btn btn-setting" onclick="toggleSettings()" title="设置">
+            ⚙️ <span>设置</span>
+        </button>
     </div>
 </div>
 
@@ -201,7 +221,6 @@
     }
     function applySettings() {
         const r = document.documentElement;
-        // 1. 应用主题
         if (settings.theme === 'light') {
             r.style.setProperty('--bg-color', '#e6e6e6');
             r.style.setProperty('--container-bg', '#f7f7f7');
@@ -223,8 +242,6 @@
             r.style.setProperty('--text-color', '#adb5bd');
             document.querySelectorAll('.page-btn').forEach(b => { b.style.backgroundColor='#333'; b.style.color='#adb5bd'; b.style.borderColor='#444'; });
         }
-        
-        // 2. [修复核心] 更新 CSS 变量，而不是直接改 div 样式
         r.style.setProperty('--font-size', settings.fontSize + 'px');
         document.getElementById('fontSizeDisplay').innerText = settings.fontSize;
     }
@@ -232,7 +249,6 @@
     function toggleSettings() { document.getElementById('settingsPanel').classList.toggle('active'); }
     function setTheme(t) { settings.theme = t; applySettings(); saveSettings(); }
     
-    // 字号调节
     function adjustFont(d) { 
         settings.fontSize += d; 
         if(settings.fontSize < 12) settings.fontSize = 12; 
@@ -241,7 +257,6 @@
         saveSettings(); 
     }
 
-    // 强制刷新
     function forceRefresh() {
         showToast("🔄 正在强制刷新...");
         let url = new URL(window.location.href);
@@ -249,7 +264,7 @@
         window.location.href = url.toString();
     }
 
-    // TTS 和同步逻辑
+    // TTS
     function toggleTTS() { isSpeaking ? stopTTS() : startTTS(); }
     function startTTS() {
         if (!synth) return showToast("不支持TTS");
@@ -270,6 +285,7 @@
     function adjustSpeed(v) { stopTTS(); settings.speed = v; document.getElementById('speedDisplay').innerText = v+"x"; startTTS(); }
     window.onbeforeunload = stopTTS;
 
+    // 同步
     function autoSyncProgress(s=true) {
         if (!dbKey) return; 
         fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) }).catch(e=>{});
@@ -301,6 +317,51 @@
         });
     };
     function showToast(m) { var x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(function(){ x.className=x.className.replace("show",""); },3000); }
+    // === 核心功能 4: 阅读计时器与防挂机 ===
+    let idleTime = 0;
+    let accumulatedWords = 0;
+    const HEARTBEAT_INTERVAL = 60000; // 60秒上报一次
+    const IDLE_LIMIT = 5; // 5分钟无操作算挂机
+
+    // 监听用户活动，重置挂机时间
+    function resetIdleTimer() { idleTime = 0; }
+    document.onmousemove = resetIdleTimer;
+    document.onkeypress = resetIdleTimer;
+    document.onscroll = resetIdleTimer;
+    document.onclick = resetIdleTimer;
+
+    // 每分钟执行一次
+    setInterval(function() {
+        idleTime++;
+        if (idleTime < IDLE_LIMIT) {
+            // 只有未挂机时，才发送心跳
+            sendHeartbeat();
+        } else {
+            console.log("💤 用户挂机中，暂停计时...");
+        }
+    }, HEARTBEAT_INTERVAL);
+
+function sendHeartbeat() {
+    fetch('/api/stats/heartbeat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        // [新增] 标记这是心跳，带上 key
+        body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) 
+    }).catch(e => {});
+}
+
+    // 页面加载时上报本章字数
+    function reportWordCount() {
+    const text = document.getElementById('articleContent').innerText;
+    const count = text.length; 
+    
+    fetch('/api/stats/heartbeat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        // [新增] 带上 key
+        body: JSON.stringify({ words: count, book_key: dbKey }) 
+    }).then(() => console.log(`📊 统计: ${count}字 +1章`));
+}
 </script>
 
 </body>

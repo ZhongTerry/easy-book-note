@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>阅读数据中心</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --primary: #667eea; --bg: #f4f6f9; --card-bg: #ffffff; --text: #333; --text-light: #888; }
+        body { font-family: -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        
+        .container { max-width: 1000px; margin: 0 auto; }
+        
+        /* 导航栏 (复用风格) */
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .h-title { font-size: 24px; font-weight: 700; color: #2c3e50; display: flex; align-items: center; gap: 10px; }
+        .back-btn { text-decoration: none; color: var(--text-light); font-weight: 500; padding: 8px 16px; background: white; border-radius: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); transition: 0.2s; }
+        .back-btn:hover { color: var(--primary); transform: translateY(-1px); }
+
+        /* 核心指标卡片 */
+        .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .card { background: var(--card-bg); padding: 25px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); text-align: center; }
+        .card-label { font-size: 13px; color: var(--text-light); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+        .card-num { font-size: 36px; font-weight: 700; color: #2c3e50; }
+        .card-unit { font-size: 14px; font-weight: normal; color: #aaa; margin-left: 4px; }
+
+        /* 图表区域 */
+        .chart-section { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 30px; }
+        @media (max-width: 768px) { .chart-section { grid-template-columns: 1fr; } }
+        
+        .chart-box { background: var(--card-bg); padding: 20px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); }
+        .box-title { font-size: 16px; font-weight: 600; margin-bottom: 20px; color: #444; }
+
+        /* 热力图样式 (复用之前的逻辑) */
+        .heatmap-box { background: var(--card-bg); padding: 25px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); }
+        .heatmap-grid { display: flex; gap: 4px; height: 100px; align-items: flex-end; margin-top: 15px; }
+        .heat-bar { flex: 1; background: #e9ecef; border-radius: 4px; position: relative; transition: height 0.5s ease; min-height: 4px; }
+        .heat-bar:hover { background: var(--primary) !important; opacity: 1 !important; }
+        .heat-bar:hover::after {
+            content: attr(data-date) " : " attr(data-count);
+            position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+            background: #333; color: white; padding: 5px 10px; border-radius: 4px;
+            font-size: 12px; white-space: nowrap; pointer-events: none; margin-bottom: 8px; z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <div class="h-title">📊 阅读数据中心</div>
+        <a href="/" class="back-btn">← 返回书架</a>
+    </div>
+
+    <!-- 1. 核心总览 (All Time) -->
+    <div class="grid-cards">
+        <div class="card">
+            <div class="card-label">总阅读时长</div>
+            <div class="card-num" id="totalTime">-</div>
+        </div>
+        <div class="card">
+            <div class="card-label">总阅读字数</div>
+            <div class="card-num" id="totalWords">-</div>
+        </div>
+        <div class="card">
+            <div class="card-label">累计章节</div>
+            <div class="card-num" id="totalChapters">-</div>
+        </div>
+        <div class="card">
+            <div class="card-label">藏书量</div>
+            <div class="card-num" id="totalBooks">-</div>
+        </div>
+    </div>
+
+    <!-- 2. 图表分析 -->
+    <div class="chart-section">
+        <!-- 左侧：30天趋势图 -->
+        <div class="chart-box">
+            <div class="box-title">📈 近30天阅读时长 (分钟)</div>
+            <canvas id="trendChart"></canvas>
+        </div>
+        <!-- 右侧：偏好分布 -->
+        <div class="chart-box">
+            <div class="box-title">🏷️ 阅读偏好 (Top 5)</div>
+            <canvas id="tagChart"></canvas>
+        </div>
+    </div>
+
+    <!-- 3. 年度热力图 -->
+    <div class="heatmap-box">
+        <div class="box-title">🔥 阅读活跃度 (Yearly Activity)</div>
+        <div class="heatmap-grid" id="heatmapGrid"></div>
+    </div>
+</div>
+
+<script>
+    // 初始化数据
+    fetch('/api/analyze_stats')
+        .then(r => r.json())
+        .then(res => {
+            if (res.status === 'success') {
+                renderDashboard(res);
+            }
+        });
+
+    function renderDashboard(data) {
+        const all = data.summary.all;
+        const trend = data.summary.trend;
+        const keywords = data.keywords;
+
+        // 1. 填充数字
+        document.getElementById('totalTime').innerHTML = (all.time / 60).toFixed(1) + '<span class="card-unit">小时</span>';
+        document.getElementById('totalWords').innerHTML = (all.words / 10000).toFixed(1) + '<span class="card-unit">万</span>';
+        document.getElementById('totalChapters').innerHTML = all.chapters;
+        document.getElementById('totalBooks').innerHTML = all.books;
+
+        // 2. 绘制折线图 (Trend)
+        new Chart(document.getElementById('trendChart'), {
+            type: 'line',
+            data: {
+                labels: trend.dates,
+                datasets: [{
+                    label: '阅读时长 (分钟)',
+                    data: trend.times,
+                    borderColor: '#667eea',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4, // 平滑曲线
+                    pointRadius: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: { y: { beginAtZero: true, grid: { color: '#f0f0f0' } }, x: { grid: { display: false } } }
+            }
+        });
+
+        // 3. 绘制雷达图/饼图 (Tags)
+        const tagLabels = keywords.map(k => k[0]);
+        const tagData = keywords.map(k => k[1]);
+        
+        new Chart(document.getElementById('tagChart'), {
+            type: 'doughnut',
+            data: {
+                labels: tagLabels,
+                datasets: [{
+                    data: tagData,
+                    backgroundColor: ['#667eea', '#764ba2', '#ff758c', '#48c6ef', '#ffc3a0'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                cutout: '70%',
+                plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }
+            }
+        });
+
+        // 4. 绘制热力图 (复用逻辑)
+        renderHeatmap(all.heatmap);
+    }
+
+    function renderHeatmap(heatmapData) {
+        const grid = document.getElementById('heatmapGrid');
+        const max = Math.max(...heatmapData.map(d=>d.count)) || 1;
+        
+        // 取最近60天的数据显示
+        heatmapData.slice(-60).forEach(d => {
+            const bar = document.createElement('div');
+            bar.className = 'heat-bar';
+            const h = d.count > 0 ? (d.count / max * 100) : 5;
+            bar.style.height = `${h}%`;
+            // 颜色计算
+            const opacity = d.count > 0 ? 0.3 + (d.count / max * 0.7) : 0.1;
+            bar.style.backgroundColor = `rgba(102, 126, 234, ${opacity})`;
+            
+            bar.setAttribute('data-date', d.date.slice(5));
+            bar.setAttribute('data-count', d.count + "分钟");
+            grid.appendChild(bar);
+        });
+    }
+</script>
+</body>
+</html>
