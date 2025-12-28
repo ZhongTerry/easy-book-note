@@ -26,7 +26,7 @@ import socket
 # --- 基础配置 ---
 app = Flask(__name__)
 # [关键修复] 设置固定的密钥，否则每次服务器重启都会导致所有用户掉线
-app.secret_key = os.environ.get('FLASK_SECRET_KEsdvfojsdhfisegfY', 'default-unsafe-key-change-it')
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-unsafe-key-change-it')
 app.permanent_session_lifetime = timedelta(days=30) 
 app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
 
@@ -44,8 +44,9 @@ for d in [USER_DATA_DIR, CACHE_DIR, LIB_DIR, DL_DIR]:
 # === 认证中心配置 ===
 CLIENT_ID = '5d0c0b8a21fec049a146' 
 CLIENT_SECRET = '8664201fad421f54fa6f5da92e76cb604ca70056'
-AUTH_SERVER = 'http://127.0.0.1:5124'
-REDIRECT_URI = 'http://127.0.0.1:5000/callback'
+# AUTH_SERVER = 'http://127.0.0.1:5124'
+AUTH_SERVER = os.environ.get('server', 'http://127.0.0.1:5124')
+REDIRECT_URI = os.environ.get('callback', 'http://127.0.0.1:5000/callback')
 
 # --- 登录装饰器 ---
 def login_required(f):
