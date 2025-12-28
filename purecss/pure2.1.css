@@ -13,6 +13,7 @@
     --p-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
     --p-radius: 8px;
     --p-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color-scheme: light;
 }
 
 [data-theme="dark"] {
@@ -55,7 +56,8 @@ ul, ol { list-style: none; padding: 0; margin: 0; }
 /* 表单 */
 .p-input-group { margin-bottom: 16px; }
 .p-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--p-text-muted); }
-.p-input, .p-select, .p-textarea { width: 100%; padding: 10px 12px; background: var(--p-surface); border: 1px solid var(--p-border); border-radius: 6px; color: var(--p-text-main); transition: 0.2s; font-size: 14px; }
+.p-input, .p-select, .p-textarea { width: 100%; padding: 10px 12px; background: var(--p-surface); border: 1px solid var(--p-border); border-radius: 6px; color: var(--p-text-main); transition: 0.2s; font-size: 14px;background-color: #ffffff !important; 
+    color: #333333 !important; }
 .p-input:focus { border-color: var(--p-primary); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1); }
 
 /* 实用组件 */
