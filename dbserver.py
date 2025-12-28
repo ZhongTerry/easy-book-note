@@ -29,14 +29,14 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-unsafe-key-change-it')
 app.permanent_session_lifetime = timedelta(days=30) 
 app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
-
+from dotenv import load_dotenv
 # 路径配置
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USER_DATA_DIR = os.path.join(BASE_DIR, "user_data") # 用户数据隔离目录
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 LIB_DIR = os.path.join(BASE_DIR, "library")
 DL_DIR = os.path.join(BASE_DIR, "downloads")
-
+load_dotenv()
 # 自动创建必要目录
 for d in [USER_DATA_DIR, CACHE_DIR, LIB_DIR, DL_DIR]:
     if not os.path.exists(d): os.makedirs(d)
@@ -45,8 +45,8 @@ for d in [USER_DATA_DIR, CACHE_DIR, LIB_DIR, DL_DIR]:
 CLIENT_ID = '5d0c0b8a21fec049a146' 
 CLIENT_SECRET = '8664201fad421f54fa6f5da92e76cb604ca70056'
 # AUTH_SERVER = 'http://127.0.0.1:5124'
-AUTH_SERVER = os.environ.get('server', 'https://auth.ztrztr.top')
-REDIRECT_URI = os.environ.get('callback', 'https://book.ztrztr.top/callback')
+AUTH_SERVER = os.environ.get('SERVER', 'https://auth.ztrztr.top')
+REDIRECT_URI = os.environ.get('CALLBACK', 'https://book.ztrztr.top/callback')
 
 # --- 登录装饰器 ---
 def login_required(f):
