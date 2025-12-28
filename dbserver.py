@@ -19,11 +19,14 @@ import ebooklib
 from ebooklib import epub
 from werkzeug.utils import secure_filename
 from functools import wraps
+from urllib.parse import urljoin, urlparse
+import sqlite3
+import socket
 
 # --- 基础配置 ---
 app = Flask(__name__)
 # [关键修复] 设置固定的密钥，否则每次服务器重启都会导致所有用户掉线
-app.secret_key = 'YOUR_FIXED_SECRET_KEY_HERE_CHANGE_THIS' 
+app.secret_key = os.environ.get('FLASK_SECRET_KEsdvfojsdhfisegfY', 'default-unsafe-key-change-it')
 app.permanent_session_lifetime = timedelta(days=30) 
 app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
 
@@ -55,6 +58,20 @@ def login_required(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
+def is_safe_url(url):
+    """防止 SSRF 攻击，禁止爬虫访问内网 IP"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'): return False
+        hostname = parsed.hostname
+        ip = socket.gethostbyname(hostname)
+        # 禁止 127.0.0.1, 192.168.x.x, 10.x.x.x 等内网段
+        if ip.startswith(('127.', '192.168.', '10.', '172.16.', '0.')): return False
+        return True
+    except:
+        return False
+
+# --- 重构后的 SQLite 数据库类 ---
 
 # --- 0. 缓存管理器 (保持不变) ---
 class CacheManager:
@@ -272,100 +289,74 @@ class EpubHandler:
         except Exception as e: return f"EPUB Error: {e}"
 
 # --- [重构核心] 2. 数据库逻辑 (多文件隔离 + 备份) ---
+# --- [重构核心] 2. 数据库逻辑 (SQLite 版) ---
 class IsolatedDB:
-    """
-    修改后的数据库类，不再使用全局的 mydatabase.db。
-    而是根据当前 Session 用户，动态读写 user_data/{username}.db
-    """
-    def _get_user_paths(self):
+    def _get_db_conn(self):
         username = session.get('user', {}).get('username', 'default_user')
-        db_file = os.path.join(USER_DATA_DIR, f"{username}.db")
-        backup_dir = os.path.join(USER_DATA_DIR, "backups")
-        if not os.path.exists(backup_dir): os.makedirs(backup_dir)
-        return username, db_file, backup_dir
-
-    def _load(self):
-        _, db_file, _ = self._get_user_paths()
-        data = {}
-        if os.path.exists(db_file):
-            try:
-                with open(db_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line: continue
-                        parts = line.split(':', 1)
-                        if len(parts) == 2: data[parts[0]] = parts[1]
-            except Exception as e: print(f"Load Error: {e}")
-        return data
-
-    def _save(self, data, create_backup=True):
-        username, db_file, backup_dir = self._get_user_paths()
+        # 确保目录存在
+        if not os.path.exists(USER_DATA_DIR): os.makedirs(USER_DATA_DIR)
+        # [关键] 必须使用 .sqlite 后缀，对应迁移脚本
+        db_path = os.path.join(USER_DATA_DIR, f"{username}.sqlite")
         
-        # 备份逻辑
-        if create_backup and os.path.exists(db_file):
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            bak_path = os.path.join(backup_dir, f"{username}_{ts}.bak")
-            shutil.copy2(db_file, bak_path)
-            # 清理旧备份 (保留10个)
-            backups = sorted(glob.glob(os.path.join(backup_dir, f"{username}_*.bak")))
-            if len(backups) > 10:
-                for b in backups[:-10]: os.remove(b)
-
-        # 写入新数据
-        try:
-            with open(db_file, 'w', encoding='utf-8') as f:
-                for key in sorted(data.keys()):
-                    f.write(f"{key}:{data[key]}\n")
-        except Exception as e: print(f"Save Error: {e}")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT)")
+        return conn
 
     def insert(self, key, value):
-        data = self._load()
-        data[key] = value
-        self._save(data)
-        return {"status": "success", "message": f"Saved: {key}", "data": {key: value}}
+        if not key: return {"status": "error", "message": "Key cannot be empty"}
+        try:
+            with self._get_db_conn() as conn:
+                conn.execute("INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)", (key, value))
+            return {"status": "success", "message": f"Saved: {key}", "data": {key: value}}
+        except Exception as e:
+            return {"status": "error", "message": f"Database error: {str(e)}"}
 
     def update(self, key, value):
-        data = self._load()
-        if key in data:
-            data[key] = value
-            self._save(data)
-            return {"status": "success"}
-        return {"status": "error"}
+        # 为了兼容前端逻辑，update 和 insert 在 KV 存储中通常是一样的
+        return self.insert(key, value)
 
     def remove(self, key):
-        data = self._load()
-        if key in data:
-            del data[key]
-            self._save(data)
-            return {"status": "success"}
-        return {"status": "error"}
+        if not key: return {"status": "error", "message": "Key cannot be empty"}
+        try:
+            with self._get_db_conn() as conn:
+                conn.execute("DELETE FROM kv_store WHERE key = ?", (key,))
+            return {"status": "success", "message": f"Removed: {key}"}
+        except Exception as e:
+            return {"status": "error", "message": f"Database error: {str(e)}"}
 
     def list_all(self):
-        data = self._load()
-        # 过滤掉系统内部key (如 @last_read)
-        user_data = {k: v for k, v in data.items() if not k.startswith('@')}
-        return {"status": "success", "data": user_data}
+        try:
+            with self._get_db_conn() as conn:
+                # 过滤掉系统内部key (如 @last_read)
+                cursor = conn.execute("SELECT key, value FROM kv_store WHERE key NOT LIKE '@%' ORDER BY key DESC")
+                data = {row[0]: row[1] for row in cursor.fetchall()}
+            return {"status": "success", "data": data}
+        except Exception as e:
+            return {"status": "error", "message": f"Database error: {str(e)}"}
 
     def find(self, term):
-        data = self._load()
-        res = {k:v for k,v in data.items() if term.lower() in k.lower() or term.lower() in v.lower()}
-        return {"status": "success", "data": res}
+        try:
+            with self._get_db_conn() as conn:
+                # 使用参数化查询防止 SQL 注入
+                like_term = f'%{term}%'
+                cursor = conn.execute("SELECT key, value FROM kv_store WHERE key LIKE ? OR value LIKE ?", (like_term, like_term))
+                data = {row[0]: row[1] for row in cursor.fetchall()}
+            return {"status": "success", "data": data}
+        except Exception as e:
+            return {"status": "error", "message": f"Database error: {str(e)}"}
 
     def get_val(self, key):
-        data = self._load()
-        return data.get(key)
+        try:
+            with self._get_db_conn() as conn:
+                cursor = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,))
+                row = cursor.fetchone()
+                return row[0] if row else None
+        except:
+            return None
 
     def rollback(self):
-        """撤销功能：恢复到上一个备份"""
-        username, db_file, backup_dir = self._get_user_paths()
-        backups = sorted(glob.glob(os.path.join(backup_dir, f"{username}_*.bak")), reverse=True)
-        if not backups: return {"status": "error", "message": "无备份可恢复"}
-        
-        latest = backups[0]
-        shutil.copy2(latest, db_file) # 覆盖当前
-        os.remove(latest) # 移除该备份防止死循环
-        return {"status": "success", "message": "已回退到上一步"}
-
+        # SQLite 暂不支持简单的回滚，返回错误提示前端
+        return {"status": "error", "message": "SQLite 模式暂不支持撤销功能"}
 # --- 3. 下载管理器 (保持不变，支持多线程) ---
 class DownloadManager:
     def __init__(self):
@@ -668,6 +659,8 @@ def dl_file():
 @login_required
 def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
+    if not u.startswith('epub:') and not is_safe_url(u):
+        return "Security Error: Illegal URL", 403
     if u.startswith('epub:'):
         parts = u.split(':')
         if parts[2] == 'toc': return redirect(url_for('toc_page', url=u, key=k))
@@ -688,4 +681,4 @@ def toc_page():
     return render_template('toc.html', toc=data, toc_url=u, db_key=k)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(debug=False, port=5000, host='0.0.0.0')
