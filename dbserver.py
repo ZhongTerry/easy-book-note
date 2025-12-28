@@ -42,8 +42,8 @@ for d in [USER_DATA_DIR, CACHE_DIR, LIB_DIR, DL_DIR]:
     if not os.path.exists(d): os.makedirs(d)
 
 # === 认证中心配置 ===
-CLIENT_ID = '5d0c0b8a21fec049a146' 
-CLIENT_SECRET = '8664201fad421f54fa6f5da92e76cb604ca70056'
+CLIENT_ID = os.environ.get('CLIENT_ID')
+CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
 # AUTH_SERVER = 'http://127.0.0.1:5124'
 AUTH_SERVER = os.environ.get('SERVER', 'https://auth.ztrztr.top')
 REDIRECT_URI = os.environ.get('CALLBACK', 'https://book.ztrztr.top/callback')
