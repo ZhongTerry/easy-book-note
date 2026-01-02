@@ -10,54 +10,43 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- <meta name="color-scheme" content="light"> -->
     <style>
-        /* === 布局与容器 (保留原版结构) === */
-        :root {
-            --bg: #f8f9fa;
-            --card-bg: #ffffff;
-        }
-
-        body {
-            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-            margin: 0; padding: 0;
-            background-color: var(--bg); color: #333;
-        }
-
+        /* === 布局修正 (颜色交给 pure2.1.css 管理) === */
+        
         /* 顶部用户栏 */
         #userBar {
-            background: #fff; padding: 10px 20px; border-bottom: 1px solid #eee; 
+            background: rgba(255,255,255,0.9); /* 保持半透明白 */
+            padding: 10px 20px; 
+            border-bottom: 1px solid #eee; 
             display: flex; justify-content: space-between; align-items: center; 
             font-size: 14px;
         }
 
+        /* 主容器：只负责位置和宽窄，颜色交给 p-card */
         .container {
-            max-width: 800px; margin: 30px auto;
-            background: var(--card-bg); padding: 30px;
-            border-radius: 12px; box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+            max-width: 800px; 
+            margin: 30px auto;
+            /* 记得在 HTML div 上加上 class="container p-card" */
         }
 
-        h1 { margin-top: 0; color: #2c3e50; text-align: center; font-size: 26px; margin-bottom: 25px;}
+        h1 { margin-top: 0; color: #1f2937; text-align: center; font-size: 26px; margin-bottom: 25px;}
 
-        /* 输入组微调 */
+        /* 输入组布局 */
         .input-group { margin-bottom: 15px; }
-        .input-label { display: block; margin-bottom: 6px; font-weight: 600; color: #555; font-size: 13px;}
+        .input-label { display: block; margin-bottom: 6px; font-weight: 600; color: #4b5563; font-size: 13px;}
 
-        /* 按钮行 (Flex布局保持不变) */
+        /* 按钮行布局 */
         .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 25px; }
         
-        /* 让 PureUI 的按钮在 flex 容器中自动伸缩 (复原你之前的按钮逻辑) */
+        /* 仅保留布局属性，不覆盖 PureUI 的样式 */
         .btn-row .p-btn { 
-            flex: 1;                /* 让按钮平分宽度 */
-            min-width: fit-content; /* 宽度自适应内容，防止挤压 */
-            white-space: nowrap;    /* 【核心】禁止文字换行 */
-            height: 40px;           /* 【核心】强制统一高度 */
-            padding: 0 10px;        /* 调整内边距 */
-            font-size: 13px;        /* 稍微调小一点字体 */
+            flex: 1;                /* 保持平分宽度 */
+            min-width: fit-content; /* 防止挤压 */
         }
 
         /* 结果区域 */
         .output { margin-top: 25px; border-top: 1px solid #eee; padding-top: 20px; }
         
-        /* 消息框美化 */
+        /* 消息框 (保留，因为这是 JS 动态控制的) */
         #msgBox { 
             padding: 10px; border-radius: 6px; margin-bottom: 15px; font-size: 14px; display: none; 
             text-align: center;
@@ -65,29 +54,31 @@
         #msgBox.success { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
         #msgBox.error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
 
-        /* === 列表/表格样式 (保持原版) === */
+        /* 表格微调 */
         table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        th { text-align: left; padding: 10px; background: #f1f3f5; color: #495057; }
+        th { text-align: left; padding: 10px; background: #f9fafb; color: #6b7280; }
         td { padding: 12px 5px; border-bottom: 1px solid #eee; vertical-align: middle; }
         
-        .key-final { font-weight: bold; color: #2c3e50; font-size: 15px;}
+        .key-final { font-weight: bold; color: #1f2937; font-size: 15px;}
         
-        /* 操作按钮组 */
+        /* 辅助类 */
         .action-group { display: flex; gap: 5px; justify-content: flex-end; align-items: center; }
-
-        /* === 标签筛选栏 === */
+        
+        /* 标签栏滚动容器 */
         .filter-bar {
             display: flex; gap: 8px; overflow-x: auto; padding: 5px 0 15px 0;
             scrollbar-width: none;
         }
-        .filter-chip { cursor: pointer; user-select: none; transition: 0.2s; border: 1px solid #eee; }
-        .filter-chip:hover { opacity: 0.8; border-color: #ddd; }
-        .filter-chip.active { background: #4f46e5; color: white; border-color: #4f46e5; }
-
-        /* === 网格书架模式 (保持原版) === */
+        
+        /* 书架网格微调 */
         .bookshelf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 20px; padding: 10px 0; }
-        .book-card { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05); transition: transform 0.2s; cursor: pointer; display: flex; flex-direction: column; aspect-ratio: 2 / 3; border: 1px solid #eee; }
-        .book-card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px rgba(0,0,0,0.1); border-color: #4f46e5; }
+        .book-card { 
+            background: white; border-radius: 8px; overflow: hidden; 
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+            transition: transform 0.2s; cursor: pointer; 
+            display: flex; flex-direction: column; aspect-ratio: 2 / 3; border: 1px solid #eee; 
+        }
+        .book-card:hover { transform: translateY(-5px); border-color: #4f46e5; }
         .book-cover { flex: 1; padding: 15px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; color: white; background: linear-gradient(135deg, #667eea, #764ba2); position: relative; }
         .book-title-card { font-size: 16px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2); overflow: hidden; }
         .book-info-row { padding: 8px; background: white; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #666; border-top: 1px solid #f0f0f0; }
@@ -95,15 +86,9 @@
         /* 拖拽上传样式 */
         #value.drag-over { border-color: #10b981 !important; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
 
-        /* 模态框修正 (适配 PureUI) */
-        .modal-body-custom { padding: 20px; }
-        .search-results { max-height: 300px; overflow-y: auto; margin-top: 10px; border: 1px solid #eee; border-radius: 6px; }
-        .result-item { padding: 10px; border-bottom: 1px solid #eee; cursor: pointer; transition: 0.2s; }
-        .result-item:hover { background: #f9fafb; }
-
         /* 洞察页面 Grid */
         .stats-grid-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #eee; }
+        .stat-card { background: #f9fafb; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e5e7eb; }
         .stat-num { font-size: 24px; font-weight: bold; color: #4f46e5; }
         .heatmap-grid { display: flex; gap: 2px; height: 60px; align-items: flex-end; margin-top: 10px; }
         .heat-bar { flex: 1; background: #e5e7eb; border-radius: 2px; transition: height 0.5s; min-height: 2px; }
