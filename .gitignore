@@ -1,3 +1,13 @@
 /cache
 /backups
 .env
+
+# 忽略所有用户数据（数据库、统计 JSON、书单 JSON）
+user_data/
+
+# 此外，建议也忽略以下文件夹，保持仓库干净
+cache/
+library/*.epub
+downloads/*.txt
+__pycache__/
+.env
