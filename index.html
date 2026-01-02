@@ -22,11 +22,23 @@
         }
 
         /* 主容器：只负责位置和宽窄，颜色交给 p-card */
-        .container {
-            max-width: 800px; 
-            margin: 30px auto;
-            /* 记得在 HTML div 上加上 class="container p-card" */
-        }
+        /* 在 index.html 的 <style> 标签里 */
+
+.container {
+    max-width: 850px; 
+    margin: 40px auto; /* 增加一点顶部距离，更好看 */
+    
+    /* 👇👇👇 核心修复：把白框框加回来！👇👇👇 */
+    background-color: #ffffff; /* 强制纯白背景 */
+    padding: 40px;             /* 宽敞的内边距 */
+    border-radius: 16px;       /* 圆润的边角 */
+    
+    /* 加一个更有质感的阴影，让它“浮”起来 */
+    box-shadow: 0 10px 40px -10px rgba(0,0,0,0.08);
+    
+    /* 加一个极细的边框，增强边界感 */
+    border: 1px solid #f1f5f9;
+}
 
         h1 { margin-top: 0; color: #1f2937; text-align: center; font-size: 26px; margin-bottom: 25px;}
 
