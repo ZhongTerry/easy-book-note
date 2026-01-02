@@ -1,50 +1,56 @@
 /* --- START OF FILE pure2.1.css --- */
 
 :root {
-    /* 核心变量 */
+    /* --- 核心配置：强制亮色 --- */
+    /* 关键：告诉浏览器这个网页只有亮色模式，禁止自动转黑 */
+    color-scheme: light; 
+    
+    /* 核心变量 (全部锁定为亮色值) */
     --p-primary: #4f46e5;
     --p-primary-hover: #4338ca;
     --p-success: #10b981;
     --p-warning: #f59e0b;
     --p-danger: #ef4444;
     
-    --p-text-main: #1f2937;
-    --p-text-muted: #6b7280;
-    --p-text-light: #ffffff; /* 新增：明确的亮色文本变量 */
-    
-    --p-bg: #f3f4f6;
-    --p-surface: #ffffff;
+    /* 强制背景为浅灰/白色 */
+    --p-bg: #f9fafb;     
+    --p-surface: #ffffff; 
     --p-border: #e5e7eb;
+    
+    /* 强制文字为深色 */
+    --p-text-main: #111827; 
+    --p-text-muted: #6b7280;
     
     --p-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     --p-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     
     --p-radius: 6px;
     --p-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    
-    /* 关键修复：告诉浏览器这是一个支持亮色模式的页面，防止强制变黑 */
-    color-scheme: light; 
 }
 
+/* 
+   ⚠️为了彻底解决变黑问题，我注释掉了暗黑模式的自动适配。
+   只有当你通过 JS 明确在 <html> 标签加上 data-theme="dark" 时才会生效。
+   默认情况下，现在它永远是亮色的。
+*/
 [data-theme="dark"] {
+    /* 如果你需要暗黑模式，保留这里；如果不需要，直接删除此块 */
     --p-text-main: #f9fafb;
     --p-text-muted: #9ca3af;
     --p-bg: #111827;
     --p-surface: #1f2937;
     --p-border: #374151;
     --p-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-    
-    /* 关键修复：切换到暗色模式时的浏览器行为 */
     color-scheme: dark;
 }
 
-/* 全局重置 */
+/* --- 全局重置 --- */
 * { box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
 
 body { 
     font-family: var(--p-font); 
-    background: var(--p-bg); 
-    color: var(--p-text-main); 
+    background: var(--p-bg) !important; /* 强制背景 */
+    color: var(--p-text-main) !important; 
     margin: 0; 
     line-height: 1.5; 
     font-size: 15px; 
@@ -67,18 +73,22 @@ ul, ol { list-style: none; padding: 0; margin: 0; }
     position: sticky; 
     top: 0; 
     z-index: 50; 
-    /* 修复：确保导航栏背景不透明度足够，防止混合导致颜色怪异 */
-    background: rgba(255,255,255,0.95); 
+    background: rgba(255,255,255,0.95); /* 强制白色半透明 */
     backdrop-filter: blur(10px);
 }
-[data-theme="dark"] .p-nav { background: rgba(31, 41, 55, 0.95); }
+
+/* 即使在暗黑模式下，如果没切主题，也不要让导航栏变黑 */
+body:not([data-theme="dark"]) .p-nav {
+    background: rgba(255,255,255,0.95) !important;
+}
 
 .p-nav-brand { font-weight: 700; font-size: 18px; color: var(--p-primary); display: flex; align-items: center; gap: 8px; }
 .p-nav-items { display: flex; gap: 20px; align-items: center; }
 
 /* 卡片 */
 .p-card { 
-    background: var(--p-surface); 
+    background: #ffffff !important; /* 锁死纯白背景 */
+    color: #111827 !important;     /* 锁死深色文字 */
     border-radius: var(--p-radius); 
     border: 1px solid var(--p-border); 
     box-shadow: var(--p-shadow); 
@@ -87,105 +97,110 @@ ul, ol { list-style: none; padding: 0; margin: 0; }
     transition: 0.3s; 
     overflow: hidden; 
     position: relative; 
-    color: var(--p-text-main); /* 强制卡片内文字颜色 */
 }
 .p-card:hover { border-color: var(--p-primary); box-shadow: var(--p-shadow-lg); transform: translateY(-2px); }
 
-/* --- 按钮 (核心修复区域) --- */
+/* --- 按钮 --- */
 .p-btn { 
     display: inline-flex; align-items: center; justify-content: center; gap: 6px; 
     padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; 
     cursor: pointer; border: 1px solid transparent; 
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); 
     background: transparent; 
-    
-    /* 关键修复：默认按钮强制继承主文本色，防止浏览器设为白色 */
-    color: var(--p-text-main) !important; 
+    color: var(--p-text-main); 
     user-select: none; 
 }
 .p-btn:hover { background: var(--p-bg); transform: translateY(-1px); }
 .p-btn:active { transform: translateY(0) scale(0.98); }
 
-/* 特殊按钮覆盖文字颜色 */
+/* 修复按钮文字颜色：防止被系统变为白色 */
 .p-btn-primary { 
-    background: var(--p-primary); 
-    color: #ffffff !important; /* 强制白色文字 */
+    background: var(--p-primary) !important; 
+    color: #ffffff !important; /* 强制白字 */
     box-shadow: 0 2px 5px rgba(79, 70, 229, 0.3); 
 }
-.p-btn-primary:hover { background: var(--p-primary-hover); }
+.p-btn-primary:hover { background: var(--p-primary-hover) !important; }
 
-.p-btn-danger { 
-    background: rgba(239, 68, 68, 0.1); 
-    color: var(--p-danger) !important; 
-}
+.p-btn-danger { background: rgba(239, 68, 68, 0.1); color: var(--p-danger) !important; }
 .p-btn-danger:hover { background: var(--p-danger); color: #ffffff !important; }
 
-.p-btn-success { 
-    background: var(--p-success); 
-    color: #ffffff !important; 
-}
+.p-btn-success { background: var(--p-success); color: #ffffff !important; }
+.p-btn-outline { border-color: var(--p-border); color: var(--p-text-main) !important; }
 
-.p-btn-outline { border-color: var(--p-border); }
-
+/* Loading 状态 */
 .p-btn.loading { position: relative; color: transparent !important; pointer-events: none; }
 .p-btn.loading::after { content: ""; position: absolute; width: 16px; height: 16px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: p-spin 0.6s linear infinite; }
 
-/* --- 表单 (核心修复区域：解决 Input 变黑问题) --- */
+
+/* 
+   🔥🔥🔥 核心修复区：输入框 🔥🔥🔥 
+   这里使用了 !important 和具体颜色值，不再依赖变量，
+   确保无论浏览器怎么想，它都必须是白底黑字。
+*/
 .p-input-group { margin-bottom: 16px; }
-.p-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--p-text-muted); }
+.p-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #4b5563 !important; } /* 强制深灰标签 */
 
 .p-input, .p-textarea, .p-select { 
     width: 100%; 
     padding: 10px 12px; 
     
-    /* 关键修复：强制设定背景色，不依赖浏览器默认 */
-    background-color: var(--p-surface) !important; 
-    color: var(--p-text-main) !important; 
+    /* 1. 强制纯白背景 */
+    background-color: #ffffff !important; 
+    /* 2. 强制深黑文字 */
+    color: #111827 !important; 
+    /* 3. 强制边框颜色 */
+    border: 1px solid #e5e7eb !important; 
     
-    border: 1px solid var(--p-border); 
     border-radius: 8px; 
     transition: 0.2s; 
     font-size: 14px; 
     
-    /* 关键修复：重置浏览器外观 */
+    /* 4. 强制浏览器不要渲染原生控件外观 */
     -webkit-appearance: none;
     appearance: none;
+    
+    /* 5. 告诉浏览器这个控件是亮色的 */
+    color-scheme: light !important;
 }
 
 .p-input:focus, .p-textarea:focus, .p-select:focus { 
-    border-color: var(--p-primary); 
+    border-color: var(--p-primary) !important; 
     box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15); 
-    background-color: var(--p-surface) !important; /* 聚焦时保持背景色 */
+    background-color: #ffffff !important; /* 聚焦时依然纯白 */
+    color: #111827 !important;
 }
 
-/* 关键修复：解决 Chrome/Edge 自动填充导致的黄色/黑色背景 */
+/* 修复：Chrome 自动填充时的屎黄色/黑色背景 */
 input:-webkit-autofill,
 input:-webkit-autofill:hover, 
 input:-webkit-autofill:focus, 
 input:-webkit-autofill:active {
-    -webkit-box-shadow: 0 0 0 1000px var(--p-surface) inset !important;
-    -webkit-text-fill-color: var(--p-text-main) !important;
-    transition: background-color 5000s ease-in-out 0s; /* 延后背景色切换 */
+    -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important; /* 用纯白内阴影覆盖 */
+    -webkit-text-fill-color: #111827 !important; /* 强制文字颜色 */
+    transition: background-color 5000s ease-in-out 0s;
+    color-scheme: light !important;
 }
 
 /* 实用组件 */
 .p-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
 .p-flex-between { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-.p-tag { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; background: var(--p-bg); color: var(--p-text-muted); border: 1px solid var(--p-border); }
+.p-tag { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; }
 .p-tag.active { background: var(--p-primary); color: white; border-color: var(--p-primary); }
 
 /* 模态框 */
 .p-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; }
 .p-modal.active { display: flex; opacity: 1; }
-.p-modal-content { background: var(--p-surface); color: var(--p-text-main); width: 90%; max-width: 500px; padding: 30px; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.1); transform: scale(0.9); transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); max-height: 90vh; overflow-y: auto; position: relative; }
+.p-modal-content { 
+    background: #ffffff; /* 强制白底 */
+    color: #111827;      /* 强制黑字 */
+    width: 90%; max-width: 500px; padding: 30px; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); border: 1px solid rgba(0,0,0,0.05); transform: scale(0.9); transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); max-height: 90vh; overflow-y: auto; position: relative; }
 .p-modal.active .p-modal-content { transform: scale(1); }
-.p-modal-close-btn { position: absolute; top: 15px; right: 15px; width: 30px; height: 30px; border-radius: 50%; background: var(--p-bg); color: var(--p-text-muted); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; font-size: 18px; border: none; }
+.p-modal-close-btn { position: absolute; top: 15px; right: 15px; width: 30px; height: 30px; border-radius: 50%; background: #f3f4f6; color: #6b7280; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; font-size: 18px; border: none; }
 .p-modal-close-btn:hover { background: var(--p-danger); color: white; transform: rotate(90deg); }
 
 /* Toast */
 #p-toast { position: fixed; bottom: 30px; left: 50%; transform: translate(-50%, 20px); background: #1f2937; color: white; padding: 10px 20px; border-radius: 50px; font-size: 14px; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 2000; display: flex; align-items: center; gap: 8px; box-shadow: var(--p-shadow-lg); }
 #p-toast.show { opacity: 1; transform: translate(-50%, 0); }
-[data-theme="dark"] #p-toast { background: white; color: black; }
 
 /* 动画 */
 @keyframes p-spin { to { transform: rotate(360deg); } }
