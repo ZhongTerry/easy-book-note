@@ -647,251 +647,188 @@ from lxml import html as lxml_html # 需要 pip install lxml
 # from urllib.parse import urljoin
 # from concurrent.futures import ThreadPoolExecutor
 
+# ==========================================
+# 1. SearchHelper - 负责找书、生成Key
+# ==========================================
+class SearchHelper:
+    def __init__(self):
+        self.impersonate = "chrome110"
+        self.timeout = 5
+        self.proxies = getproxies() # 自动获取系统代理
+
+    def get_pinyin_key(self, text):
+        clean_text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
+        clean_text = re.sub(r'(小说|笔趣阁|最新章节|全文阅读)', '', clean_text)
+        try:
+            initials = lazy_pinyin(clean_text, style=Style.FIRST_LETTER)
+            key = ''.join(initials).lower()
+            return key[:15] if key else "temp"
+        except: return "temp"
+
+    def _is_junk(self, title, url):
+        bad_domains = ['facebook.com', 'twitter.com', 'zhihu.com', 'douban.com', 'baidu.com', '52pojie', '163.com']
+        bad_keywords = ['工具', '破解', '软件', '下载', '视频', '剧透', '百科', 'APP']
+        if any(d in url.lower() for d in bad_domains): return True
+        if any(k in title.lower() for k in bad_keywords): return True
+        return False
+
+    def _do_ddg_search(self, keyword):
+        url = "https://html.duckduckgo.com/html/"
+        data = {'q': f"{keyword} 笔趣阁 目录"}
+        try:
+            resp = cffi_requests.post(url, data=data, impersonate=self.impersonate, timeout=self.timeout, proxies=self.proxies)
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            results = []
+            for link in soup.find_all('a', class_='result__a'):
+                title, href = link.get_text(strip=True), link.get('href')
+                if not href.startswith('http') or self._is_junk(title, href): continue
+                results.append({'title': re.split(r'(-|_|\|)', title)[0].strip(), 'url': href, 'suggested_key': self.get_pinyin_key(keyword), 'source': 'DuckDuckGo 🦆'})
+                if len(results) >= 8: break
+            return results
+        except: return None
+
+    def _do_bing_search(self, keyword):
+        url = "https://www.bing.com/search"
+        params = {'q': f"{keyword} 笔趣阁 目录", 'setmkt': 'en-US'}
+        try:
+            resp = cffi_requests.get(url, params=params, impersonate=self.impersonate, timeout=self.timeout, proxies=self.proxies)
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            links = soup.select('li.b_algo h2 a') or soup.select('h2 a')
+            results = []
+            for link in links:
+                title, href = link.get_text(strip=True), link.get('href')
+                if not href or not href.startswith('http') or self._is_junk(title, href): continue
+                results.append({'title': re.split(r'(-|_|\|)', title)[0].strip(), 'url': href, 'suggested_key': self.get_pinyin_key(keyword), 'source': 'Bing 🌐'})
+                if len(results) >= 8: break
+            return results
+        except: return []
+
+    def search_bing(self, keyword):
+        return self._do_ddg_search(keyword) or self._do_bing_search(keyword)
+
+# ==========================================
+# 2. NovelCrawler - 负责抓取目录和正文
+# ==========================================
 class NovelCrawler:
     def __init__(self):
-        # 和 debug_toc 保持一致
-        self.impersonate = "chrome110" 
+        self.impersonate = "chrome110"
         self.timeout = 15
-        self.toc_max_workers = 5 
+        self.proxies = getproxies()
 
     def _fetch_page_smart(self, url, retry=3):
-        """核心抓取：和 debug_toc 保持完全一致的配置"""
         for i in range(retry):
             try:
-                # [修改] 移除了 headers={"Referer": url}，因为 debug_toc 没用它也能跑
-                response = cffi_requests.get(
-                    url, 
-                    impersonate=self.impersonate, 
-                    timeout=self.timeout,
-                    allow_redirects=True
-                )
-                content = response.content
-                
-                # 编码检测
-                charset = lxml_html.fromstring(content).xpath('//meta/@charset')
-                encoding = charset[0] if charset else None
-                if not encoding:
-                    for enc in ['utf-8', 'gb18030', 'gbk', 'big5']:
-                        try: content.decode(enc); encoding = enc; break;
-                        except: pass
-                
-                return content.decode(encoding or 'utf-8', errors='replace')
-            except Exception as e:
-                print(f"[Crawler] Fetch Error ({url}): {e}")
-                time.sleep(1)
+                headers = {"Referer": url, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
+                resp = cffi_requests.get(url, impersonate=self.impersonate, timeout=self.timeout, headers=headers, allow_redirects=True, proxies=self.proxies)
+                # 智能编码：meta优先，失败后尝试GBK
+                try:
+                    tree = lxml_html.fromstring(resp.content)
+                    charset = tree.xpath('//meta[contains(@content, "charset")]/@content') or tree.xpath('//meta/@charset')
+                    enc = 'utf-8'
+                    if charset:
+                        match = re.search(r'charset=([\w-]+)', str(charset[0]), re.I)
+                        enc = match.group(1) if match else charset[0]
+                    return resp.content.decode(enc)
+                except:
+                    for e in ['utf-8', 'gbk', 'gb18030']:
+                        try: return resp.content.decode(e)
+                        except: continue
+                return resp.content.decode('utf-8', errors='replace')
+            except: time.sleep(1)
         return None
 
-    def _get_absolute_url(self, base_url, relative_url):
-        if not relative_url or relative_url.startswith(('javascript', '#', 'mailto')): return None
-        return urljoin(base_url, relative_url)
-
-    def _get_smart_title(self, soup):
-        h1 = soup.find('h1')
-        if h1: return h1.get_text(strip=True)
-        if soup.title: return re.split(r'[_\-|]', soup.title.get_text(strip=True))[0]
-        return "未知小说"
-
-    def _clean_text_lines(self, element_text):
-        if not element_text: return []
+    def _clean_text_lines(self, text):
+        if not text: return []
+        junk = [r"一秒记住", r"最新章节", r"笔趣阁", r"上一章", r"下一章", r"加入书签", r"投推荐票", r"本章未完"]
         lines = []
-        junk_patterns = [
-            r"本章.*?完", r"加入书签", r"投推荐票", r"上一[章页]", r"下一[章页]", 
-            r"目录", r"返回列表", r"app", r"下载", r"http", r"www\.", 
-            r"请关注", r"微信", r"公众号", r"作者有话说", r"ps[:：]",
-            r"（本章完）", r"笔趣阁", r"顶点小说"
-        ]
-        for line in element_text.split('\n'):
-            line = line.strip()
-            if not line: continue
-            is_junk = False
-            if len(line) < 30:
-                for pattern in junk_patterns:
-                    if re.search(pattern, line, re.IGNORECASE): is_junk = True; break
-            if "{" in line and "}" in line: is_junk = True
-            if not is_junk: lines.append(line)
+        for line in text.split('\n'):
+            line = line.replace('\xa0', ' ').strip()
+            if not line or len(line) < 2: continue
+            if len(line) < 40 and any(re.search(p, line, re.I) for p in junk): continue
+            if "{" in line and "function" in line: continue
+            lines.append(line)
         return lines
 
     def _extract_content_smart(self, soup):
-        for cid in ['content', 'chaptercontent', 'BookText', 'TextContent', 'showtxt', 'txt', 'nr1']:
+        # 兼容神秘复苏 (id="txt") 和通用 ID
+        for cid in ['txt', 'content', 'chaptercontent', 'BookText', 'showtxt', 'nr1', 'read-content']:
             div = soup.find(id=cid)
-            if div: return self._clean_text_lines(div.get_text('\n'))
-        for cls in ['content', 'read-content', 'read_chapterDetail', 'txtnav']:
-            div = soup.find(class_=cls)
-            if div: return self._clean_text_lines(div.get_text('\n'))
-        candidates = soup.find_all('div')
-        best_div = None; best_score = 0
-        for div in candidates:
-            if div.find(['nav', 'footer', 'header']): continue
-            text = div.get_text(strip=True)
-            if len(text) < 100: continue
-            score = len(text) - (len(div.find_all('a')) * 50)
-            if score > best_score: best_score = score; best_div = div
+            if div:
+                for a in div.find_all('a'): a.decompose() # 剔除正文内的干扰链接
+                return self._clean_text_lines(div.get_text('\n'))
+        # 文本密度算法兜底
+        best_div, max_score = None, 0
+        for div in soup.find_all('div'):
+            if div.get('id') and re.search(r'(nav|foot|header)', str(div.get('id')), re.I): continue
+            txt = div.get_text(strip=True)
+            score = len(txt) - (len(div.find_all('a')) * 5)
+            if score > max_score: max_score, best_div = score, div
         if best_div:
-            temp = best_div.__copy__()
-            for t in temp.select('script, style, iframe, .ads'): t.decompose()
-            return self._clean_text_lines(temp.get_text('\n'))
-        return ["内容提取失败"]
+            return self._clean_text_lines(best_div.get_text('\n'))
+        return ["正文解析失败"]
 
-    def _parse_chapters_from_soup(self, soup, force_base_url):
-        links = []
-        containers = soup.find_all(['div', 'ul', 'dl', 'section', 'tbody'])
-        if not containers: containers = [soup.body]
-        best_container = None; max_valid_links = 0
-        
-        for container in containers:
-            if container.get('class') and any(x in str(container.get('class')) for x in ['nav', 'footer', 'header']): continue
-            alist = container.find_all('a')
-            temp_links = []
-            for a in alist:
-                txt = a.get_text(strip=True)
-                href = a.get('href')
-                if href and txt and re.search(r'(\d+|第.+[章节回])', txt):
-                    full_url = self._get_absolute_url(force_base_url, href)
-                    if full_url: temp_links.append({'title': txt, 'url': full_url})
-            
-            if len(temp_links) > max_valid_links:
-                max_valid_links = len(temp_links)
-                links = temp_links
-                
-        # 兜底
-        if max_valid_links < 5:
-            links = []
-            for a in soup.find_all('a'):
-                txt = a.get_text(strip=True)
-                href = a.get('href')
-                if href and txt and re.search(r'(\d+|第.+[章节回])', txt):
-                     u = self._get_absolute_url(force_base_url, href)
-                     if u: links.append({'title': txt, 'url': u})
+    def _parse_chapters_from_soup(self, soup, base_url):
+        links, max_links = [], 0
+        for container in soup.find_all(['div', 'ul', 'dl', 'tbody']):
+            if container.get('class') and 'nav' in str(container.get('class')): continue
+            curr = []
+            for a in container.find_all('a'):
+                txt, href = a.get_text(strip=True), a.get('href')
+                if href and (re.search(r'(\d+|第.+[章节回])', txt) or len(txt) > 5):
+                    full = urljoin(base_url, href)
+                    if full: curr.append({'title': txt, 'url': full})
+            if len(curr) > max_links: max_links, links = len(curr), curr
         return links
 
-    # === [调试重点] 带有详细日志的 get_toc ===
     def get_toc(self, toc_url):
-        print(f"\n[Crawler] 1. 开始抓取首页: {toc_url}")
+        print(f"[Crawler] TOC: {toc_url}")
         html = self._fetch_page_smart(toc_url)
-        if not html: 
-            print("[Crawler] ❌ 首页抓取失败！")
-            return None
-        
+        if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
-        title = self._get_smart_title(soup)
-        all_chapters = self._parse_chapters_from_soup(soup, toc_url)
-        print(f"[Crawler] 首页解析完成，找到 {len(all_chapters)} 章")
-        
-        # --- 寻找分页 (与 debug_toc 逻辑完全一致) ---
-        extra_pages_urls = set()
-        
-        # 1. Select 检查
-        selects = soup.find_all('select')
-        print(f"[Crawler] 2. 寻找 Select 标签... 找到 {len(selects)} 个")
-        
-        for i, select in enumerate(selects):
-            options = select.find_all('option')
-            print(f"   -> Select #{i} 有 {len(options)} 个选项")
-            for opt in options:
-                val = opt.get('value')
-                # print(f"      - Value: {val}") # 调试用
+        all_chaps = self._parse_chapters_from_soup(soup, toc_url)
+        # 处理分页
+        pages = set()
+        for s in soup.find_all('select'):
+            for o in s.find_all('option'):
+                val = o.get('value')
                 if val:
-                    full_link = self._get_absolute_url(toc_url, val)
-                    # 去重逻辑
-                    if full_link and full_link.rstrip('/') != toc_url.rstrip('/'):
-                        extra_pages_urls.add(full_link)
-        
-        # 2. 底部链接检查
-        if not extra_pages_urls:
-            print("[Crawler] Select 未找到分页，尝试底部链接...")
-            pagination_links = soup.find_all('a', string=re.compile(r'(下一页|第\s*\d+\s*页|尾页)'))
-            for a in pagination_links:
-                href = a.get('href')
-                if href:
-                    full_link = self._get_absolute_url(toc_url, href)
-                    if full_link and full_link.rstrip('/') != toc_url.rstrip('/'):
-                        extra_pages_urls.add(full_link)
-
-        # --- 并发抓取 ---
-        if extra_pages_urls:
-            sorted_urls = sorted(list(extra_pages_urls))
-            print(f"[Crawler] 3. 发现 {len(sorted_urls)} 个额外分页: {sorted_urls}")
-            print("[Crawler] 4. 开始并发抓取分页...")
-
-            def fetch_sub_toc(page_url):
-                # print(f"   [Sub] 正在抓取: {page_url}")
-                time.sleep(random.uniform(0.1, 0.3))
-                h = self._fetch_page_smart(page_url)
-                if h:
-                    s = BeautifulSoup(h, 'html.parser')
-                    # 关键：用 toc_url 作为 base_url
-                    chaps = self._parse_chapters_from_soup(s, toc_url)
-                    # print(f"   [Sub] {page_url} -> 找到 {len(chaps)} 章")
-                    return chaps
-                else:
-                    print(f"   [Sub] ❌ 抓取失败: {page_url}")
-                return []
-
-            from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=self.toc_max_workers) as executor:
-                # 使用 map 保持顺序
-                results = executor.map(fetch_sub_toc, sorted_urls)
-                
-                for sub_chapters in results:
-                    before_len = len(all_chapters)
-                    # 简单去重
-                    existing_urls = set(c['url'] for c in all_chapters)
-                    for c in sub_chapters:
-                        if c['url'] not in existing_urls:
-                            all_chapters.append(c)
-                            existing_urls.add(c['url'])
-                    # print(f"   -> 合并后新增 {len(all_chapters) - before_len} 章")
-
-        print(f"[Crawler] ✅ 最终总章节数: {len(all_chapters)}")
-        return {'title': title, 'chapters': all_chapters}
+                    full = urljoin(toc_url, val)
+                    if full.rstrip('/') != toc_url.rstrip('/'): pages.add(full)
+        if pages:
+            with ThreadPoolExecutor(max_workers=5) as exe:
+                results = exe.map(lambda u: self._parse_chapters_from_soup(BeautifulSoup(self._fetch_page_smart(u) or "", 'html.parser'), toc_url), sorted(list(pages)))
+                for sub in results:
+                    urls = set(c['url'] for c in all_chaps)
+                    for c in sub:
+                        if c['url'] not in urls: all_chaps.append(c); urls.add(c['url'])
+        return {'title': (soup.find('h1').get_text(strip=True) if soup.find('h1') else "目录"), 'chapters': all_chaps}
 
     def run(self, url):
         html = self._fetch_page_smart(url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
-        data = {
-            'content': self._extract_content_smart(soup),
-            'title': self._get_smart_title(soup),
-            'prev': None, 'next': None, 'toc_url': None
-        }
-        links = soup.find_all('a')
-        for a in links:
-            t = a.get_text(strip=True)
-            h = a.get('href')
-            if not h: continue
-            u = self._get_absolute_url(url, h)
-            if re.search(r'(上一[章页]|preview)', t, re.I): data['prev'] = u
-            elif re.search(r'(下一[章页]|next)', t, re.I): data['next'] = u
-            elif re.search(r'(目录|index|list)', t, re.I) and not data['toc_url']: data['toc_url'] = u
-        if not data['toc_url']: data['toc_url'] = url.rsplit('/', 1)[0] + '/'
+        data = {'content': self._extract_content_smart(soup), 'title': (soup.find('h1').get_text(strip=True) if soup.find('h1') else "未知"), 'prev': None, 'next': None, 'toc_url': None}
+        # 兼容神秘复苏 ID
+        for aid in ['pb_prev', 'pb_next', 'pb_mulu']:
+            tag = soup.find(id=aid)
+            if tag and tag.get('href'):
+                u = urljoin(url, tag['href'])
+                if 'prev' in aid: data['prev'] = u
+                elif 'next' in aid: data['next'] = u
+                elif 'mulu' in aid: data['toc_url'] = u
+        # 文本兜底匹配
+        if not data['next'] or not data['prev']:
+            for a in soup.find_all('a'):
+                t, h = a.get_text(strip=True), a.get('href')
+                if not h: continue
+                u = urljoin(url, h)
+                if not data['prev'] and '上一章' in t: data['prev'] = u
+                elif not data['next'] and '下一章' in t: data['next'] = u
         return data
-    # === [新增] 专门用于提取第一章 URL ===
+
     def get_first_chapter(self, toc_url):
-        # 1. 抓取目录页
-        html = self._fetch_page_smart(toc_url)
-        if not html: return None
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # 2. 复用之前的解析逻辑，提取当前页所有章节
-        # 注意：这里我们不需要 force_base_url，因为我们就在首页
-        chapters = self._parse_chapters_from_soup(soup, toc_url)
-        
-        if not chapters: return None
-        
-        # 3. 智能判断
-        # 我们的 _parse_chapters_from_soup 已经通过 "max_valid_links" 逻辑
-        # 自动过滤掉了顶部的“最新章节列表”（因为那个列表通常很短）
-        # 所以 chapters[0] 基本上就是第一章
-        
-        first_chap = chapters[0]
-        
-        # 4. 双重保险：防止某些网站倒序排列 (最新 -> 第一章)
-        # 如果第一章的标题里包含很大的数字（比如 "第1000章"），且列表很长，说明可能是倒序
-        # 但绝大多数笔趣阁都是正序的。如果遇到倒序，通常最后一张是第一章。
-        # 这里为了稳妥，我们先简单返回第一个。
-        
-        print(f"[SmartResolve] First chapter title: {first_chap['title']}")
-        return first_chap['url']
+        res = self.get_toc(toc_url)
+        return res['chapters'][0]['url'] if res and res['chapters'] else None
 db = IsolatedDB()
 crawler = NovelCrawler()
 cache = CacheManager()
