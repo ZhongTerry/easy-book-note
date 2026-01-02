@@ -1,202 +1,158 @@
-/* --- START OF FILE pure2.1.css --- */
+/* --- START OF FILE pure2.1.css (v2.1 Final: Light Lock + Full Features + Mobile) --- */
 
 :root {
-    /* --- 核心配置：强制亮色 --- */
-    /* 关键：告诉浏览器这个网页只有亮色模式，禁止自动转黑 */
+    /* 1. 核心修复：强制声明亮色模式，禁止浏览器自动变黑 */
     color-scheme: light; 
-    
-    /* 核心变量 (全部锁定为亮色值) */
+
+    /* 2. 核心色彩 */
     --p-primary: #4f46e5;
     --p-primary-hover: #4338ca;
     --p-success: #10b981;
     --p-warning: #f59e0b;
     --p-danger: #ef4444;
     
-    /* 强制背景为浅灰/白色 */
-    --p-bg: #f9fafb;     
-    --p-surface: #ffffff; 
+    /* 3. 强制亮色背景和文字 */
+    --p-bg: #f3f4f6;       
+    --p-surface: #ffffff;   
     --p-border: #e5e7eb;
-    
-    /* 强制文字为深色 */
-    --p-text-main: #111827; 
+    --p-text-main: #1f2937;
     --p-text-muted: #6b7280;
     
+    /* 4. 阴影与质感 */
     --p-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     --p-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-    
-    --p-radius: 6px;
+    --p-radius: 8px;
     --p-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
-/* 
-   ⚠️为了彻底解决变黑问题，我注释掉了暗黑模式的自动适配。
-   只有当你通过 JS 明确在 <html> 标签加上 data-theme="dark" 时才会生效。
-   默认情况下，现在它永远是亮色的。
-*/
-[data-theme="dark"] {
-    /* 如果你需要暗黑模式，保留这里；如果不需要，直接删除此块 */
-    --p-text-main: #f9fafb;
-    --p-text-muted: #9ca3af;
-    --p-bg: #111827;
-    --p-surface: #1f2937;
-    --p-border: #374151;
-    --p-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-    color-scheme: dark;
-}
+/* 禁用自动暗黑模式 */
+[data-theme="dark"] { /* 除非手动开启，否则不生效 */ }
 
 /* --- 全局重置 --- */
 * { box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
 
 body { 
     font-family: var(--p-font); 
-    background: var(--p-bg) !important; /* 强制背景 */
-    color: var(--p-text-main) !important; 
-    margin: 0; 
-    line-height: 1.5; 
-    font-size: 15px; 
-    transition: background 0.3s, color 0.3s; 
+    background-color: #f3f4f6 !important; /* 强制背景 */
+    color: #1f2937 !important;             /* 强制文字 */
+    margin: 0; line-height: 1.5; font-size: 15px; 
 }
 
 a { text-decoration: none; color: inherit; transition: 0.2s; }
 ul, ol { list-style: none; padding: 0; margin: 0; }
 
-/* 布局 */
+/* --- 布局容器 --- */
 .p-container { max-width: 960px; margin: 0 auto; padding: 24px 20px; }
 .p-nav { 
-    background: var(--p-surface); 
+    background: rgba(255,255,255,0.95); 
+    backdrop-filter: blur(10px); 
     border-bottom: 1px solid var(--p-border); 
-    padding: 0 24px; 
-    height: 60px; 
-    display: flex; 
-    justify-content: space-between; 
-    align-items: center; 
-    position: sticky; 
-    top: 0; 
-    z-index: 50; 
-    background: rgba(255,255,255,0.95); /* 强制白色半透明 */
-    backdrop-filter: blur(10px);
+    padding: 0 24px; height: 60px; 
+    display: flex; justify-content: space-between; align-items: center; 
+    position: sticky; top: 0; z-index: 50; 
 }
-
-/* 即使在暗黑模式下，如果没切主题，也不要让导航栏变黑 */
-body:not([data-theme="dark"]) .p-nav {
-    background: rgba(255,255,255,0.95) !important;
-}
-
 .p-nav-brand { font-weight: 700; font-size: 18px; color: var(--p-primary); display: flex; align-items: center; gap: 8px; }
 .p-nav-items { display: flex; gap: 20px; align-items: center; }
 
-/* 卡片 */
+/* --- 卡片 --- */
 .p-card { 
-    background: #ffffff !important; /* 锁死纯白背景 */
-    color: #111827 !important;     /* 锁死深色文字 */
+    background: #ffffff !important; 
+    color: #1f2937 !important;
     border-radius: var(--p-radius); 
     border: 1px solid var(--p-border); 
     box-shadow: var(--p-shadow); 
-    padding: 24px; 
-    margin-bottom: 24px; 
-    transition: 0.3s; 
-    overflow: hidden; 
-    position: relative; 
+    padding: 24px; margin-bottom: 24px; 
+    transition: 0.3s; overflow: hidden; position: relative; 
 }
 .p-card:hover { border-color: var(--p-primary); box-shadow: var(--p-shadow-lg); transform: translateY(-2px); }
 
-/* --- 按钮 --- */
+/* --- 按钮 (完整版) --- */
 .p-btn { 
     display: inline-flex; align-items: center; justify-content: center; gap: 6px; 
     padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 14px; 
     cursor: pointer; border: 1px solid transparent; 
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); 
-    background: transparent; 
-    color: var(--p-text-main); 
-    user-select: none; 
+    transition: all 0.2s; background: transparent; 
+    color: var(--p-text-main); user-select: none; 
 }
-.p-btn:hover { background: var(--p-bg); transform: translateY(-1px); }
+.p-btn:hover { background: rgba(0,0,0,0.05); transform: translateY(-1px); }
 .p-btn:active { transform: translateY(0) scale(0.98); }
 
-/* 修复按钮文字颜色：防止被系统变为白色 */
-.p-btn-primary { 
-    background: var(--p-primary) !important; 
-    color: #ffffff !important; /* 强制白字 */
-    box-shadow: 0 2px 5px rgba(79, 70, 229, 0.3); 
-}
+/* 按钮变体 */
+.p-btn-primary { background: var(--p-primary) !important; color: #ffffff !important; box-shadow: 0 2px 5px rgba(79, 70, 229, 0.3); }
 .p-btn-primary:hover { background: var(--p-primary-hover) !important; }
 
 .p-btn-danger { background: rgba(239, 68, 68, 0.1); color: var(--p-danger) !important; }
-.p-btn-danger:hover { background: var(--p-danger); color: #ffffff !important; }
+.p-btn-danger:hover { background: var(--p-danger); color: white !important; }
 
-.p-btn-success { background: var(--p-success); color: #ffffff !important; }
-.p-btn-outline { border-color: var(--p-border); color: var(--p-text-main) !important; }
+.p-btn-success { background: var(--p-success); color: white !important; }
+.p-btn-outline { border-color: var(--p-border); color: var(--p-text-main); }
+.p-btn-sm { padding: 4px 10px; font-size: 12px; }
 
-/* Loading 状态 */
+/* 按钮 Loading */
 .p-btn.loading { position: relative; color: transparent !important; pointer-events: none; }
 .p-btn.loading::after { content: ""; position: absolute; width: 16px; height: 16px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: p-spin 0.6s linear infinite; }
 
-
-/* 
-   🔥🔥🔥 核心修复区：输入框 🔥🔥🔥 
-   这里使用了 !important 和具体颜色值，不再依赖变量，
-   确保无论浏览器怎么想，它都必须是白底黑字。
-*/
+/* --- 表单 (核心修复 + 扩展组件) --- */
 .p-input-group { margin-bottom: 16px; }
-.p-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #4b5563 !important; } /* 强制深灰标签 */
+.p-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--p-text-muted); }
 
+/* 输入框：锁死白色背景 */
 .p-input, .p-textarea, .p-select { 
-    width: 100%; 
-    padding: 10px 12px; 
-    
-    /* 1. 强制纯白背景 */
+    width: 100%; padding: 10px 12px; 
     background-color: #ffffff !important; 
-    /* 2. 强制深黑文字 */
-    color: #111827 !important; 
-    /* 3. 强制边框颜色 */
+    color: #1f2937 !important;
     border: 1px solid #e5e7eb !important; 
-    
-    border-radius: 8px; 
-    transition: 0.2s; 
-    font-size: 14px; 
-    
-    /* 4. 强制浏览器不要渲染原生控件外观 */
-    -webkit-appearance: none;
-    appearance: none;
-    
-    /* 5. 告诉浏览器这个控件是亮色的 */
+    border-radius: 8px; transition: 0.2s; font-size: 14px; 
+    -webkit-appearance: none; appearance: none;
     color-scheme: light !important;
 }
-
-.p-input:focus, .p-textarea:focus, .p-select:focus { 
+.p-input:focus, .p-textarea:focus { 
     border-color: var(--p-primary) !important; 
     box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15); 
-    background-color: #ffffff !important; /* 聚焦时依然纯白 */
-    color: #111827 !important;
+    background-color: #ffffff !important;
 }
-
-/* 修复：Chrome 自动填充时的屎黄色/黑色背景 */
-input:-webkit-autofill,
-input:-webkit-autofill:hover, 
-input:-webkit-autofill:focus, 
-input:-webkit-autofill:active {
-    -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important; /* 用纯白内阴影覆盖 */
-    -webkit-text-fill-color: #111827 !important; /* 强制文字颜色 */
+/* 修复 Chrome 自动填充变色 */
+input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus, input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+    -webkit-text-fill-color: #1f2937 !important;
     transition: background-color 5000s ease-in-out 0s;
-    color-scheme: light !important;
 }
 
-/* 实用组件 */
+/* 开关组件 (Switch) */
+.p-switch { position: relative; display: inline-block; width: 44px; height: 24px; vertical-align: middle; }
+.p-switch input { opacity: 0; width: 0; height: 0; }
+.p-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #e5e7eb; transition: .3s; border-radius: 24px; }
+.p-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+.p-switch input:checked + .p-slider { background-color: var(--p-primary); }
+.p-switch input:checked + .p-slider:before { transform: translateX(20px); }
+
+/* 下拉菜单 (Dropdown) */
+.p-dropdown { position: relative; display: inline-block; }
+.p-dropdown-menu { display: none; position: absolute; right: 0; top: 100%; margin-top: 5px; background: #ffffff; border: 1px solid var(--p-border); border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); min-width: 160px; z-index: 100; padding: 5px; }
+.p-dropdown-menu.show { display: block; animation: p-fade-in 0.2s; }
+.p-dropdown-item { display: block; padding: 8px 12px; color: var(--p-text-main); border-radius: 6px; cursor: pointer; font-size: 14px; }
+.p-dropdown-item:hover { background: #f3f4f6; color: var(--p-primary); }
+
+/* 表格 (Table) */
+.p-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.p-table th { text-align: left; padding: 12px; background: #f9fafb; color: var(--p-text-muted); font-weight: 600; border-bottom: 1px solid var(--p-border); }
+.p-table td { padding: 12px; border-bottom: 1px solid var(--p-border); color: var(--p-text-main); vertical-align: middle; }
+.p-table tr:hover td { background: #f9fafb; }
+
+/* --- 实用组件 --- */
 .p-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
 .p-flex-between { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
 .p-tag { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; }
 .p-tag.active { background: var(--p-primary); color: white; border-color: var(--p-primary); }
+.p-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+.p-badge-green { background: #d1fae5; color: #065f46; }
+.p-badge-blue { background: #dbeafe; color: #1e40af; }
 
-/* 模态框 */
-.p-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s ease; }
-.p-modal.active { display: flex; opacity: 1; }
-.p-modal-content { 
-    background: #ffffff; /* 强制白底 */
-    color: #111827;      /* 强制黑字 */
-    width: 90%; max-width: 500px; padding: 30px; border-radius: 16px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); border: 1px solid rgba(0,0,0,0.05); transform: scale(0.9); transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); max-height: 90vh; overflow-y: auto; position: relative; }
-.p-modal.active .p-modal-content { transform: scale(1); }
-.p-modal-close-btn { position: absolute; top: 15px; right: 15px; width: 30px; height: 30px; border-radius: 50%; background: #f3f4f6; color: #6b7280; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; font-size: 18px; border: none; }
-.p-modal-close-btn:hover { background: var(--p-danger); color: white; transform: rotate(90deg); }
+/* --- 模态框 --- */
+.p-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center; }
+.p-modal.active { display: flex; animation: p-fade-in 0.2s; }
+.p-modal-content { background: #ffffff; color: #1f2937; width: 90%; max-width: 500px; padding: 30px; border-radius: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto; position: relative; }
+.p-modal-close-btn { position: absolute; top: 15px; right: 15px; background: transparent; border: none; font-size: 20px; cursor: pointer; color: #999; }
 
 /* Toast */
 #p-toast { position: fixed; bottom: 30px; left: 50%; transform: translate(-50%, 20px); background: #1f2937; color: white; padding: 10px 20px; border-radius: 50px; font-size: 14px; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 2000; display: flex; align-items: center; gap: 8px; box-shadow: var(--p-shadow-lg); }
@@ -204,12 +160,33 @@ input:-webkit-autofill:active {
 
 /* 动画 */
 @keyframes p-spin { to { transform: rotate(360deg); } }
+@keyframes p-fade-in { from { opacity: 0; } to { opacity: 1; } }
 
-/* 移动端适配 */
+/* --- 📱 移动端适配 (Mobile Responsive) --- */
 @media (max-width: 640px) {
-    .p-container { padding: 16px 12px; }
-    .p-card { padding: 16px; }
-    .p-nav { padding: 0 16px; height: 50px; }
-    .p-btn { padding: 6px 12px; font-size: 13px; }
-    .p-grid { grid-template-columns: 1fr !important; gap: 16px !important; }
+    /* 1. 容器收缩 */
+    .p-container { padding: 16px 12px; width: 100%; margin: 0; }
+    
+    /* 2. 导航栏简化 */
+    .p-nav { padding: 0 16px; height: 54px; }
+    .p-nav-brand { font-size: 16px; }
+    
+    /* 3. 卡片内边距减少 */
+    .p-card { padding: 16px; margin-bottom: 16px; }
+    
+    /* 4. 按钮优化：在手机上稍微大一点好点按 */
+    .p-btn { padding: 8px 12px; font-size: 14px; }
+    
+    /* 5. 网格布局强制变单列或自适应 */
+    .p-grid { grid-template-columns: 1fr; gap: 16px; }
+    
+    /* 6. 模态框全宽 */
+    .p-modal-content { width: 95%; max-width: none; padding: 20px; border-radius: 12px; }
+    
+    /* 7. 输入框 */
+    .p-input, .p-select { font-size: 16px; /* 防止 iOS 缩放 */ }
+    
+    /* 8. 针对你的 index.html 按钮行特殊处理 */
+    .btn-row { gap: 10px; }
+    .btn-row .p-btn { flex: 1 1 45%; } /* 一行显示两个按钮 */
 }
