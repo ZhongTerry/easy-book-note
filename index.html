@@ -139,8 +139,8 @@
             <button class="p-btn p-btn-outline" onclick="openSearchModal()">🌐 搜书</button>
             
             <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button>
-            <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button>
-            
+            <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
+            <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
             
             <button class="p-btn p-btn-danger" onclick="doAction('remove')">🗑️ 删除</button>
@@ -227,7 +227,56 @@
             </div>
         </div>
     </div>
-
+    <!-- 书单管理模态框 -->
+    <div id="booklistModal" class="p-modal">
+        <div class="p-modal-content" style="max-width: 500px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+                <h3 style="margin:0">📚 我的书单</h3>
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('booklistModal')">✕</button>
+            </div>
+            <div style="display:flex; gap:10px; margin-bottom:20px;">
+                <input type="text" id="newListName" class="p-input" placeholder="输入新书单名称...">
+                <button class="p-btn p-btn-primary" onclick="createBooklist()">创建</button>
+            </div>
+            <div id="booklistContainer"><!-- 加载书单列表 --></div>
+        </div>
+    </div>
+    
+    <!-- 书单详情模态框 -->
+    <div id="listDetailModal" class="p-modal">
+        <div class="p-modal-content" style="max-width: 700px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+                <h3 style="margin:0" id="currentListName">书单详情</h3>
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('listDetailModal')">✕</button>
+            </div>
+            <div class="booklist-kanban">
+                <div class="kanban-column">
+                    <div class="kanban-title">⭐ 想看</div>
+                    <div id="col-want"></div>
+                </div>
+                <div class="kanban-column">
+                    <div class="kanban-title">✅ 已看</div>
+                    <div id="col-done"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- 选择书单模态框 -->
+<div id="addToListModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 400px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+            <h3 style="margin:0">🔖 加入书单</h3>
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('addToListModal')">✕</button>
+        </div>
+        <p id="addingBookName" style="font-size: 13px; color: #666; margin-bottom: 15px;"></p>
+        <div id="selectListContainer" style="max-height: 300px; overflow-y: auto;">
+            <!-- 这里由 JS 渲染书单列表 -->
+        </div>
+        <div style="text-align:right; margin-top:15px; border-top:1px solid #eee; padding-top:10px;">
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('addToListModal')">取消</button>
+        </div>
+    </div>
+</div>
     <script>
         const API_URL = window.location.origin;
         let currentView = 'list';
@@ -236,7 +285,144 @@
         let activeFilter = 'all';
         let insightData = null;
         let chartInstance = null;
+        let allBooklists = {};
+        let pendingBook = { key: '', title: '' };
 
+// 打开“加入书单”选择框
+async function openAddToListModal(key, title) {
+    pendingBook = { key, title };
+    document.getElementById('addingBookName').innerText = `书籍：${title}`;
+    
+    // 获取最新书单
+    const res = await fetch('/api/booklists/all');
+    const json = await res.json();
+    allBooklists = json.data;
+
+    const cont = document.getElementById('selectListContainer');
+    let html = '';
+    
+    const listIds = Object.keys(allBooklists);
+    if (listIds.length === 0) {
+        html = '<div style="text-align:center; padding:20px; color:#999;">你还没有创建任何书单</div>';
+    } else {
+        listIds.forEach(id => {
+            html += `
+            <div class="list-item-card" style="padding:10px; border:1px solid #eee; margin-bottom:8px; cursor:pointer; border-radius:6px;" onclick="confirmAddToList('${id}')">
+                <div style="font-weight:600;">${allBooklists[id].name}</div>
+                <div style="font-size:11px; color:#888;">${allBooklists[id].books.length} 本书</div>
+            </div>`;
+        });
+    }
+    cont.innerHTML = html;
+    PureUI.modal.open('addToListModal');
+}
+
+// 确认加入
+async function confirmAddToList(listId) {
+    try {
+        const res = await fetch('/api/booklists/add_book', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                list_id: listId,
+                book_data: { key: pendingBook.key, title: pendingBook.title, status: 'want' }
+            })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            showMsg(`已加入书单：${allBooklists[listId].name}`, 'success');
+            PureUI.modal.close('addToListModal');
+        }
+    } catch (e) {
+        showMsg("加入失败", "error");
+    }
+}
+async function openBooklists() {
+    const res = await fetch('/api/booklists/all');
+    const json = await res.json();
+    allBooklists = json.data;
+    renderBooklistManager();
+    PureUI.modal.open('booklistModal');
+}
+
+function renderBooklistManager() {
+    const cont = document.getElementById('booklistContainer');
+    let html = '';
+    Object.keys(allBooklists).forEach(id => {
+        const list = allBooklists[id];
+        html += `
+        <div class="list-item-card" onclick="viewListDetail('${id}')">
+            <div>
+                <span style="font-weight:600;">${list.name}</span>
+                <div style="font-size:12px; color:#888;">共 ${list.books.length} 本书</div>
+            </div>
+            <div style="color:var(--p-primary)">查看 →</div>
+        </div>`;
+    });
+    cont.innerHTML = html || '<div style="text-align:center; color:#999; padding:20px;">暂无书单</div>';
+}
+
+async function createBooklist() {
+    const name = document.getElementById('newListName').value.trim();
+    if(!name) return;
+    await fetch('/api/booklists/create', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name}) });
+    document.getElementById('newListName').value = '';
+    openBooklists(); // 刷新
+}
+
+function viewListDetail(listId) {
+    const list = allBooklists[listId];
+    if (!list) {
+        showMsg("该书单不存在", "error");
+        return;
+    }
+    document.getElementById('currentListName').innerText = list.name;
+    const wantCont = document.getElementById('col-want');
+    const doneCont = document.getElementById('col-done');
+    wantCont.innerHTML = ''; doneCont.innerHTML = '';
+
+    list.books.forEach(book => {
+        const bg = stringToColor(book.title);
+        const html = `
+        <div class="mini-book-card">
+            <div class="mini-book-info">
+                <div class="mini-book-dot" style="background:${bg}"></div>
+                <div style="font-size:14px; font-weight:500;">${book.title}</div>
+            </div>
+            <div class="action-group">
+                ${book.status === 'want' ? 
+                    `<button class="p-btn p-btn-sm" onclick="updateBookStatus('${listId}', '${book.key}', 'done')">✅</button>` : 
+                    `<button class="p-btn p-btn-sm" onclick="updateBookStatus('${listId}', '${book.key}', 'want')">⏪</button>`}
+                <button class="p-btn p-btn-sm p-btn-danger" style="padding:2px 5px;" onclick="updateBookStatus('${listId}', '${book.key}', '', 'remove')">×</button>
+            </div>
+        </div>`;
+        if(book.status === 'want') wantCont.innerHTML += html;
+        else doneCont.innerHTML += html;
+    });
+    PureUI.modal.open('listDetailModal');
+}
+
+async function updateBookStatus(listId, bookKey, status, action='update') {
+    const res = await fetch('/api/booklists/update_book', {
+        method:'POST', headers:{'Content-Type':'application/json'}, 
+        body:JSON.stringify({list_id: listId, book_key: bookKey, status, action})
+    });
+    const json = await res.json();
+    allBooklists = json.data;
+    viewListDetail(listId); // 刷新详情
+}
+
+// 补充功能：在主界面表格增加“加入书单”入口
+// 你可以在 renderTable 的 actionGroup 里加个按钮，调用这个函数
+async function addBookToList(bookKey, bookTitle) {
+    const listId = prompt("请输入书单ID (可在书单管理查看)"); // 这里简单实现，之后可以改成下拉选择
+    if(!listId) return;
+    await fetch('/api/booklists/add_book', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ list_id: listId, book_data: {key: bookKey, title: bookTitle, status: 'want'} })
+    });
+    showMsg("已加入想看清单", "success");
+}
         // 辅助: 颜色生成
         function stringToColor(str) {
             let hash = 0; for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
@@ -358,49 +544,89 @@
         }
 
         // 列表/网格渲染
-        function renderTable(data) {
-            currentData = data;
-            const container = document.getElementById('tableContainer');
-            let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@'));
-            if (activeFilter !== 'all') filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
-            
-            if (filteredKeys.length === 0) { container.innerHTML = '<div style="text-align:center;padding:40px;color:#999">空空如也</div>'; return; }
-            filteredKeys.sort();
+        // === 在 index.html 的 <script> 标签内 ===
 
-            if (currentView === 'grid') return renderGrid(data, container, filteredKeys);
+function renderTable(data) {
+    currentData = data;
+    const container = document.getElementById('tableContainer');
+    let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@'));
+    
+    // 标签过滤逻辑
+    if (activeFilter !== 'all') {
+        filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
+    }
+    
+    if (filteredKeys.length === 0) { 
+        container.innerHTML = '<div style="text-align:center;padding:40px;color:#999">空空如也</div>'; 
+        return; 
+    }
+    filteredKeys.sort();
 
-            let html = '<table>';
-            filteredKeys.forEach(k => {
-                const v = data[k];
-                const tags = globalTags[k] || [];
-                const parts = k.split('/');
-                const displayName = parts[parts.length-1];
-                const isLink = v.startsWith('http') || v.startsWith('epub:');
-                const isEpub = v.startsWith('epub:');
+    // 如果是网格视图，保持不变
+    if (currentView === 'grid') return renderGrid(data, container, filteredKeys);
 
-                let tagsHtml = tags.map(t => `<span class="p-tag" style="font-size:10px; margin-right:4px;">${t}</span>`).join('');
-                let linkHtml = isEpub ? `<span style="color:var(--p-success); font-size:12px;">📦 本地</span>` : (isLink ? `<a href="${v}" target="_blank" style="color:#999; font-size:12px;">🔗 链接</a>` : `<span style="color:#333;">${v}</span>`);
-                
-                let btns = `
-                    <button class="p-btn p-btn-sm" style="padding:2px 6px;" onclick="PureUI.copy('${v}')" title="复制">📋</button>
-                    <button class="p-btn p-btn-sm" style="padding:2px 6px;" onclick="openTagModal('${k}')" title="标签">🏷️</button>
-                    ${isLink ? `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary" style="text-decoration:none;" target="_blank">阅读</a>` : ''}
-                `;
+    let html = '<table class="p-table">'; // 确保加上 p-table 类以获得更好的默认样式
+    filteredKeys.forEach(k => {
+        const v = data[k];
+        const tags = globalTags[k] || [];
+        const parts = k.split('/');
+        const displayName = parts[parts.length-1];
+        
+        const isLink = v.startsWith('http') || v.startsWith('https');
+        const isEpub = v.startsWith('epub:');
 
-                html += `<tr>
-                    <td>
-                        <div class="key-final">${displayName}</div>
-                        <div style="margin-top:4px;">${tagsHtml}</div>
-                    </td>
-                    <td style="text-align:right;">
-                        <div style="margin-bottom:4px;">${linkHtml}</div>
-                        <div class="action-group">${btns}</div>
-                    </td>
-                </tr>`;
-            });
-            html += '</table>';
-            container.innerHTML = html;
+        // 1. 生成标签 HTML
+        let tagsHtml = tags.map(t => 
+            `<span class="p-tag" style="font-size:10px; margin-right:4px;">${t}</span>`
+        ).join('');
+        
+        // 2. [关键修改] 生成链接按钮 HTML (扁平化风格)
+        // 我们使用 p-btn-sm 但去掉边框和背景，让它看起来像个图标链接，但能完美对齐
+        let linkElement = '';
+        if (isEpub) {
+            linkElement = `<span class="p-btn p-btn-sm" style="border:none; background:transparent; color:var(--p-success); cursor:default; padding-left:0;">📦 本地</span>`;
+        } else if (isLink) {
+            // 设置 text-decoration:none 去掉下划线，display:inline-flex 保证垂直居中
+            linkElement = `<a href="${v}" target="_blank" class="p-btn p-btn-sm" style="border:none; background:transparent; color:#9ca3af; text-decoration:none; margin-right:5px;" title="${v}">🔗 链接</a>`;
+        } else {
+            // 纯文本内容，限制最大宽度防止撑开
+            linkElement = `<span class="p-btn p-btn-sm" style="border:none; background:transparent; color:#d1d5db; cursor:default; max-width:100px; overflow:hidden; text-overflow:ellipsis; padding-left:0;">${v}</span>`;
         }
+
+        // 3. [关键修改] 按钮组：将 linkElement 放在最前面
+        // 增加了一个小竖线分割线 (span style="border-left...") 让视觉区分更明显
+        let actionGroup = `
+            <div class="action-group" style="height:32px;">
+                ${linkElement}
+                
+                <!-- 小分割线，让布局更精致 -->
+                <span style="border-left:1px solid #e5e7eb; height:14px; margin:0 6px;"></span>
+
+                <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="PureUI.copy('${v}')" title="复制链接">📋</button>
+                <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="openAddToListModal('${k}', '${displayName}')" title="加入书单">🔖</button>
+                <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="openTagModal('${k}')" title="编辑标签">🏷️</button>
+                
+                ${isLink || isEpub ? 
+                    `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary" style="text-decoration:none; margin-left:4px;" target="_blank">阅读</a>` 
+                    : ''
+                }
+            </div>
+        `;
+
+        // 4. 组装行 (现在右侧 td 只有一行 action-group)
+        html += `<tr>
+            <td style="vertical-align: middle;">
+                <div class="key-final" style="font-size:15px; font-weight:600; color:#374151;">${displayName}</div>
+                <div style="margin-top:2px;">${tagsHtml}</div>
+            </td>
+            <td style="text-align:right; vertical-align: middle; width: 1%; white-space: nowrap;">
+                ${actionGroup}
+            </td>
+        </tr>`;
+    });
+    html += '</table>';
+    container.innerHTML = html;
+}
 
         function renderGrid(data, container, keys) {
             let html = '<div class="bookshelf-grid">';
@@ -419,6 +645,7 @@
                     </div>
                     <div class="book-info-row">
                         <span>${title}</span>
+                        <button class="p-btn p-btn-sm" style="padding:2px;" onclick="event.stopPropagation(); openAddToListModal('${k}', '${title}')" title="加入书单">🔖</button>
                         <button class="p-btn p-btn-sm" style="padding:2px;" onclick="event.stopPropagation(); openTagModal('${k}')">🏷️</button>
                     </div>
                 </div>`;
@@ -465,9 +692,40 @@
                     </div>`).join('');
             } else div.innerHTML = '<div style="text-align:center; padding:10px;">无结果</div>';
         }
-        function selectResult(k, v) {
-            document.getElementById('key').value = k; document.getElementById('value').value = v;
-            PureUI.modal.close('searchModal'); showMsg(`已填入: ${k}`, 'success');
+        // === 替换 index.html 中的 selectResult 函数 ===
+        async function selectResult(k, v) {
+            // 1. 先填入 Key
+            document.getElementById('key').value = k;
+            
+            // 2. Value 框显示加载状态，提升体验
+            const vInput = document.getElementById('value');
+            vInput.value = "正在智能解析第一章...";
+            vInput.classList.add('loading'); // 可选：你可以给这个类加点灰色样式
+            
+            // 3. 关闭模态框
+            PureUI.modal.close('searchModal'); 
+            
+            try {
+                // 4. 请求后端解析第一章
+                const res = await fetch(`${API_URL}/api/resolve_head`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ url: v })
+                });
+                const data = await res.json();
+                
+                if (data.status === 'success' && data.url) {
+                    vInput.value = data.url;
+                    showMsg(`✅ 已定位到第一章`, 'success');
+                } else {
+                    // 失败则回退到目录页
+                    vInput.value = v;
+                    showMsg(`⚠️ 解析第一章超时，已填入目录`, 'info');
+                }
+            } catch (e) {
+                console.error(e);
+                vInput.value = v; // 出错也回退
+            }
         }
 
         async function handleDrop(e) {

@@ -1,5 +1,22 @@
 /* --- START OF FILE pure2.1.css (v2.1 Final: Light Lock + Full Features + Mobile) --- */
+/* 书单看板样式 */
+.booklist-kanban { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+.kanban-column { background: #f3f4f6; padding: 15px; border-radius: 12px; min-height: 300px; }
+.kanban-title { font-weight: bold; margin-bottom: 15px; display: flex; align-items: center; gap: 8px; color: #4b5563; }
 
+.mini-book-card {
+    background: white; padding: 10px; border-radius: 8px; margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #eee;
+    display: flex; justify-content: space-between; align-items: center;
+}
+.mini-book-info { display: flex; align-items: center; gap: 10px; }
+.mini-book-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.list-item-card {
+    padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 10px;
+    cursor: pointer; transition: 0.2s; display: flex; justify-content: space-between;
+}
+.list-item-card:hover { border-color: var(--p-primary); background: #f9fafb; }
 :root {
     /* 1. 核心修复：强制声明亮色模式，禁止浏览器自动变黑 */
     color-scheme: light; 
