@@ -755,14 +755,17 @@ class SearchHelper:
 # 2. NovelCrawler - 负责抓取目录和正文
 # ==========================================
 
+# ==========================================
+# 2. NovelCrawler - 核心抓取类 (已修复适配器调用名)
+# ==========================================
 class NovelCrawler:
     def __init__(self):
         self.impersonate = "chrome110"
         self.timeout = 15
-        self.proxies = getproxies() # 自动获取系统代理
+        self.proxies = getproxies() # 自动获取系统代理配置
 
     def _fetch_page_smart(self, url, retry=3):
-        """基础请求：支持模拟浏览器、智能编码转换及GBK自动降级"""
+        """基础请求：模拟浏览器、智能编码转换及GBK自动降级"""
         for i in range(retry):
             try:
                 headers = {
@@ -772,7 +775,6 @@ class NovelCrawler:
                 resp = cffi_requests.get(url, impersonate=self.impersonate, timeout=self.timeout, headers=headers, allow_redirects=True, proxies=self.proxies)
                 
                 try:
-                    # 尝试读取 Meta 标签编码
                     tree = lxml_html.fromstring(resp.content)
                     charset = tree.xpath('//meta[contains(@content, "charset")]/@content') or tree.xpath('//meta/@charset')
                     enc = 'utf-8'
@@ -781,7 +783,6 @@ class NovelCrawler:
                         enc = match.group(1) if match else charset[0]
                     return resp.content.decode(enc)
                 except:
-                    # 编码识别失败，尝试中国小说站常用的 GBK 系列
                     for e in ['utf-8', 'gb18030', 'gbk', 'big5']:
                         try: return resp.content.decode(e)
                         except: continue
@@ -791,34 +792,22 @@ class NovelCrawler:
         return None
 
     def _get_smart_title(self, soup):
-        """
-        核心优化：智能识别章节标题，跳过站点Logo
-        """
-        # 1. 尝试寻找带有 title, chapter, book, name 等类名的 h1
+        """智能识别章节标题，跳过站点Logo"""
         h1_title = soup.find('h1', class_=re.compile(r'title|chapter|book|name', re.I))
-        if h1_title:
-            return h1_title.get_text(strip=True)
+        if h1_title: return h1_title.get_text(strip=True)
 
-        # 2. 遍历所有 h1，排除掉包含“笔趣阁”或“logo”标签的那个
         h1s = soup.find_all('h1')
         for h in h1s:
             txt = h.get_text(strip=True)
-            # 如果标题太短（可能是Logo）或者包含已知的站点名称，则跳过
             if len(txt) <= 4 or any(x in txt for x in ["笔趣阁", "小说网", "阅读器"]):
-                if "logo" in str(h.get('class', '')).lower():
-                    continue
-                # 如果这个h1是在导航栏里，也跳过
-                if h.find_parent(['nav', 'header']):
-                    continue
+                if "logo" in str(h.get('class', '')).lower(): continue
+                if h.find_parent(['nav', 'header']): continue
             return txt
 
-        # 3. 兜底：从 <title> 标签中截取，并去除多余的后缀
         if soup.title:
             t_text = soup.title.get_text(strip=True)
-            # 常见分隔符切分，取第一段
             t_text = re.split(r'[_—|-]', t_text)[0].strip()
             return t_text
-            
         return "未知章节"
 
     def _clean_text_lines(self, text):
@@ -829,30 +818,24 @@ class NovelCrawler:
         for line in text.split('\n'):
             line = line.replace('\xa0', ' ').strip()
             if not line or len(line) < 2: continue
-            # 过滤超短且包含干扰词的行
             if len(line) < 50 and any(re.search(p, line, re.I) for p in junk): continue
             if "{" in line and "function" in line: continue
             lines.append(line)
         return lines
 
     def _extract_content_smart(self, soup):
-        """智能正文提取算法（含神秘复苏特殊 ID 适配）"""
-        # 1. 优先匹配已知的正文 ID
+        """智能正文提取算法"""
         for cid in ['txt', 'content', 'chaptercontent', 'BookText', 'showtxt', 'nr1', 'read-content']:
             div = soup.find(id=cid)
             if div:
-                # 移除正文内部的无用链接（如：报错、记住网址等）
                 for a in div.find_all('a'): a.decompose()
                 return self._clean_text_lines(div.get_text('\n'))
-        
-        # 2. 文本密度算法兜底
         best_div, max_score = None, 0
         for div in soup.find_all('div'):
             if div.get('id') and re.search(r'(nav|foot|header|menu)', str(div.get('id')), re.I): continue
             txt = div.get_text(strip=True)
             score = len(txt) - (len(div.find_all('a')) * 5)
             if score > max_score: max_score, best_div = score, div
-        
         return self._clean_text_lines(best_div.get_text('\n')) if best_div else ["正文解析失败"]
 
     def _parse_chapters_from_soup(self, soup, base_url):
@@ -868,52 +851,41 @@ class NovelCrawler:
                     if full: curr.append({'title': txt, 'url': full})
             if len(curr) > max_links: max_links, links = len(curr), curr
         return links
+
+    # --- 调度入口 ---
     def run(self, url):
-        # 自动探测插件
+        # 1. 尝试匹配插件
         adapter = plugin_manager.find_match(url)
         if adapter:
-            # 如果有插件，完全交由插件处理
+            print(f"[Crawler] 使用适配器插件: {adapter.__class__.__name__}")
             return adapter.run(self, url)
         
-        # 如果没有插件，执行你之前的通用“缝合”逻辑
+        # 2. 如果没插件，执行通用的“缝合”逻辑
         return self._general_run_logic(url)
 
     def get_toc(self, toc_url):
+        # 1. 尝试匹配插件
         adapter = plugin_manager.find_match(toc_url)
         if adapter:
             return adapter.get_toc(self, toc_url)
         
-        # 如果没有插件，执行通用的目录解析逻辑
+        # 2. 如果没有插件，执行通用的目录解析逻辑
         return self._general_toc_logic(toc_url)
-    # def run(self, url):
-    #     # 1. 尝试匹配专项插件
-    #     adapter = adapter_manager.get_adapter(url)
-    #     if adapter:
-    #         print(f"[Crawler] Using specialized adapter: {adapter.__class__.__name__}")
-    #         return adapter.run(self, url) # 把自己传进去，方便插件复用抓取方法
-            
-    #     # 2. 如果没插件，走原来的“全能通用缝合逻辑”
-    #     return self.general_run(url)
-    def general_run(self, url):
-        """
-        阅读解析核心：支持起始页归一化、多页自动缝合、上一章精准溯源
-        """
-        # 起始页归一化逻辑
+
+    # --- 通用逻辑实现 (名称已与上方调用对齐) ---
+    def _general_run_logic(self, url):
+        """通用的多页缝合阅读解析逻辑"""
         base_url = url
         if "_" in url:
             normalized = re.sub(r'_\d+\.html', '.html', url)
-            if normalized != url:
-                base_url = normalized
+            if normalized != url: base_url = normalized
 
         combined_content = []
         first_page_meta = None
         current_url = base_url
         visited_urls = {url, base_url}
-        max_pages = 8 
-        page_count = 0
+        max_pages, page_count = 8, 0
         original_title = ""
-
-        # 获取章节 ID 以识别分页
         chap_id_match = re.search(r'/(\d+)(?:_\d+)?\.html', base_url)
         current_chap_id = chap_id_match.group(1) if chap_id_match else ""
 
@@ -921,44 +893,32 @@ class NovelCrawler:
             html = self._fetch_page_smart(current_url)
             if not html: break
             soup = BeautifulSoup(html, 'html.parser')
-            
-            # 使用改进后的智能标题获取方法
             current_title = self._get_smart_title(soup)
             if page_count == 0:
                 original_title = current_title
             elif current_title != original_title and len(current_title) > 3:
-                # 标题发生实质性变化，说明已经进入下一章，停止合并
                 break
 
             content = self._extract_content_smart(soup)
-            # 如果正文开头重复了标题，剔除它
             if content and original_title in content[0]: content = content[1:]
             combined_content.extend(content)
 
             next_page_url, next_chapter_url, prev_chapter_url, toc_url = None, None, None, None
-
-            # 提取导航
             for a in soup.find_all('a'):
                 txt = a.get_text(strip=True).replace(' ', '')
                 href = a.get('href')
                 if not href or href.startswith('javascript'): continue
                 full = urljoin(current_url, href)
-
                 if "下一页" in txt or "下—页" in txt or re.search(r'\(\d+/\d+\)', txt):
                     if current_chap_id and current_chap_id in href: next_page_url = full
                     else: next_chapter_url = full
-                elif "下一章" in txt or "下章" in txt:
-                    next_chapter_url = full
-                
+                elif "下一章" in txt or "下章" in txt: next_chapter_url = full
                 if page_count == 0:
-                    if "上一章" in txt or "上章" in txt:
-                        prev_chapter_url = full
+                    if "上一章" in txt or "上章" in txt: prev_chapter_url = full
                     elif "上一页" in txt or "上页" in txt:
                         if current_chap_id and current_chap_id not in href: prev_chapter_url = full
-                
                 if "目录" in txt: toc_url = full
 
-            # 特殊 ID 兜底（神秘复苏适配）
             for aid in ['pb_prev', 'prev_url', 'pb_next', 'next_url', 'pb_mulu']:
                 tag = soup.find(id=aid)
                 if not tag or not tag.get('href'): continue
@@ -985,18 +945,13 @@ class NovelCrawler:
             first_page_meta['content'] = combined_content
             return first_page_meta
         return None
-    # def get_toc(self, toc_url):
-    #     adapter = adapter_manager.get_adapter(toc_url)
-    #     if adapter:
-    #         return adapter.get_toc(self, toc_url)
-    #     return self.general_get_toc(toc_url) # 原有的通用目录解析
-    def general_get_toc(self, toc_url):
-        """获取目录：支持并发抓取及分页识别"""
+
+    def _general_toc_logic(self, toc_url):
+        """通用的目录抓取逻辑"""
         html = self._fetch_page_smart(toc_url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
         all_chaps = self._parse_chapters_from_soup(soup, toc_url)
-        
         pages = set()
         for s in soup.find_all('select'):
             for o in s.find_all('option'):
@@ -1004,7 +959,6 @@ class NovelCrawler:
                 if val:
                     full = urljoin(toc_url, val)
                     if full.rstrip('/') != toc_url.rstrip('/'): pages.add(full)
-        
         if pages:
             with ThreadPoolExecutor(max_workers=5) as exe:
                 results = exe.map(lambda u: self._parse_chapters_from_soup(BeautifulSoup(self._fetch_page_smart(u) or "", 'html.parser'), toc_url), sorted(list(pages)))
@@ -1012,7 +966,6 @@ class NovelCrawler:
                     urls = set(c['url'] for c in all_chaps)
                     for c in sub:
                         if c['url'] not in urls: all_chaps.append(c); urls.add(c['url'])
-        
         return {'title': self._get_smart_title(soup), 'chapters': all_chaps}
 
     def get_first_chapter(self, toc_url):
