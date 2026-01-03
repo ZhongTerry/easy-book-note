@@ -331,17 +331,44 @@
             if (!p.contains(e.target) && !b.contains(e.target)) p.classList.remove('active');
         });
         const nextBtn = document.getElementById('link-next');
-    if (nextBtn && nextBtn.href) {
-        // 延迟 2 秒开启预加载，避免和主页面抢带宽
-        setTimeout(() => {
-            console.log("🚀 正在后台预加载下一页内容...");
-            // 发起一个静默请求。不需要处理返回值，
-            // 目的只是让 Flask 后端去爬取并存入 CacheManager。
-            fetch(nextBtn.href, { mode: 'no-cors' })
-                .then(() => console.log("✅ 预加载完成，下次点击将秒开"))
-                .catch(e => console.log("预加载失败", e));
-        }, 2000);
-    }
+        
+        // 只有当存在下一章，且不是“禁用”状态时才预加载
+        if (nextBtn && !nextBtn.classList.contains('disabled')) {
+            // 从按钮的 href 中提取真实的 url 参数
+            // 格式: /read?url=https%3A%2F%2F...&key=...
+            try {
+                const urlObj = new URL(nextBtn.href, window.location.origin);
+                const targetUrl = urlObj.searchParams.get('url');
+
+                if (targetUrl) {
+                    // 延迟 3 秒执行，优先保证当前页面的图片/资源加载完毕
+                    setTimeout(() => {
+                        console.log("🚀 [Prefetch] 正在预加载下一章...");
+                        
+                        fetch('/api/prefetch', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ url: targetUrl })
+                        })
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.status === 'success') {
+                                console.log("✅ [Prefetch] 下一章已缓存，翻页将秒开！");
+                                // 可选：给按钮加个特效提示已就绪
+                                // nextBtn.style.border = "1px solid #28a745"; 
+                            } else if (data.status === 'skipped') {
+                                console.log("⚡ [Prefetch] 命中缓存，无需重复抓取。");
+                            } else {
+                                console.warn("❌ [Prefetch] 预加载失败:", data.msg);
+                            }
+                        })
+                        .catch(err => console.error("❌ [Prefetch] 网络错误:", err));
+                    }, 3000); // 3000ms = 3秒延迟
+                }
+            } catch (e) {
+                console.error("解析下一章链接失败", e);
+            }
+        }
     };
     function showToast(m) { var x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(function(){ x.className=x.className.replace("show",""); },3000); }
     // === 核心功能 4: 阅读计时器与防挂机 ===

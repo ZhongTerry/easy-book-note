@@ -1,0 +1,86 @@
+from flask import Blueprint, request, jsonify
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from shared import pro_required
+from managers import offline_manager
+
+# 假设你把爬虫逻辑移到了 spider_core.py，并实例化了 crawler_instance
+# 如果没移，你需要从 dbserver import crawler (但这会导致循环引用)，所以强烈建议移出爬虫类
+from spider_core import crawler_instance as crawler 
+
+pro_bp = Blueprint('pro', __name__)
+
+# routes/pro_bp.py
+
+@pro_bp.route('/api/pro/download_book', methods=['POST'])
+@pro_required
+def api_pro_download_book():
+    book_key = request.json.get('key')
+    input_url = request.json.get('url') # 这是你当前看的某一章
+    
+    if not book_key or not input_url:
+        return jsonify({"status": "error", "msg": "Missing params"})
+
+    def download_task(u_key, start_url):
+        print(f"[Pro] 启动离线任务: {u_key}")
+        
+        toc = None
+        real_toc_url = None
+
+        # 1. 智能判断：如果 URL 以 .html 结尾，大概率是章节，不是目录
+        # 或者先尝试解析，如果章节数太少，也认为不对
+        is_chapter_url = ".html" in start_url
+        
+        if not is_chapter_url:
+            # 看起来像目录，先试着抓一下
+            toc = crawler.get_toc(start_url)
+        
+        # 2. 校验逻辑：如果没抓到，或者抓到的章节少于 20 章 (防止误判“最新章节列表”)
+        if not toc or len(toc['chapters']) < 20:
+            print(f"[Pro] URL 似乎不是全本目录 (仅 {len(toc['chapters']) if toc else 0} 章)，尝试寻找真实目录...")
+            
+            # 访问当前页面，寻找“目录”按钮的链接
+            page_data = crawler.run(start_url)
+            if page_data and page_data.get('toc_url'):
+                real_toc_url = page_data['toc_url']
+                print(f"[Pro] 🎯 定位到真实目录: {real_toc_url}")
+                # 再次尝试抓取目录
+                toc = crawler.get_toc(real_toc_url)
+            else:
+                print("[Pro] ❌ 无法定位目录页，任务终止。")
+                return
+
+        if not toc or not toc['chapters']: 
+            print("[Pro] ❌ 目录解析失败或为空")
+            return
+        
+        print(f"[Pro] ✅ 目录获取成功，共 {len(toc['chapters'])} 章，开始并发下载...")
+
+        # 3. 并发下载全书
+        full_data = {}
+        # 建议根据服务器配置调整 max_workers，10-15 是比较激进但高效的值
+        with ThreadPoolExecutor(max_workers=12) as exe:
+            future_to_url = {exe.submit(crawler.run, c['url']): c['url'] for c in toc['chapters']}
+            
+            # 进度计数
+            total = len(toc['chapters'])
+            done = 0
+            
+            for future in as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    data = future.result()
+                    if data: 
+                        full_data[url] = data
+                except: pass
+                
+                done += 1
+                if done % 50 == 0:
+                    print(f"[Pro] 下载进度: {done}/{total}")
+        
+        # 4. 保存
+        offline_manager.save_book(u_key, full_data)
+        print(f"[Pro] 🎉 离线下载完成: {u_key} (最终缓存 {len(full_data)} 章)")
+
+    threading.Thread(target=download_task, args=(book_key, input_url)).start()
+    return jsonify({"status": "success", "msg": "🚀 全本离线任务已启动，正在后台高速下载..."})

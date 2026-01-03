@@ -204,12 +204,23 @@
 <body>
 
     <!-- 用户栏 -->
+    <!-- index.html -->
     <div id="userBar">
         <div style="display: flex; align-items: center; gap: 10px;">
             <img id="userAvatar" src="" width="32" style="border-radius: 50%; background: #eee;">
-            <span id="userName" style="font-weight: 600;">Loading...</span>
+            <div>
+                <span id="userName" style="font-weight: 600; display:block; line-height:1.2;">Loading...</span>
+                <!-- 新增：显示角色标签 -->
+                <span id="userRoleBadge" class="p-tag" style="font-size:10px; padding:0 4px; display:none;">User</span>
+            </div>
         </div>
-        <a href="/logout" class="p-btn p-btn-sm p-btn-danger" style="text-decoration: none;">🚪 登出</a>
+        
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <!-- 新增：管理面板入口 (默认隐藏) -->
+            <a href="/admin" id="adminEntryBtn" class="p-btn p-btn-sm" style="display:none; background:#374151; color:white; text-decoration:none;">🔧 管理后台</a>
+            
+            <a href="/logout" class="p-btn p-btn-sm p-btn-danger" style="text-decoration: none;">🚪 登出</a>
+        </div>
     </div>
 
     <div class="container">
@@ -554,12 +565,37 @@ async function addBookToList(bookKey, bookTitle) {
         // 初始化
         window.onload = function() {
             // 用户
-            fetch('/api/me').then(r=>r.json()).then(user => {
-                if(user.username) {
-                    document.getElementById('userName').innerText = user.username;
-                    if(user.avatar) document.getElementById('userAvatar').src = user.avatar;
-                }
-            });
+            // index.html 中的 script
+
+// ...
+fetch('/api/me').then(r => r.json()).then(user => {
+    if (user.username) {
+        document.getElementById('userName').innerText = user.username;
+        if (user.avatar) document.getElementById('userAvatar').src = user.avatar;
+        
+        // [新增] 角色判断逻辑
+        const role = user.role || 'user';
+        const roleBadge = document.getElementById('userRoleBadge');
+        const adminBtn = document.getElementById('adminEntryBtn');
+
+        // 显示角色标签
+        if (role === 'admin') {
+            roleBadge.innerText = "ADMIN";
+            roleBadge.style.display = "inline-block";
+            roleBadge.style.background = "#ef4444"; // 红色
+            roleBadge.style.color = "white";
+            
+            // [核心] 如果是管理员，显示入口按钮
+            adminBtn.style.display = "inline-flex";
+        } else if (role === 'pro') {
+            roleBadge.innerText = "PRO";
+            roleBadge.style.display = "inline-block";
+            roleBadge.style.background = "#fbbf24"; // 金色
+            roleBadge.style.color = "white";
+        }
+    }
+});
+// ...
 
             // 数据
             fetch('/api/last_read').then(r=>r.json()).then(async d => {
@@ -719,7 +755,7 @@ let actionGroup = `
         }
         
         <span class="v-line"></span>
-
+        <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="downloadBook('${k}', '${v}', '${displayName}')" title="离线全本(Pro)">📥</button>
         <button class="p-btn p-btn-sm" onclick="PureUI.copy('${v}')" title="复制">📋</button>
         <button class="p-btn p-btn-sm" onclick="openAddToListModal('${k}', '${displayName}')" title="书单">🔖</button>
         <button class="p-btn p-btn-sm" onclick="openTagModal('${k}')" title="标签">🏷️</button>
@@ -812,6 +848,36 @@ let actionGroup = `
                     </div>`).join('');
             } else div.innerHTML = '<div style="text-align:center; padding:10px;">无结果</div>';
         }
+        async function downloadBook(key, url, title) {
+    // 1. 简单的权限检查 (可选，提升体验)
+    // 假设 api/me 返回了 role，如果没有 role 字段，说明还没刷新或者后端没传
+    // 这里直接发请求，让后端判断权限更安全
+    
+    if(!confirm(`☁️ 离线下载确认\n\n即将开始下载《${title}》的全部章节。\n这可能需要 1-3 分钟，期间请勿频繁重启服务器。\n\n确定要开始吗？`)) {
+        return;
+    }
+
+    try {
+        showMsg("🚀 正在提交离线任务...", "info");
+        
+        const res = await fetch('/api/pro/download_book', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: key, url: url }) // 发送当前进度的 URL
+        });
+        
+        const data = await res.json();
+        
+        if (data.status === 'success') {
+            showMsg(data.msg, "success");
+        } else {
+            // 如果是权限不足 (403)，提示升级
+            showMsg("❌ " + (data.message || "请求失败"), "error");
+        }
+    } catch (e) {
+        showMsg("网络错误", "error");
+    }
+}
         // === 替换 index.html 中的 selectResult 函数 ===
         async function selectResult(k, v) {
             // 1. 先填入 Key
