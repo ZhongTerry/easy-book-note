@@ -213,7 +213,7 @@
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
             
-            <button class="p-btn p-btn-danger" onclick="doAction('remove')">🗑️ 删除</button>
+            <button class="p-btn p-btn-danger" onclick="confirmDelete()">🗑️ 删除</button>
         </div>
 
         <div class="output">
@@ -431,7 +431,25 @@ function renderBooklistManager() {
     });
     cont.innerHTML = html || '<div style="text-align:center; color:#999; padding:20px;">暂无书单</div>';
 }
+// 专门处理删除确认的逻辑
+async function confirmDelete() {
+    const key = document.getElementById('key').value.trim();
+    
+    // 1. 检查是否输入了 Key
+    if (!key) {
+        showMsg('请输入要删除的 Key', 'error');
+        return;
+    }
 
+    // 2. 弹出原生确认框
+    // 提示信息包含具体的 Key 名称，防止删错
+    const warningText = `⚠️ 危险操作！\n\n确定要彻底删除 [${key}] 吗？\n这将清除该书的所有阅读进度和配置。`;
+    
+    if (confirm(warningText)) {
+        // 用户点击“确定”后才执行真正的删除
+        doAction('remove');
+    }
+}
 async function createBooklist() {
     const name = document.getElementById('newListName').value.trim();
     if(!name) return;
