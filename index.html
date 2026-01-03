@@ -26,7 +26,32 @@
     <!-- <meta name="color-scheme" content="light"> -->
     <style>
         /* === 布局修正 (颜色交给 pure2.1.css 管理) === */
-        
+        /* --- 按钮行移动端优化 --- */
+@media (max-width: 600px) {
+    .btn-row {
+        display: grid !important; /* 强制切换为网格布局 */
+        grid-template-columns: repeat(3, 1fr); /* 核心：每行平分显示 3 个按钮 */
+        gap: 8px !important;
+        margin-top: 15px !important;
+    }
+
+    .btn-row .p-btn {
+        width: 100%;
+        margin: 0;
+        padding: 12px 5px !important; /* 增加高度，方便手指点击 */
+        font-size: 13px !important;
+        flex: none !important; /* 禁用之前的 flex 属性 */
+        display: flex;
+        flex-direction: column; /* 图标和文字上下排列（可选，不换行则注释掉） */
+        gap: 4px;
+    }
+
+    /* 让“删除”按钮单独占满最后一行，防止误触且视觉更平衡 */
+    .p-btn-danger {
+        grid-column: span 3; 
+        margin-top: 5px;
+    }
+}
         /* 顶部用户栏 */
         #userBar {
             background: rgba(255,255,255,0.9); /* 保持半透明白 */
