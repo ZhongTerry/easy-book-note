@@ -905,7 +905,10 @@ def insert(): return jsonify(db.insert(request.json.get('key'), request.json.get
 @app.route('/manifest.json')
 def serve_manifest():
     return send_file('manifest.json')
-
+@app.route('/static/<path:filename>')
+def serve_static(filename):
+    # 假设你的 static 文件夹在 BASE_DIR/static
+    return send_from_directory(os.path.join(BASE_DIR, 'static'), filename)
 @app.route('/sw.js')
 def serve_sw():
     return send_file('sw.js')
