@@ -192,11 +192,26 @@
             <p>{{ line }}</p>
         {% endfor %}
     </div>
-    <div class="pagination">
-        {% if article.prev %}<a id="link-prev" href="/read?url={{ article.prev }}&key={{ db_key }}" class="page-btn">上一章</a>{% else %}<span class="page-btn disabled">无上一章</span>{% endif %}
-        {% if article.toc_url %}<a href="/toc?url={{ article.toc_url }}&key={{ db_key }}" class="page-btn" style="flex:0.4">目录</a>{% endif %}
-        {% if article.next %}<a id="link-next" href="/read?url={{ article.next }}&key={{ db_key }}" class="page-btn">下一章</a>{% else %}<span class="page-btn disabled">无下一章</span>{% endif %}
-    </div>
+    <!-- 找到 pagination 这一段 -->
+<div class="pagination">
+    {% if article.prev %}
+        <a id="link-prev" href="/read?url={{ article.prev }}&key={{ db_key }}" class="page-btn">上一章/页</a>
+    {% else %}
+        <span class="page-btn disabled">已是开头</span>
+    {% endif %}
+    
+    {% if article.toc_url %}
+        <a href="/toc?url={{ article.toc_url }}&key={{ db_key }}" class="page-btn" style="flex:0.4">目录</a>
+    {% endif %}
+
+    {% if article.next %}
+        <a id="link-next" href="/read?url={{ article.next }}&key={{ db_key }}" class="page-btn">
+            {% if article.next_type == 'page' %}下一页{% else %}下一章{% endif %}
+        </a>
+    {% else %}
+        <span class="page-btn disabled">已是末尾</span>
+    {% endif %}
+</div>
 </div>
 
 <div id="toast"></div>
@@ -315,6 +330,18 @@
             const p = document.getElementById('settingsPanel'), b = document.querySelector('button[title="设置"]');
             if (!p.contains(e.target) && !b.contains(e.target)) p.classList.remove('active');
         });
+        const nextBtn = document.getElementById('link-next');
+    if (nextBtn && nextBtn.href) {
+        // 延迟 2 秒开启预加载，避免和主页面抢带宽
+        setTimeout(() => {
+            console.log("🚀 正在后台预加载下一页内容...");
+            // 发起一个静默请求。不需要处理返回值，
+            // 目的只是让 Flask 后端去爬取并存入 CacheManager。
+            fetch(nextBtn.href, { mode: 'no-cors' })
+                .then(() => console.log("✅ 预加载完成，下次点击将秒开"))
+                .catch(e => console.log("预加载失败", e));
+        }, 2000);
+    }
     };
     function showToast(m) { var x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(function(){ x.className=x.className.replace("show",""); },3000); }
     // === 核心功能 4: 阅读计时器与防挂机 ===

@@ -762,10 +762,10 @@ class NovelCrawler:
     def __init__(self):
         self.impersonate = "chrome110"
         self.timeout = 15
-        self.proxies = getproxies() # 自动获取系统代理配置
+        self.proxies = getproxies()
 
     def _fetch_page_smart(self, url, retry=3):
-        """基础请求：模拟浏览器、智能编码转换及GBK自动降级"""
+        """基础请求：模拟浏览器并自动处理编码"""
         for i in range(retry):
             try:
                 headers = {
@@ -811,7 +811,7 @@ class NovelCrawler:
         return "未知章节"
 
     def _clean_text_lines(self, text):
-        """清洗正文行，剔除冗余和广告"""
+        """清洗正文"""
         if not text: return []
         junk = [r"一秒记住", r"最新章节", r"笔趣阁", r"上一章", r"下一章", r"加入书签", r"投推荐票", r"本章未完", r"未完待续", r"ps:"]
         lines = []
@@ -824,18 +824,20 @@ class NovelCrawler:
         return lines
 
     def _extract_content_smart(self, soup):
-        """智能正文提取算法"""
+        """智能正文提取"""
         for cid in ['txt', 'content', 'chaptercontent', 'BookText', 'showtxt', 'nr1', 'read-content']:
             div = soup.find(id=cid)
             if div:
                 for a in div.find_all('a'): a.decompose()
                 return self._clean_text_lines(div.get_text('\n'))
+        
         best_div, max_score = None, 0
         for div in soup.find_all('div'):
             if div.get('id') and re.search(r'(nav|foot|header|menu)', str(div.get('id')), re.I): continue
             txt = div.get_text(strip=True)
             score = len(txt) - (len(div.find_all('a')) * 5)
             if score > max_score: max_score, best_div = score, div
+        
         return self._clean_text_lines(best_div.get_text('\n')) if best_div else ["正文解析失败"]
 
     def _parse_chapters_from_soup(self, soup, base_url):
@@ -852,32 +854,29 @@ class NovelCrawler:
             if len(curr) > max_links: max_links, links = len(curr), curr
         return links
 
-    # --- 调度入口 ---
+    # --- 调度入口 (修复适配器调用) ---
     def run(self, url):
-        # 1. 尝试匹配插件
         adapter = plugin_manager.find_match(url)
         if adapter:
             print(f"[Crawler] 使用适配器插件: {adapter.__class__.__name__}")
             return adapter.run(self, url)
-        
-        # 2. 如果没插件，执行通用的“缝合”逻辑
         return self._general_run_logic(url)
 
     def get_toc(self, toc_url):
-        # 1. 尝试匹配插件
         adapter = plugin_manager.find_match(toc_url)
         if adapter:
             return adapter.get_toc(self, toc_url)
-        
-        # 2. 如果没有插件，执行通用的目录解析逻辑
         return self._general_toc_logic(toc_url)
 
-    # --- 通用逻辑实现 (名称已与上方调用对齐) ---
+    # --- 核心逻辑实现 ---
     def _general_run_logic(self, url):
-        """通用的多页缝合阅读解析逻辑"""
+        """
+        全能阅读解析：ID 优先级最高，强制缝合分页
+        """
+        # 1. 起始页归一化 (处理 _2.html 直接进入的情况)
         base_url = url
         if "_" in url:
-            normalized = re.sub(r'_\d+\.html', '.html', url)
+            normalized = re.sub(r'_\d+(\.html)?$', r'\1', url)
             if normalized != url: base_url = normalized
 
         combined_content = []
@@ -886,17 +885,23 @@ class NovelCrawler:
         visited_urls = {url, base_url}
         max_pages, page_count = 8, 0
         original_title = ""
-        chap_id_match = re.search(r'/(\d+)(?:_\d+)?\.html', base_url)
+
+        # 提取核心章节 ID (例如 39022759)
+        # 兼容 /123/456.html 和 /123/456/
+        chap_id_match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', base_url.split('?')[0])
         current_chap_id = chap_id_match.group(1) if chap_id_match else ""
 
         while page_count < max_pages:
             html = self._fetch_page_smart(current_url)
             if not html: break
             soup = BeautifulSoup(html, 'html.parser')
+            
+            # 标题一致性锁
             current_title = self._get_smart_title(soup)
             if page_count == 0:
                 original_title = current_title
             elif current_title != original_title and len(current_title) > 3:
+                # 标题变了，停止缝合
                 break
 
             content = self._extract_content_smart(soup)
@@ -904,39 +909,83 @@ class NovelCrawler:
             combined_content.extend(content)
 
             next_page_url, next_chapter_url, prev_chapter_url, toc_url = None, None, None, None
-            for a in soup.find_all('a'):
-                txt = a.get_text(strip=True).replace(' ', '')
-                href = a.get('href')
-                if not href or href.startswith('javascript'): continue
-                full = urljoin(current_url, href)
-                if "下一页" in txt or "下—页" in txt or re.search(r'\(\d+/\d+\)', txt):
-                    if current_chap_id and current_chap_id in href: next_page_url = full
-                    else: next_chapter_url = full
-                elif "下一章" in txt or "下章" in txt: next_chapter_url = full
-                if page_count == 0:
-                    if "上一章" in txt or "上章" in txt: prev_chapter_url = full
-                    elif "上一页" in txt or "上页" in txt:
-                        if current_chap_id and current_chap_id not in href: prev_chapter_url = full
-                if "目录" in txt: toc_url = full
 
-            for aid in ['pb_prev', 'prev_url', 'pb_next', 'next_url', 'pb_mulu']:
-                tag = soup.find(id=aid)
-                if not tag or not tag.get('href'): continue
-                t_url = urljoin(current_url, tag['href'])
-                if 'prev' in aid and page_count == 0 and not prev_chapter_url:
-                    if current_chap_id and current_chap_id not in tag['href']: prev_chapter_url = t_url
-                elif 'next' in aid and not next_chapter_url:
-                    if current_chap_id and current_chap_id in tag['href']: next_page_url = t_url
-                    else: next_chapter_url = t_url
-                elif 'mulu' in aid and not toc_url: toc_url = t_url
+            # === 策略一：ID 独裁模式 (针对笔趣阁类) ===
+            # 直接寻找特定 ID，如果找到，根据 href 特征直接定性
+            found_by_id = False
+            
+            # 1. 下一页/下一章 (ID 匹配)
+            for nid in ['next_url', 'pb_next', 'linkNext']:
+                tag = soup.find(id=nid)
+                if tag and tag.get('href'):
+                    full = urljoin(current_url, tag['href'])
+                    found_by_id = True
+                    # 核心判断：链接里是否有下划线，或者是否包含当前章节ID
+                    is_pagination = "_" in tag['href'] or (current_chap_id and current_chap_id in tag['href'])
+                    
+                    # 还要排除掉看起来像下一章的链接 (比如 ID 变了)
+                    # 如果 current_chap_id = 100, href = 101.html -> Next Chapter
+                    # 如果 current_chap_id = 100, href = 100_2.html -> Next Page
+                    if is_pagination:
+                        next_page_url = full
+                    else:
+                        next_chapter_url = full
+                    break
+            
+            # 2. 上一章 (ID 匹配)
+            for pid in ['prev_url', 'pb_prev', 'linkPrev']:
+                tag = soup.find(id=pid)
+                if tag and tag.get('href'):
+                    full = urljoin(current_url, tag['href'])
+                    if page_count == 0: # 只有第一页需要记录上一章
+                        # 如果上一页链接不包含本章ID，那就是上一章
+                        if not (current_chap_id and current_chap_id in tag['href']):
+                            prev_chapter_url = full
+                    break
 
+            # 3. 目录 (ID 匹配)
+            for mid in ['info_url', 'pb_mulu']:
+                tag = soup.find(id=mid)
+                if tag and tag.get('href'):
+                    toc_url = urljoin(current_url, tag['href'])
+                    break
+
+            # === 策略二：全文扫描兜底 (仅当 ID 没找到时启用) ===
+            if not found_by_id and not next_page_url and not next_chapter_url:
+                for a in soup.find_all('a'):
+                    txt = a.get_text(strip=True).replace(' ', '')
+                    href = a.get('href')
+                    if not href or href.startswith('javascript'): continue
+                    full = urljoin(current_url, href)
+
+                    if "下一页" in txt or "下—页" in txt or re.search(r'\(\d+/\d+\)', txt):
+                        if current_chap_id and current_chap_id in href: next_page_url = full
+                        else: next_chapter_url = full # 如果文字是下一页但链接完全不同，可能也是下一章
+                    elif "下一章" in txt or "下章" in txt:
+                        next_chapter_url = full
+                    
+                    if page_count == 0:
+                        if "上一章" in txt or "上章" in txt: prev_chapter_url = full
+                        elif "上一页" in txt:
+                            if current_chap_id and current_chap_id not in href: prev_chapter_url = full
+                    
+                    if "目录" in txt: toc_url = full
+
+            # 保存第一页元数据
             if page_count == 0:
                 first_page_meta = {'title': original_title, 'prev': prev_chapter_url, 'toc_url': toc_url}
 
+            # 缝合逻辑
             if next_page_url and next_page_url not in visited_urls:
-                current_url = next_page_url
-                visited_urls.add(next_page_url)
-                page_count += 1
+                # 只有链接明显包含本章特征才缝合
+                if current_chap_id and current_chap_id in next_page_url:
+                    current_url = next_page_url
+                    visited_urls.add(next_page_url)
+                    page_count += 1
+                else:
+                    # 名字叫下一页，但链接完全变了，说明其实是下一章
+                    first_page_meta['next'] = next_page_url
+                    break
             else:
                 first_page_meta['next'] = next_chapter_url
                 break
