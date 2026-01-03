@@ -71,6 +71,51 @@ def is_safe_url(url):
         return True
     except:
         return False
+import importlib
+import inspect
+
+# --- 插件系统核心：自动加载所有适配器 ---
+class AdapterManager:
+    def __init__(self, folder="adapters"):
+        self.folder = folder
+        self.adapters = []
+        self.load_plugins()
+
+    def load_plugins(self):
+        """扫描并加载所有 .py 插件"""
+        self.adapters = []
+        if not os.path.exists(self.folder):
+            os.makedirs(self.folder)
+            return
+
+        for filename in os.listdir(self.folder):
+            if filename.endswith(".py") and filename != "__init__.py" and filename != "base_adapter.py":
+                filepath = os.path.join(self.folder, filename)
+                module_name = filename[:-3]
+                
+                # 动态加载模块
+                spec = importlib.util.spec_from_file_location(module_name, filepath)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                
+                # 寻找模块中定义的适配器类（类名包含 Adapter 的）
+                for name in dir(module):
+                    obj = getattr(module, name)
+                    if isinstance(obj, type) and "Adapter" in name and name != "BaseAdapter":
+                        self.adapters.append(obj())
+        
+        print(f"[System] 插件系统就绪：已自动加载 {len(self.adapters)} 个站点插件")
+
+    def find_match(self, url):
+        """为 URL 寻找匹配的插件"""
+        for adapter in self.adapters:
+            if hasattr(adapter, 'can_handle') and adapter.can_handle(url):
+                return adapter
+        return None
+# 初始化管理器
+plugin_manager = AdapterManager()
+
+# --- 修改后的 NovelCrawler ---
 
 # --- 重构后的 SQLite 数据库类 ---
 # === 1. 放在 app.py 里的书单管理器 ===
@@ -823,8 +868,33 @@ class NovelCrawler:
                     if full: curr.append({'title': txt, 'url': full})
             if len(curr) > max_links: max_links, links = len(curr), curr
         return links
-
     def run(self, url):
+        # 自动探测插件
+        adapter = plugin_manager.find_match(url)
+        if adapter:
+            # 如果有插件，完全交由插件处理
+            return adapter.run(self, url)
+        
+        # 如果没有插件，执行你之前的通用“缝合”逻辑
+        return self._general_run_logic(url)
+
+    def get_toc(self, toc_url):
+        adapter = plugin_manager.find_match(toc_url)
+        if adapter:
+            return adapter.get_toc(self, toc_url)
+        
+        # 如果没有插件，执行通用的目录解析逻辑
+        return self._general_toc_logic(toc_url)
+    # def run(self, url):
+    #     # 1. 尝试匹配专项插件
+    #     adapter = adapter_manager.get_adapter(url)
+    #     if adapter:
+    #         print(f"[Crawler] Using specialized adapter: {adapter.__class__.__name__}")
+    #         return adapter.run(self, url) # 把自己传进去，方便插件复用抓取方法
+            
+    #     # 2. 如果没插件，走原来的“全能通用缝合逻辑”
+    #     return self.general_run(url)
+    def general_run(self, url):
         """
         阅读解析核心：支持起始页归一化、多页自动缝合、上一章精准溯源
         """
@@ -915,8 +985,12 @@ class NovelCrawler:
             first_page_meta['content'] = combined_content
             return first_page_meta
         return None
-
-    def get_toc(self, toc_url):
+    # def get_toc(self, toc_url):
+    #     adapter = adapter_manager.get_adapter(toc_url)
+    #     if adapter:
+    #         return adapter.get_toc(self, toc_url)
+    #     return self.general_get_toc(toc_url) # 原有的通用目录解析
+    def general_get_toc(self, toc_url):
         """获取目录：支持并发抓取及分页识别"""
         html = self._fetch_page_smart(toc_url)
         if not html: return None
