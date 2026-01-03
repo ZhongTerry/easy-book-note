@@ -8,6 +8,21 @@
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#4f46e5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="NoteDB">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+
+<!-- 注册 Service Worker -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js');
+    });
+  }
+</script>
     <!-- <meta name="color-scheme" content="light"> -->
     <style>
         /* === 布局修正 (颜色交给 pure2.1.css 管理) === */
@@ -20,7 +35,23 @@
             display: flex; justify-content: space-between; align-items: center; 
             font-size: 14px;
         }
+        /* 适配移动端安全区域 (刘海屏) */
+#userBar {
+    padding-top: env(safe-area-inset-top, 10px) !important;
+    padding-left: env(safe-area-inset-left, 20px) !important;
+    padding-right: env(safe-area-inset-right, 20px) !important;
+}
 
+/* 禁止手机长按弹出菜单 (更有 App 感) */
+body {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+}
+
+/* 允许正文阅读区域可以选中文本 */
+.content, .p-input {
+    -webkit-user-select: text;
+}
         /* 主容器：只负责位置和宽窄，颜色交给 p-card */
         /* 在 index.html 的 <style> 标签里 */
 

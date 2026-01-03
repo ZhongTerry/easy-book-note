@@ -902,6 +902,14 @@ def find(): return jsonify(db.find(request.json.get('key', '')))
 @login_required
 def insert(): return jsonify(db.insert(request.json.get('key'), request.json.get('value')))
 
+@app.route('/manifest.json')
+def serve_manifest():
+    return send_file('manifest.json')
+
+@app.route('/sw.js')
+def serve_sw():
+    return send_file('sw.js')
+
 @app.route('/update', methods=['POST'])
 @login_required
 def update(): return jsonify(db.update(request.json.get('key'), request.json.get('value')))
