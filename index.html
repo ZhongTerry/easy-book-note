@@ -112,7 +112,62 @@
 
         /* 拖拽上传样式 */
         #value.drag-over { border-color: #10b981 !important; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
+        /* --- 移动端适配补丁 --- */
 
+/* 1. 统一操作栏布局 */
+.action-group {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px; /* 增加间距感 */
+}
+
+/* 2. 分割线样式 */
+.v-line {
+    border-left: 1px solid #e5e7eb;
+    height: 16px;
+    margin: 0 2px;
+}
+
+/* 3. 核心：移动端自动隐藏按钮文字 */
+@media (max-width: 600px) {
+    /* 隐藏按钮里的文字，只留图标 */
+    .action-group .btn-text {
+        display: none;
+    }
+    
+    /* 缩小按钮内边距，让一排图标能放下 */
+    .action-group .p-btn {
+        padding: 6px 8px !important;
+        min-width: auto;
+    }
+    
+    /* 针对阅读按钮的特殊微调 */
+    .action-group .p-btn-primary {
+        font-size: 16px; /* 让图标大一点好点按 */
+        border-radius: 8px;
+    }
+
+    /* 缩小表格文字，给操作栏腾空间 */
+    .key-final {
+        font-size: 14px !important;
+        max-width: 120px; /* 限制标题宽度，防止挤压 */
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
+/* 强制对齐：确保链接 A 标签和 Button 标签高度一致 */
+.action-group a.p-btn, 
+.action-group button.p-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px; /* 固定高度防止错位 */
+    box-sizing: border-box;
+    vertical-align: middle;
+}
         /* 洞察页面 Grid */
         .stats-grid-4 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
         .stat-card { background: #f9fafb; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #e5e7eb; }
@@ -610,23 +665,30 @@ function renderTable(data) {
 
         // 3. [关键修改] 按钮组：将 linkElement 放在最前面
         // 增加了一个小竖线分割线 (span style="border-left...") 让视觉区分更明显
-        let actionGroup = `
-            <div class="action-group" style="height:32px;">
-                ${linkElement}
-                
-                <!-- 小分割线，让布局更精致 -->
-                <span style="border-left:1px solid #e5e7eb; height:14px; margin:0 6px;"></span>
+        // 在 renderTable 函数内部修改 actionGroup 的生成逻辑：
 
-                <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="PureUI.copy('${v}')" title="复制链接">📋</button>
-                <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="openAddToListModal('${k}', '${displayName}')" title="加入书单">🔖</button>
-                <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="openTagModal('${k}')" title="编辑标签">🏷️</button>
-                
-                ${isLink || isEpub ? 
-                    `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary" style="text-decoration:none; margin-left:4px;" target="_blank">阅读</a>` 
-                    : ''
-                }
-            </div>
-        `;
+let actionGroup = `
+    <div class="action-group">
+        <!-- 链接按钮：手机下隐藏“链接”二字 -->
+        ${isEpub ? 
+            `<span class="p-btn p-btn-sm" style="border:none; background:transparent; color:var(--p-success); padding:0;">📦<span class="btn-text">本地</span></span>` : 
+            (isLink ? `<a href="${v}" target="_blank" class="p-btn p-btn-sm" style="border:none; background:transparent; color:#9ca3af; text-decoration:none; padding:0;">🔗<span class="btn-text">链接</span></a>` : '')
+        }
+        
+        <span class="v-line"></span>
+
+        <button class="p-btn p-btn-sm" onclick="PureUI.copy('${v}')" title="复制">📋</button>
+        <button class="p-btn p-btn-sm" onclick="openAddToListModal('${k}', '${displayName}')" title="书单">🔖</button>
+        <button class="p-btn p-btn-sm" onclick="openTagModal('${k}')" title="标签">🏷️</button>
+        
+        ${isLink || isEpub ? 
+            `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary" style="text-decoration:none;" target="_blank">
+                📖<span class="btn-text">阅读</span>
+            </a>` 
+            : ''
+        }
+    </div>
+`;
 
         // 4. 组装行 (现在右侧 td 只有一行 action-group)
         html += `<tr>
