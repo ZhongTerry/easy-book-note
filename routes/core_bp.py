@@ -6,9 +6,14 @@ import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler
 
 core_bp = Blueprint('core', __name__)
-
-CLIENT_ID = os.environ.get('CLIENT_ID')
-CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
+DEFAULT_SERVER = 'https://auth.ztrztr.top'
+DEFAULT_CALLBACK = 'https://book.ztrztr.top/callback'
+# 注意：CLIENT_ID 和 SECRET 通常不建议硬编码默认值，
+# 但为了配合你的逻辑，如果 .env 没填，这里可以留空或者写死你的备用 Key
+DEFAULT_CLIENT_ID = None 
+DEFAULT_CLIENT_SECRET = None
+CLIENT_ID = os.environ.get('CLIENT_ID') or DEFAULT_CLIENT_ID
+CLIENT_SECRET = os.environ.get('CLIENT_SECRET') or DEFAULT_CLIENT_SECRET
 AUTH_SERVER = os.environ.get('SERVER', 'https://auth.ztrztr.top')
 REDIRECT_URI = os.environ.get('CALLBACK', 'https://book.ztrztr.top/callback')
 
