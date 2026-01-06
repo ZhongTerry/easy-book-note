@@ -36,13 +36,29 @@ def callback():
 @core_bp.route('/logout')
 def logout(): session.clear(); return redirect('/')
 
+# routes/core_bp.py
+
+from flask import make_response # 记得引入这个
+
 @core_bp.route('/api/me')
-def api_me(): 
-    u = session.get('user', {"username": None})
-    # 注入角色信息方便前端显示
-    if u.get('username'):
-        u['role'] = managers.role_manager.get_role(u['username'])
-    return jsonify(u)
+def api_me():
+    # 1. 获取 Session 中的基础信息
+    user = session.get('user', {"username": None})
+    
+    # 2. 【核心】实时查询并注入角色权限
+    # 即使 Session 里没存 role，这里也要查出来塞进去
+    if user.get('username'):
+        # 这里的 managers.role_manager 需要确保已导入
+        user['role'] = managers.role_manager.get_role(user['username'])
+    
+    # 3. 【核心】构建响应并禁止缓存
+    response = make_response(jsonify(user))
+    # 告诉浏览器和 CDN：不要缓存这个请求！
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    
+    return response
 
 @core_bp.route('/')
 @login_required
