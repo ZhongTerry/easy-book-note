@@ -49,7 +49,46 @@ class RoleManager:
         # 如果是 'user'，上面踢出去后就不加了，回归普通用户
         
         self.save(data)
+# === Update Manager (追更管理) ===
+class UpdateManager:
+    def __init__(self):
+        # 存储格式: { "book_key": { "latest_title": "第xx章", "has_new": True, "last_check": timestamp } }
+        self._path_func = lambda: os.path.join(USER_DATA_DIR, f"{session.get('user', {}).get('username', 'default')}_updates.json")
 
+    def _get_path(self):
+        # 这里的 session 依赖可能在后台线程失效，后台线程需特殊处理，这里简化处理
+        # 实际后台线程调用时，我们手动传入 username 路径会更稳，但为了兼容现有架构，
+        # 我们假设后台线程直接操作具体的 json 文件路径
+        return self._path_func()
+
+    def load(self, username=None):
+        path = os.path.join(USER_DATA_DIR, f"{username}_updates.json") if username else self._get_path()
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+            except: pass
+        return {}
+
+    def save(self, data, username=None):
+        path = os.path.join(USER_DATA_DIR, f"{username}_updates.json") if username else self._get_path()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def set_update(self, book_key, latest_info, username=None):
+        data = self.load(username)
+        data[book_key] = {
+            "latest_title": latest_info['title'],
+            "latest_url": latest_info['url'],
+            "total": latest_info['total_chapters'],
+            "last_check": int(time.time())
+        }
+        self.save(data, username)
+        
+    def get_update(self, book_key):
+        data = self.load()
+        return data.get(book_key)
+
+update_manager = UpdateManager()
 # === Offline Book Manager ===
 class OfflineBookManager:
     def __init__(self):

@@ -198,7 +198,61 @@ def api_upload_epub():
     v = f"epub:{fn}:toc"
     managers.db.insert(k, v)
     return jsonify({"status": "success", "key": k, "value": v})
+# ... 引入 update_manager ...
+from managers import db, update_manager, booklist_manager
 
+# 1. 手动检查单本更新
+@core_bp.route('/api/check_update', methods=['POST'])
+@login_required
+def api_check_update():
+    # 注意：前端传来的可能是章节URL，我们需要先找到目录
+    current_url = request.json.get('url') # 当前阅读的 URL
+    book_key = request.json.get('key')
+    
+    if not current_url: return jsonify({"status": "error"})
+
+    # 尝试找到目录
+    # 策略：先看 DB 里有没有存 toc_url (最佳实践是 insert 时存进去，但现在可能没有)
+    # 临时策略：用 crawler 爬一下当前页找目录，或者依赖前端传 toc_url
+    # 为了简单，我们让爬虫自己去根据当前页找目录
+    
+    # 这是一个耗时操作，正常应该异步，但为了前端立即反馈，我们同步做
+    try:
+        # 先尝试获取目录
+        page_data = crawler.run(current_url)
+        toc_url = page_data.get('toc_url')
+        
+        if not toc_url:
+             # 兜底：尝试直接解析当前URL是不是目录
+             toc_url = current_url 
+
+        latest = crawler.get_latest_chapter(toc_url)
+        
+        if latest:
+            # 存入更新管理器
+            update_manager.set_update(book_key, latest)
+            
+            # 判断是否有更新 (简单判断 URL 是否不同)
+            # 注意：这只是个粗略判断，因为 current_url 是具体的某一页
+            is_new = current_url != latest['url']
+            
+            return jsonify({
+                "status": "success", 
+                "latest": latest,
+                "is_new": is_new
+            })
+        else:
+            return jsonify({"status": "failed", "msg": "无法获取目录"})
+            
+    except Exception as e:
+        print(f"Update Check Error: {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
+# 2. 获取所有更新状态 (用于前端渲染小红点)
+@core_bp.route('/api/updates/status')
+@login_required
+def api_get_updates_status():
+    return jsonify(update_manager.load())
 @core_bp.route('/api/download', methods=['POST'])
 @login_required
 def start_dl():

@@ -745,6 +745,7 @@ function renderTable(data) {
         // 3. [关键修改] 按钮组：将 linkElement 放在最前面
         // 增加了一个小竖线分割线 (span style="border-left...") 让视觉区分更明显
         // 在 renderTable 函数内部修改 actionGroup 的生成逻辑：
+        
 
 let actionGroup = `
     <div class="action-group">
@@ -756,7 +757,8 @@ let actionGroup = `
         
         <span class="v-line"></span>
         <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="downloadBook('${k}', '${v}', '${displayName}')" title="离线全本(Pro)">📥</button>
-        <button class="p-btn p-btn-sm" onclick="PureUI.copy('${v}')" title="复制">📋</button>
+        <button class="p-btn p-btn-sm update-btn" id="upd-${k}" style="padding:4px 8px;" onclick="checkUpdate('${k}', '${v}')" title="检查更新">🔄</button>
+        <!--<button class="p-btn p-btn-sm" onclick="PureUI.copy('${v}')" title="复制">📋</button> -->
         <button class="p-btn p-btn-sm" onclick="openAddToListModal('${k}', '${displayName}')" title="书单">🔖</button>
         <button class="p-btn p-btn-sm" onclick="openTagModal('${k}')" title="标签">🏷️</button>
         
@@ -782,6 +784,7 @@ let actionGroup = `
     });
     html += '</table>';
     container.innerHTML = html;
+    renderUpdates();
 }
 
         function renderGrid(data, container, keys) {
@@ -878,6 +881,70 @@ let actionGroup = `
         showMsg("网络错误", "error");
     }
 }
+// 存储更新状态
+let updatesCache = {};
+
+// 1. 页面加载时获取更新状态
+function fetchUpdates() {
+    fetch('/api/updates/status').then(r=>r.json()).then(data => {
+        updatesCache = data;
+        renderUpdates(); // 重新渲染小红点
+    });
+}
+// 在 window.onload 里调用 fetchUpdates();
+
+// 2. 渲染更新状态 (小红点)
+function renderUpdates() {
+    Object.keys(updatesCache).forEach(key => {
+        const info = updatesCache[key];
+        const btn = document.getElementById(`upd-${key}`);
+        if (btn) {
+            // 如果有更新信息，改变按钮样式
+            btn.innerHTML = "🆕";
+            btn.style.color = "#ef4444"; // 红色
+            btn.title = `最新: ${info.latest_title}`;
+        }
+    });
+}
+
+// 3. 手动检查更新函数
+async function checkUpdate(key, url) {
+    const btn = document.getElementById(`upd-${key}`);
+    const originalIcon = btn.innerText;
+    
+    btn.innerHTML = "⏳"; // 加载中图标
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/check_update', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: key, url: url })
+        });
+        const data = await res.json();
+        
+        if (data.status === 'success') {
+            const latest = data.latest;
+            // 比较简单的判断：如果最新章节标题和当前 Value 不一样 (或者仅仅显示最新)
+            // 这里为了直观，直接弹窗告诉用户
+            alert(`🔍 检查结果：\n\n当前书籍：${key}\n最新章节：${latest.title}\n总章数：${latest.total_chapters}`);
+            
+            // 更新 UI 状态
+            updatesCache[key] = { latest_title: latest.title };
+            renderUpdates();
+        } else {
+            showMsg("检查失败: " + data.msg, "error");
+        }
+    } catch (e) {
+        showMsg("网络错误", "error");
+    } finally {
+        if(btn.innerText === "⏳") btn.innerText = "🔄"; // 恢复
+        btn.disabled = false;
+    }
+}
+
+// 记得在 renderTable 的最后调用一次 renderUpdates()，防止翻页/搜索后红点消失
+// 在 renderTable 函数末尾加一行: renderUpdates();
         // === 替换 index.html 中的 selectResult 函数 ===
         async function selectResult(k, v) {
             // 1. 先填入 Key

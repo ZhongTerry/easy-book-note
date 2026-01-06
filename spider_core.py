@@ -310,6 +310,23 @@ class NovelCrawler:
     def get_first_chapter(self, toc_url):
         res = self.get_toc(toc_url)
         return res['chapters'][0]['url'] if res and res['chapters'] else None
+    # === [新增] 获取最新章节信息 ===
+    def get_latest_chapter(self, toc_url):
+        # 复用现有的目录解析逻辑
+        toc_data = self.get_toc(toc_url)
+        
+        if not toc_data or not toc_data.get('chapters'):
+            return None
+        
+        chapters = toc_data['chapters']
+        # 取最后一章
+        last_chapter = chapters[-1]
+        
+        return {
+            "title": last_chapter['title'],
+            "url": last_chapter['url'],
+            "total_chapters": len(chapters)
+        }
 
 # ==========================================
 # 4. EPUB 处理 (EpubHandler - 完整版)
