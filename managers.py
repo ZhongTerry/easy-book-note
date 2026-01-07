@@ -10,7 +10,9 @@ from flask import session
 from shared import USER_DATA_DIR, CACHE_DIR, DL_DIR
 import shared
 
-# === Role Manager ===
+# ==========================================
+# 1. 角色管理 (RoleManager)
+# ==========================================
 class RoleManager:
     def __init__(self):
         self.config_path = os.path.join(USER_DATA_DIR, "roles.json")
@@ -32,64 +34,76 @@ class RoleManager:
         if username in data.get("pros", []): return "pro"
         return "user"
 
-# managers.py
-
     def set_role(self, username, role):
         data = self.load()
-        
-        # 1. 先把这个人从所有列表里踢出去 (防止残留)
         if username in data["admins"]: data["admins"].remove(username)
         if username in data["pros"]: data["pros"].remove(username)
         
-        # 2. 根据新角色添加到对应列表
-        if role == "admin": 
-            data["admins"].append(username)
-        elif role == "pro": 
-            data["pros"].append(username)
-        # 如果是 'user'，上面踢出去后就不加了，回归普通用户
-        
+        if role == "admin": data["admins"].append(username)
+        elif role == "pro": data["pros"].append(username)
         self.save(data)
-# === Update Manager (追更管理) ===
+
+# ==========================================
+# 2. 追更管理 (UpdateManager) - 修复版
+# ==========================================
 class UpdateManager:
     def __init__(self):
-        # 存储格式: { "book_key": { "latest_title": "第xx章", "has_new": True, "last_check": timestamp } }
         self._path_func = lambda: os.path.join(USER_DATA_DIR, f"{session.get('user', {}).get('username', 'default')}_updates.json")
 
-    def _get_path(self):
-        # 这里的 session 依赖可能在后台线程失效，后台线程需特殊处理，这里简化处理
-        # 实际后台线程调用时，我们手动传入 username 路径会更稳，但为了兼容现有架构，
-        # 我们假设后台线程直接操作具体的 json 文件路径
-        return self._path_func()
+    def _get_path(self, username=None):
+        u = username if username else session.get('user', {}).get('username', 'default')
+        return os.path.join(USER_DATA_DIR, f"{u}_updates.json")
 
     def load(self, username=None):
-        path = os.path.join(USER_DATA_DIR, f"{username}_updates.json") if username else self._get_path()
+        path = self._get_path(username)
         if os.path.exists(path):
             try:
-                with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+                with open(path, 'r', encoding='utf-8') as f: 
+                    c = f.read().strip()
+                    return json.loads(c) if c else {}
             except: pass
         return {}
 
     def save(self, data, username=None):
-        path = os.path.join(USER_DATA_DIR, f"{username}_updates.json") if username else self._get_path()
+        path = self._get_path(username)
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
 
     def set_update(self, book_key, latest_info, username=None):
         data = self.load(username)
+        
+        # [兼容性修复] 兼容 title/latest_title 两种键名
+        title = latest_info.get('title') or latest_info.get('latest_title') or "未知章节"
+        url = latest_info.get('url') or latest_info.get('latest_url') or ""
+        total = latest_info.get('total_chapters') or latest_info.get('total') or 0
+        chap_id = latest_info.get('id') or latest_info.get('latest_id') or -1
+
         data[book_key] = {
-            "latest_title": latest_info['title'],
-            "latest_url": latest_info['url'],
-            "total": latest_info['total_chapters'],
-            "last_check": int(time.time())
+            "latest_title": title,
+            "latest_url": url,
+            "latest_id": chap_id,
+            "total": total,
+            "last_check": int(time.time()),
+            "status_text": latest_info.get('status_text', ""),
+            "unread_count": latest_info.get('unread_count', 0),
+            "toc_url": latest_info.get('toc_url') # 缓存目录链接，方便下次快速检查
         }
         self.save(data, username)
         
     def get_update(self, book_key):
-        data = self.load()
-        return data.get(book_key)
+        return self.load().get(book_key)
 
-update_manager = UpdateManager()
-# === Offline Book Manager ===
+    # [新增] 纯数字更新逻辑 (供阅读时快速更新状态)
+    def update_progress(self, book_key, new_unread_count, status_text, username=None):
+        data = self.load(username)
+        if book_key in data:
+            data[book_key]['unread_count'] = new_unread_count
+            data[book_key]['status_text'] = status_text
+            self.save(data, username)
+
+# ==========================================
+# 3. 离线书籍管理 (OfflineBookManager)
+# ==========================================
 class OfflineBookManager:
     def __init__(self):
         self.offline_dir = os.path.join(USER_DATA_DIR, "offline_books")
@@ -113,7 +127,9 @@ class OfflineBookManager:
                 return data.get(chapter_url)
         except: return None
 
-# === Cache Manager ===
+# ==========================================
+# 4. 缓存管理 (CacheManager)
+# ==========================================
 class CacheManager:
     def __init__(self, ttl=604800): 
         self.cache_dir = CACHE_DIR
@@ -152,7 +168,9 @@ class CacheManager:
                     except: pass
         return count, size / (1024*1024)
 
-# === Booklist Manager ===
+# ==========================================
+# 5. 书单管理 (BooklistManager) - 增强鲁棒性
+# ==========================================
 class IsolatedBooklistManager:
     def _get_path(self):
         u = session.get('user', {}).get('username', 'default')
@@ -160,13 +178,15 @@ class IsolatedBooklistManager:
 
     def load(self):
         path = self._get_path()
-        if os.path.exists(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    c = f.read().strip()
-                    return json.loads(c) if c else {}
-            except: return {}
-        return {}
+        if not os.path.exists(path): return {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content: return {}
+                return json.loads(content)
+        except Exception as e:
+            print(f"[Warn] 书单文件损坏: {e}")
+            return {}
 
     def save(self, data):
         with open(self._get_path(), 'w', encoding='utf-8') as f:
@@ -186,8 +206,21 @@ class IsolatedBooklistManager:
                 data[list_id]['books'].append(book_data)
                 self.save(data)
         return data
+    
+    def update_status(self, list_id, book_key, status, action):
+        data = self.load()
+        if list_id in data:
+            books = data[list_id]['books']
+            if action == 'remove':
+                data[list_id]['books'] = [b for b in books if b['key'] != book_key]
+            else:
+                for b in books:
+                    if b['key'] == book_key: b['status'] = status
+            self.save(data)
 
-# === KV Database ===
+# ==========================================
+# 6. KV 数据库 (SQLite)
+# ==========================================
 class IsolatedDB:
     def _get_db_conn(self):
         username = session.get('user', {}).get('username', 'default_user')
@@ -238,7 +271,9 @@ class IsolatedDB:
     
     def rollback(self): return {"status": "error", "message": "Not implemented in SQLite"}
 
-# === Download Manager ===
+# ==========================================
+# 7. 下载管理器 (DownloadManager)
+# ==========================================
 class DownloadManager:
     def __init__(self):
         self.downloads = {}
@@ -281,7 +316,9 @@ class DownloadManager:
     
     def get_status(self, tid): return self.downloads.get(tid)
 
-# === Stats Manager (完整版) ===
+# ==========================================
+# 8. 统计管理器 (StatsManager) - 修复空文件报错版
+# ==========================================
 class IsolatedStatsManager:
     def _get_path(self):
         u = session.get('user', {}).get('username', 'default')
@@ -290,11 +327,19 @@ class IsolatedStatsManager:
     def load(self):
         p = self._get_path()
         if os.path.exists(p):
-            with open(p, 'r', encoding='utf-8') as f: return json.load(f)
+            try:
+                with open(p, 'r', encoding='utf-8') as f: 
+                    content = f.read().strip()
+                    if not content: return {"daily_stats": {}}
+                    return json.loads(content)
+            except (json.JSONDecodeError, Exception) as e:
+                print(f"[Stats] Load Error (resetting): {e}")
+                return {"daily_stats": {}}
         return {"daily_stats": {}}
 
     def update(self, t, w, c, bk):
         d = self.load()
+        if "daily_stats" not in d: d["daily_stats"] = {}
         k = datetime.now().strftime('%Y-%m-%d')
         if k not in d["daily_stats"]: d["daily_stats"][k] = {"time":0,"words":0,"chapters":0,"books":[]}
         r = d["daily_stats"][k]
@@ -316,7 +361,6 @@ class IsolatedStatsManager:
         data = self.load()
         daily = data.get("daily_stats", {})
         
-        # 30天趋势
         for i in range(29, -1, -1):
             day = today - timedelta(days=i)
             d_str = day.strftime('%Y-%m-%d')
@@ -324,7 +368,6 @@ class IsolatedStatsManager:
             summary["trend"]["dates"].append(d_str[5:])
             summary["trend"]["times"].append(int(rec.get("time", 0) / 60))
 
-        # 统计汇总
         for date_str, rec in daily.items():
             try:
                 rec_date = datetime.strptime(date_str, '%Y-%m-%d')
@@ -340,20 +383,11 @@ class IsolatedStatsManager:
                 if t > 0: summary["all"]["heatmap"].append({"date": date_str, "count": int(t/60)})
 
                 if delta == 0:
-                    summary["24h"]["time"] += t
-                    summary["24h"]["words"] += w
-                    summary["24h"]["chapters"] += c
-                    books_sets["24h"].update(b_list)
+                    summary["24h"]["time"] += t; summary["24h"]["words"] += w; summary["24h"]["chapters"] += c; books_sets["24h"].update(b_list)
                 if delta < 7:
-                    summary["7d"]["time"] += t
-                    summary["7d"]["words"] += w
-                    summary["7d"]["chapters"] += c
-                    books_sets["7d"].update(b_list)
+                    summary["7d"]["time"] += t; summary["7d"]["words"] += w; summary["7d"]["chapters"] += c; books_sets["7d"].update(b_list)
                 if delta < 30:
-                    summary["30d"]["time"] += t
-                    summary["30d"]["words"] += w
-                    summary["30d"]["chapters"] += c
-                    books_sets["30d"].update(b_list)
+                    summary["30d"]["time"] += t; summary["30d"]["words"] += w; summary["30d"]["chapters"] += c; books_sets["30d"].update(b_list)
             except: pass
 
         for k in books_sets:
@@ -361,7 +395,9 @@ class IsolatedStatsManager:
             summary[k]["time"] = int(summary[k]["time"] / 60) 
         return summary
 
-# === Tag Manager ===
+# ==========================================
+# 9. 标签管理 (TagManager)
+# ==========================================
 class IsolatedTagManager:
     def _get_path(self):
         u = session.get('user', {}).get('username', 'default')
@@ -378,8 +414,11 @@ class IsolatedTagManager:
         with open(self._get_path(), 'w', encoding='utf-8') as f: json.dump(d, f, ensure_ascii=False)
         return d.get(key, [])
 
-# === 初始化单例 ===
+# ==========================================
+# 10. 初始化所有单例
+# ==========================================
 role_manager = RoleManager()
+update_manager = UpdateManager() # 之前漏了实例化
 offline_manager = OfflineBookManager()
 cache = CacheManager()
 db = IsolatedDB()
@@ -388,5 +427,5 @@ downloader = DownloadManager()
 tag_manager = IsolatedTagManager()
 stats_manager = IsolatedStatsManager()
 
-# 注入到 shared
+# 注入到 shared 供装饰器使用
 shared.role_manager_instance = role_manager

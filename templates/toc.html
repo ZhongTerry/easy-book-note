@@ -4,150 +4,93 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ toc.title }} - 目录</title>
+    <!-- 引入 PureUI -->
+    <link rel="stylesheet" href="/purecss/pure2.1.css">
     <style>
-        body {
-            background-color: #f4f4f4;
-            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
-            margin: 0; padding: 0; color: #333;
-        }
+        body { background-color: #f9fafb; color: #1f2937; margin: 0; font-family: -apple-system, sans-serif; }
         
-        /* 导航栏样式 */
+        /* 顶部导航 */
         .navbar {
-            background: #fff; padding: 10px 20px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-            position: sticky; top: 0; z-index: 100;
+            background: #fff; padding: 12px 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            position: sticky; top: 0; z-index: 50;
             display: flex; justify-content: space-between; align-items: center;
         }
+        .nav-title { font-weight: 700; font-size: 16px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 50%; }
+        .nav-actions { display: flex; gap: 8px; }
+
+        /* 容器 */
+        .container { max-width: 1000px; margin: 20px auto; padding: 0 15px; }
         
-        .nav-title { 
-            font-size: 18px; font-weight: bold; color: #333; 
-            overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 40%;
-        }
-        
-        .nav-links { display: flex; align-items: center; }
-
-        /* 统一按钮基础样式 - 强制显示背景 */
-        .nav-btn {
-            display: inline-flex; align-items: center; justify-content: center;
-            text-decoration: none; font-size: 13px; font-weight: 500;
-            cursor: pointer; border: none; 
-            padding: 6px 12px; 
-            border-radius: 4px; 
-            margin-left: 8px; /* 按钮间距 */
-            color: white !important; /* 强制文字白色 */
-            transition: opacity 0.2s;
-            line-height: 1.5;
-        }
-        
-        /* 鼠标悬停微调 */
-        .nav-btn:hover { opacity: 0.9; transform: translateY(-1px); }
-        .nav-btn:active { transform: translateY(0); }
-
-        /* 各个按钮的专属颜色 */
-        .btn-home { background-color: #6c757d; } /* 灰色主页 */
-        .btn-refresh { background-color: #17a2b8; } /* 蓝色刷新 */
-        .btn-download { background-color: #28a745; } /* 绿色下载 */
-        .btn-download:disabled { background-color: #94d3a2; cursor: not-allowed; opacity: 0.6; }
-
-        /* 源网页链接单独样式 (纯文字) */
-        .link-source {
-            color: #666 !important; font-size: 14px; text-decoration: none; margin-left: 15px;
-        }
-        .link-source:hover { color: #007bff !important; text-decoration: underline; }
-
-        /* 容器和章节网格 */
-        .container {
-            max-width: 1000px; margin: 20px auto;
-            background: #fff; padding: 30px; border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
+        /* === 核心修复：恢复宽卡片布局 (三列) === */
         .chapter-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 15px; margin-top: 20px;
-        }
-        .chapter-item {
-            display: block; text-decoration: none; color: #444;
-            padding: 10px 15px; border: 1px solid #eee; border-radius: 4px;
-            font-size: 14px; transition: all 0.2s;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .chapter-item:hover {
-            border-color: #007bff; color: #007bff; background-color: #f8f9fa;
-            transform: translateY(-2px);
+            /* 280px 宽度能保证在大多数电脑屏幕上显示 3 列，手机显示 1 列 */
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
+            gap: 15px;
+            margin-top: 15px;
         }
 
-        /* 进度条弹窗样式 */
-        #dl-modal {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;
+        .chapter-item {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
+            padding: 15px; text-decoration: none; color: #374151;
+            font-size: 15px; transition: 0.2s;
+            display: flex; align-items: center; overflow: hidden;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
-        .modal-content {
-            background: white; padding: 30px; border-radius: 8px; width: 80%; max-width: 400px; text-align: center;
+        .chapter-item:hover {
+            border-color: #4f46e5; color: #4f46e5; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            transform: translateY(-2px);
         }
-        .progress-bar {
-            width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; margin: 20px 0; overflow: hidden;
-        }
-        .progress-fill { height: 100%; background: #28a745; width: 0%; transition: width 0.3s; }
-        .dl-status { font-size: 14px; color: #666; margin-bottom: 10px; }
-        .dl-link { display: none; margin-top: 15px; }
-        .dl-link a {
-            display: inline-block; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px;
-        }
+        .chap-id { color: #9ca3af; font-size: 13px; margin-right: 8px; min-width: 40px; font-weight: bold; }
+        .chap-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+
+        /* 下载弹窗 */
+        #dl-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+        .modal-box { background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; }
+        .progress-bar { height: 10px; background: #f3f4f6; border-radius: 5px; margin: 15px 0; overflow: hidden; }
+        .progress-fill { height: 100%; background: #4f46e5; width: 0%; transition: width 0.3s; }
     </style>
 </head>
 <body>
 
-    <div class="navbar">
-        <div class="nav-title">📚 {{ toc.title }}</div>
-        <div class="nav-links">
-            <!-- 灰色主页按钮 -->
-            <a href="/" class="nav-btn btn-home" title="返回书架">
-                🏠 主页
-            </a>
-            
-            <!-- 蓝色刷新按钮 -->
-            <button onclick="forceRefresh()" class="nav-btn btn-refresh" title="重新获取最新章节">
-                🔄 刷新目录
-            </button>
-            
-            <!-- 绿色下载按钮 -->
-            <button onclick="startDownload()" class="nav-btn btn-download" id="dlBtn" title="下载全本TXT">
-                📥 下载
-            </button>
-            
-            <!-- 纯文字源网页链接 -->
-            <a href="{{ toc_url }}" target="_blank" class="link-source">源网页 ↗</a>
-        </div>
+<div class="navbar">
+    <div class="nav-title">📚 {{ toc.title }}</div>
+    <div class="nav-actions">
+        <a href="/" class="p-btn p-btn-sm" style="text-decoration:none; background:#f3f4f6;">🏠 书架</a>
+        <button onclick="forceRefresh()" class="p-btn p-btn-sm p-btn-primary">🔄 刷新</button>
+        <button onclick="startDownload()" id="dlBtn" class="p-btn p-btn-sm" style="background:#10b981; color:white; border:none;">📥 下载TXT</button>
     </div>
+</div>
+
 <div class="container">
-    <div style="margin-bottom: 20px; color: #666; font-size: 14px;">
-        共找到 {{ toc.chapters|length }} 个章节
+    <div style="display:flex; justify-content:space-between; color:#666; font-size:13px; margin-bottom:10px;">
+        <span>共 {{ toc.chapters|length }} 章</span>
+        <a href="{{ toc_url }}" target="_blank" style="color:#999; text-decoration:none;">源网页 ↗</a>
     </div>
 
     <div class="chapter-grid">
         {% for chapter in toc.chapters %}
-            <a href="/read?url={{ chapter.url }}&key={{ db_key }}" class="chapter-item" title="{{ chapter.title }}">
-                {{ chapter.title }}
+            <a href="/read?url={{ chapter.url }}&key={{ db_key }}" class="chapter-item" title="{{ chapter.raw_title or chapter.title }}">
+                {% if chapter.id is defined and chapter.id > 0 %}
+                    <span class="chap-id">{{ chapter.id }}</span>
+                    <span class="chap-name">{{ chapter.name }}</span>
+                {% else %}
+                    <span class="chap-name">{{ chapter.raw_title or chapter.title }}</span>
+                {% endif %}
             </a>
         {% endfor %}
     </div>
 </div>
 
-<!-- 下载进度弹窗 -->
 <div id="dl-modal">
-    <div class="modal-content">
-        <h3>正在下载 TXT...</h3>
-        <p style="font-size:12px; color:orange;">⚠ 注意：为了防止封号，每章会随机暂停数秒，请耐心等待，勿关闭此页面。</p>
-        
-        <div class="progress-bar">
-            <div class="progress-fill" id="p-fill"></div>
-        </div>
-        <div class="dl-status" id="p-text">准备中...</div>
-        
-        <div class="dl-link" id="dl-finish">
-            <a href="#" id="dl-file-link" target="_blank">💾 保存 TXT 文件</a>
-            <button onclick="closeModal()" style="margin-top:10px; border:none; background:none; cursor:pointer; color:#666;">关闭</button>
+    <div class="modal-box">
+        <h3 style="margin-top:0">正在打包下载...</h3>
+        <div class="progress-bar"><div class="progress-fill" id="p-fill"></div></div>
+        <div id="p-text" style="font-size:13px; color:#666; margin-bottom:15px;">准备中...</div>
+        <div id="dl-finish" style="display:none;">
+            <a href="#" id="dl-file-link" class="p-btn p-btn-primary" style="text-decoration:none;">💾 保存文件</a>
+            <button onclick="closeModal()" class="p-btn" style="margin-left:10px; background:transparent; border:none; color:#666;">关闭</button>
         </div>
     </div>
 </div>
@@ -164,62 +107,42 @@
     }
 
     function startDownload() {
-        if(!confirm("确定要下载全本吗？\n章节越多耗时越长(每章约2秒)，请确保网络通畅。")) return;
-
+        if(!confirm("确定要下载全本吗？\n章节越多耗时越长，请保持网络通畅。")) return;
         document.getElementById('dlBtn').disabled = true;
         document.getElementById('dl-modal').style.display = 'flex';
         document.getElementById('dl-finish').style.display = 'none';
         
-        // 1. 发起下载请求
         fetch('/api/download', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ toc_url: tocUrl, book_name: bookName })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if(data.status === 'success') {
-                // 2. 开始轮询进度
-                pollProgress(data.task_id);
-            } else {
-                alert("启动失败: " + data.message);
-                closeModal();
-            }
-        })
-        .catch(err => {
-            alert("网络错误");
-            closeModal();
-        });
+        }).then(r=>r.json()).then(d => {
+            if(d.status === 'success') pollProgress(d.task_id);
+            else { alert(d.message); closeModal(); }
+        }).catch(() => { alert("网络错误"); closeModal(); });
     }
 
-    function pollProgress(taskId) {
+    function pollProgress(tid) {
         pollInterval = setInterval(() => {
-            fetch(`/api/download/status?task_id=${taskId}`)
-            .then(res => res.json())
-            .then(data => {
-                const percent = Math.round((data.current / data.total) * 100);
-                document.getElementById('p-fill').style.width = percent + '%';
-                document.getElementById('p-text').innerText = `已下载: ${data.current} / ${data.total} 章 (${percent}%)`;
-
-                if(data.status === 'completed') {
+            fetch(`/api/download/status?task_id=${tid}`).then(r=>r.json()).then(d => {
+                const pct = Math.round((d.current / d.total) * 100);
+                document.getElementById('p-fill').style.width = pct + '%';
+                document.getElementById('p-text').innerText = `已下载: ${d.current} / ${d.total} (${pct}%)`;
+                if(d.status === 'completed' || d.status === 'error') {
                     clearInterval(pollInterval);
-                    document.getElementById('p-text').innerText = "✅ 下载完成！";
-                    document.getElementById('dl-file-link').href = `/api/download/file?task_id=${taskId}`;
-                    document.getElementById('dl-finish').style.display = 'block';
-                } else if (data.status === 'error') {
-                    clearInterval(pollInterval);
-                    document.getElementById('p-text').innerText = "❌ 下载出错: " + data.error_msg;
+                    if(d.status === 'completed') {
+                        document.getElementById('p-text').innerText = "✅ 打包完成";
+                        document.getElementById('dl-file-link').href = `/api/download/file?task_id=${tid}`;
+                        document.getElementById('dl-finish').style.display = 'block';
+                    } else document.getElementById('p-text').innerText = "❌ 失败: " + d.error_msg;
                 }
             });
-        }, 2000); // 每2秒查询一次
+        }, 2000);
     }
-
     function closeModal() {
         document.getElementById('dl-modal').style.display = 'none';
         document.getElementById('dlBtn').disabled = false;
         if(pollInterval) clearInterval(pollInterval);
     }
 </script>
-
 </body>
 </html>

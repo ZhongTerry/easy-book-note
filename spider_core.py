@@ -10,13 +10,43 @@ from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 from lxml import html as lxml_html
 from pypinyin import lazy_pinyin, Style
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ebooklib import epub
 from werkzeug.utils import secure_filename
 from shared import BASE_DIR, LIB_DIR
 
 # ==========================================
-# 1. 插件管理器 (AdapterManager)
+# 0. 辅助工具
+# ==========================================
+def parse_chapter_id(text):
+    if not text: return -1
+    text = text.strip()
+    match = re.search(r'(?:第)?\s*([0-9零一二三四五六七八九十百千万]+)\s*[章节回幕]', text)
+    if match: return _smart_convert_int(match.group(1))
+    match = re.search(r'^(\d+)', text)
+    if match: return int(match.group(1))
+    return -1
+
+def _smart_convert_int(s):
+    try: return int(s)
+    except: pass
+    common_map = {'零':0, '一':1, '二':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10, '百':100, '千':1000, '万':10000, '两':2}
+    if len(s) == 1 and s in common_map: return common_map[s]
+    res = 0
+    unit = 1
+    temp = 0
+    for char in reversed(s):
+        if char in common_map:
+            val = common_map[char]
+            if val >= 10:
+                if val > unit: unit = val
+                else: unit *= val
+            else: temp += val * unit
+    if temp == 0 and '十' in s: temp = 10
+    return temp if temp > 0 else 0
+
+# ==========================================
+# 1. 插件管理器
 # ==========================================
 class AdapterManager:
     def __init__(self, folder="adapters"):
@@ -47,7 +77,7 @@ class AdapterManager:
 plugin_mgr = AdapterManager()
 
 # ==========================================
-# 2. 搜索助手 (SearchHelper - 满血版)
+# 2. 搜索助手
 # ==========================================
 class SearchHelper:
     def __init__(self):
@@ -125,7 +155,7 @@ class SearchHelper:
         return self._do_ddg_search(keyword) or self._do_bing_search(keyword)
 
 # ==========================================
-# 3. 小说爬虫 (NovelCrawler - 完整版)
+# 3. 小说爬虫 (NovelCrawler - 修复KeyError版)
 # ==========================================
 class NovelCrawler:
     def __init__(self):
@@ -134,24 +164,38 @@ class NovelCrawler:
         self.proxies = getproxies()
 
     def _fetch_page_smart(self, url, retry=3):
+        """基础请求：增强了对 lxml 解析错误的捕获"""
         for i in range(retry):
             try:
-                headers = {"Referer": url, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
+                headers = {
+                    "Referer": url, 
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+                }
                 resp = cffi_requests.get(url, impersonate=self.impersonate, timeout=self.timeout, headers=headers, allow_redirects=True, proxies=self.proxies)
+                
+                # 1. 尝试 lxml 解析 (速度快，但对编码敏感)
                 try:
-                    tree = lxml_html.fromstring(resp.content)
+                    # [修复] 增加 parser 参数，容错率更高
+                    tree = lxml_html.fromstring(resp.content, parser=lxml_html.HTMLParser(encoding='utf-8'))
                     charset = tree.xpath('//meta[contains(@content, "charset")]/@content') or tree.xpath('//meta/@charset')
                     enc = 'utf-8'
                     if charset:
                         match = re.search(r'charset=([\w-]+)', str(charset[0]), re.I)
                         enc = match.group(1) if match else charset[0]
                     return resp.content.decode(enc)
-                except:
-                    for e in ['utf-8', 'gb18030', 'gbk', 'big5']:
-                        try: return resp.content.decode(e)
-                        except: continue
+                except Exception:
+                    # 如果 lxml 失败，安静地进入下面的暴力尝试，不打印错误
+                    pass
+                
+                # 2. 暴力尝试常见编码
+                for e in ['utf-8', 'gb18030', 'gbk', 'big5']:
+                    try: return resp.content.decode(e)
+                    except: continue
+                
+                # 3. 最后兜底
                 return resp.content.decode('utf-8', errors='replace')
-            except: time.sleep(1)
+            except: 
+                time.sleep(1)
         return None
 
     def _get_smart_title(self, soup):
@@ -194,35 +238,116 @@ class NovelCrawler:
         return self._clean_text_lines(best_div.get_text('\n')) if best_div else ["正文解析失败"]
 
     def _parse_chapters_from_soup(self, soup, base_url):
-        links, max_links = [], 0
-        for container in soup.find_all(['div', 'ul', 'dl', 'tbody']):
-            if container.get('class') and 'nav' in str(container.get('class')): continue
-            curr = []
+        links = []
+        max_valid_links = 0
+        containers = soup.find_all(['div', 'ul', 'dl', 'tbody'])
+        if not containers: containers = [soup.body]
+        
+        junk_keywords = ['最新章节', '全文阅读', '无弹窗', '小说', '笔趣阁', '加入书架', '投推荐票', '作家', '作者']
+
+        for container in containers:
+            if container.get('class') and any(x in str(container.get('class')) for x in ['nav', 'footer', 'header', 'hot', 'recommend']): continue
+            temp_links = []
             for a in container.find_all('a'):
-                txt, href = a.get_text(strip=True), a.get('href')
-                if href and (re.search(r'(\d+|第.+[章节回])', txt) or len(txt) > 5):
-                    full = urljoin(base_url, href)
-                    if full: curr.append({'title': txt, 'url': full})
-            if len(curr) > max_links: max_links, links = len(curr), curr
+                raw_text = a.get_text(strip=True)
+                href = a.get('href')
+                if not href: continue
+                if any(k in raw_text for k in junk_keywords) and not re.search(r'\d', raw_text): continue
+                
+                chap_id = parse_chapter_id(raw_text)
+                is_valid = False
+                if chap_id > 0: is_valid = True
+                elif len(raw_text) > 2 and any(x in raw_text for x in ['章', '节', '回', '幕']) and not any(k in raw_text for k in junk_keywords): is_valid = True
+                
+                if is_valid:
+                    full_url = urljoin(base_url, href)
+                    match_name = re.search(r'(?:第)?\s*[0-9零一二三四五六七八九十百千万]+\s*[章节回](.*)', raw_text)
+                    pure_name = match_name.group(1).strip() if match_name else raw_text
+                    if full_url:
+                        # 注意：这里我们生成字典时不带 'title' 键，统一由 _standardize_chapters 处理
+                        temp_links.append({'id': chap_id, 'raw_title': raw_text, 'name': pure_name, 'url': full_url})
+            
+            if len(temp_links) > max_valid_links: max_valid_links = len(temp_links); links = temp_links
         return links
+
+    def _standardize_chapters(self, raw_chapters):
+        unique = {c['url']: c for c in raw_chapters}
+        processed_list = []
+        for c in unique.values():
+            raw_title = c.get('title') or c.get('raw_title') or ""
+            if any(x in raw_title for x in ['最新章节', '全文阅读', '无弹窗', 'txt下载']) and not re.search(r'\d', raw_title): continue
+            chap_id = parse_chapter_id(raw_title)
+            pure_name = re.sub(r'^(?:第)?\s*[0-9零一二三四五六七八九十百千万]+\s*[章节回]', '', raw_title).strip()
+            pure_name = re.sub(r'^\d+\s*\.?\s*', '', pure_name).strip()
+            
+            c['id'] = chap_id
+            c['name'] = pure_name or raw_title
+            c['raw_title'] = raw_title
+            c['title'] = raw_title # [核心修复] 补上这个键，防止后端报错
+            processed_list.append(c)
+            
+        numbered = [c for c in processed_list if c['id'] > 0]
+        others = [c for c in processed_list if c['id'] <= 0]
+        numbered.sort(key=lambda x: x['id'])
+        
+        if len(numbered) > 10:
+            final_chapters = numbered
+            prologues = [c for c in others if "序" in c['raw_title'] or "引" in c['raw_title']]
+            final_chapters = prologues + final_chapters
+        else: final_chapters = others + numbered
+        return final_chapters
+
+    def get_toc(self, toc_url):
+        adapter = plugin_mgr.find_match(toc_url)
+        if adapter: data = adapter.get_toc(self, toc_url)
+        else: data = self._general_toc_logic(toc_url)
+        
+        if not data or not data.get('chapters'): return None
+        final_chapters = self._standardize_chapters(data['chapters'])
+        return {'title': data['title'], 'chapters': final_chapters}
+
+    def _general_toc_logic(self, toc_url):
+        html = self._fetch_page_smart(toc_url)
+        if not html: return None
+        soup = BeautifulSoup(html, 'html.parser')
+        raw_chapters = self._parse_chapters_from_soup(soup, toc_url)
+        
+        pages = set()
+        for s in soup.find_all('select'):
+            for o in s.find_all('option'):
+                v = o.get('value')
+                if v:
+                    f = urljoin(toc_url, v)
+                    if f.rstrip('/') != toc_url.rstrip('/'): pages.add(f)
+        if pages:
+            with ThreadPoolExecutor(max_workers=5) as exe:
+                results = exe.map(lambda u: self._parse_chapters_from_soup(BeautifulSoup(self._fetch_page_smart(u) or "", 'html.parser'), toc_url), sorted(list(pages)))
+                for sub in results: raw_chapters.extend(sub)
+        return {'title': self._get_smart_title(soup), 'chapters': raw_chapters}
+
+    def get_latest_chapter(self, toc_url):
+        toc_data = self.get_toc(toc_url)
+        if not toc_data or not toc_data.get('chapters'): return None
+        chapters = toc_data['chapters']
+        last_chapter = chapters[-1]
+        # 兼容性处理
+        return {
+            "title": last_chapter.get('name', last_chapter.get('raw_title', '未知章节')),
+            "url": last_chapter['url'],
+            "id": last_chapter.get('id', -1),
+            "total_chapters": len(chapters)
+        }
 
     def run(self, url):
         adapter = plugin_mgr.find_match(url)
         if adapter: return adapter.run(self, url)
         return self._general_run_logic(url)
-
-    def get_toc(self, toc_url):
-        adapter = plugin_mgr.find_match(toc_url)
-        if adapter: return adapter.get_toc(self, toc_url)
-        return self._general_toc_logic(toc_url)
-
+    
     def _general_run_logic(self, url):
-        # 归一化
         base_url = url
         if "_" in url:
             normalized = re.sub(r'_\d+\.html', '.html', url)
             if normalized != url: base_url = normalized
-
         combined_content = []
         first_page_meta = None
         current_url = base_url
@@ -231,7 +356,6 @@ class NovelCrawler:
         original_title = ""
         chap_id_match = re.search(r'/(\d+)(?:_\d+)?\.html', base_url)
         current_chap_id = chap_id_match.group(1) if chap_id_match else ""
-
         while page_count < max_pages:
             html = self._fetch_page_smart(current_url)
             if not html: break
@@ -239,11 +363,9 @@ class NovelCrawler:
             current_title = self._get_smart_title(soup)
             if page_count == 0: original_title = current_title
             elif current_title != original_title and len(current_title) > 3: break
-
             content = self._extract_content_smart(soup)
             if content and original_title in content[0]: content = content[1:]
             combined_content.extend(content)
-
             next_page_url, next_chapter_url, prev_chapter_url, toc_url = None, None, None, None
             for a in soup.find_all('a'):
                 txt = a.get_text(strip=True).replace(' ', '')
@@ -259,7 +381,6 @@ class NovelCrawler:
                     elif "上一页" in txt or "上页" in txt:
                         if current_chap_id and current_chap_id not in href: prev_chapter_url = full
                 if "目录" in txt: toc_url = full
-
             for aid in ['pb_prev', 'prev_url', 'pb_next', 'next_url', 'pb_mulu']:
                 tag = soup.find(id=aid)
                 if not tag or not tag.get('href'): continue
@@ -270,9 +391,7 @@ class NovelCrawler:
                     if current_chap_id and current_chap_id in tag['href']: next_page_url = t_url
                     else: next_chapter_url = t_url
                 elif 'mulu' in aid and not toc_url: toc_url = t_url
-
             if page_count == 0: first_page_meta = {'title': original_title, 'prev': prev_chapter_url, 'toc_url': toc_url}
-
             if next_page_url and next_page_url not in visited_urls:
                 current_url = next_page_url
                 visited_urls.add(next_page_url)
@@ -280,57 +399,16 @@ class NovelCrawler:
             else:
                 first_page_meta['next'] = next_chapter_url
                 break
-
         if first_page_meta:
             first_page_meta['content'] = combined_content
             return first_page_meta
         return None
 
-    def _general_toc_logic(self, toc_url):
-        html = self._fetch_page_smart(toc_url)
-        if not html: return None
-        soup = BeautifulSoup(html, 'html.parser')
-        all_chaps = self._parse_chapters_from_soup(soup, toc_url)
-        pages = set()
-        for s in soup.find_all('select'):
-            for o in s.find_all('option'):
-                val = o.get('value')
-                if val:
-                    full = urljoin(toc_url, val)
-                    if full.rstrip('/') != toc_url.rstrip('/'): pages.add(full)
-        if pages:
-            with ThreadPoolExecutor(max_workers=5) as exe:
-                results = exe.map(lambda u: self._parse_chapters_from_soup(BeautifulSoup(self._fetch_page_smart(u) or "", 'html.parser'), toc_url), sorted(list(pages)))
-                for sub in results:
-                    urls = set(c['url'] for c in all_chaps)
-                    for c in sub:
-                        if c['url'] not in urls: all_chaps.append(c); urls.add(c['url'])
-        return {'title': self._get_smart_title(soup), 'chapters': all_chaps}
-
     def get_first_chapter(self, toc_url):
         res = self.get_toc(toc_url)
         return res['chapters'][0]['url'] if res and res['chapters'] else None
-    # === [新增] 获取最新章节信息 ===
-    def get_latest_chapter(self, toc_url):
-        # 复用现有的目录解析逻辑
-        toc_data = self.get_toc(toc_url)
-        
-        if not toc_data or not toc_data.get('chapters'):
-            return None
-        
-        chapters = toc_data['chapters']
-        # 取最后一章
-        last_chapter = chapters[-1]
-        
-        return {
-            "title": last_chapter['title'],
-            "url": last_chapter['url'],
-            "total_chapters": len(chapters)
-        }
 
-# ==========================================
-# 4. EPUB 处理 (EpubHandler - 完整版)
-# ==========================================
+# ... (EpubHandler 保持不变) ...
 class EpubHandler:
     def __init__(self):
         self.lib_dir = LIB_DIR

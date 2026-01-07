@@ -5,7 +5,7 @@ from dotenv import load_dotenv # 1. 引入这个库
 # 2. 【关键】必须在导入其他本地模块（如 routes, managers）之前加载 .env
 # 否则 routes/core_bp.py 初始化时读不到环境变量
 load_dotenv() 
-
+import sqlite3
 from flask import Flask
 from datetime import timedelta
 import threading
@@ -105,7 +105,7 @@ def schedule_auto_check():
             print(f"[AutoCheck] 线程出错: {e}")
             
         # 休眠 4 小时 (14400 秒)
-        time.sleep(14400)
+        time.sleep(3600)
 
 # 在 main 中启动
 threading.Thread(target=schedule_auto_check, daemon=True).start()

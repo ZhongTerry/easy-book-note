@@ -595,6 +595,7 @@ fetch('/api/me').then(r => r.json()).then(user => {
         }
     }
 });
+setInterval(fetchUpdates, 600000); // 10分钟一次
 // ...
 
             // 数据
@@ -608,7 +609,8 @@ fetch('/api/me').then(r => r.json()).then(user => {
                     } catch(e){}
                     showMsg(`☁️ 同步到: ${d.key}`, 'success');
                     doAction('find').then(fetchTags);
-                } else { doAction('list').then(fetchTags); }
+                    fetchUpdates();
+                } else { doAction('list').then(fetchTags);fetchUpdates(); }
             }).catch(() => doAction('list').then(fetchTags));
 
             // 拖拽
@@ -619,7 +621,10 @@ fetch('/api/me').then(r => r.json()).then(user => {
             vInput.addEventListener('dragleave', ()=>vInput.classList.remove('drag-over'));
             vInput.addEventListener('drop', handleDrop);
         };
-
+        setInterval(() => {
+            console.log("⏰ 自动刷新更新状态...");
+            fetchUpdates();
+        }, 600000);
         function handleEnter(e) {
             if (e.key !== 'Enter') return;
             if (e.target.id === 'value') doAction('insert'); else if (e.target.id === 'key') doAction('find');
@@ -886,23 +891,68 @@ let updatesCache = {};
 
 // 1. 页面加载时获取更新状态
 function fetchUpdates() {
-    fetch('/api/updates/status').then(r=>r.json()).then(data => {
-        updatesCache = data;
-        renderUpdates(); // 重新渲染小红点
-    });
+    // 依然加时间戳防止 304 缓存
+    fetch(`/api/updates/status?t=${new Date().getTime()}`)
+        .then(r => r.json())
+        .then(data => {
+            console.log("🔥 状态已同步");
+            updatesCache = data;
+            renderUpdates();
+        });
 }
+// 当页面从后台切回来，或者标签页被重新激活时触发
+document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === 'visible') {
+        console.log("👀 页面重新可见，正在刷新数据...");
+        
+        // 1. 刷新列表 (以防 key 变了)
+        // doAction('list'); // 可选：如果你想刷新整个列表，但这可能导致闪烁
+        
+        // 2. 刷新更新状态
+        fetchUpdates();
+    }
+});
+// 当页面从 BFCache (往复缓存) 中恢复时触发
+window.addEventListener('pageshow', function(event) {
+    // event.persisted 为 true 表示是从缓存恢复的
+    // 但为了保险，我们无论是否缓存都刷一次
+    console.log("🔄 页面显示 (pageshow)，强制刷新状态...");
+    fetchUpdates();
+});
+// 3. [新增] 针对 Safari/移动端的 pageshow 事件 (解决后退不刷新问题)
+window.addEventListener('pageshow', function(event) {
+    if (event.persisted) {
+        console.log("🔄 从缓存恢复页面，强制刷新状态...");
+        fetchUpdates();
+    }
+});
 // 在 window.onload 里调用 fetchUpdates();
 
 // 2. 渲染更新状态 (小红点)
+// 在 index.html 的 script 标签中
+
 function renderUpdates() {
     Object.keys(updatesCache).forEach(key => {
         const info = updatesCache[key];
         const btn = document.getElementById(`upd-${key}`);
-        if (btn) {
-            // 如果有更新信息，改变按钮样式
-            btn.innerHTML = "🆕";
+        
+        if (btn && info.unread_count > 0) {
+            // 有更新：显示红色数字
+            // 如果 unread_count 很多（比如 >99），显示 99+
+            const countDisplay = info.unread_count > 99 ? '99+' : `+${info.unread_count}`;
+            
+            btn.innerHTML = `<span style="font-weight:bold; font-size:12px;">${countDisplay}</span>`;
             btn.style.color = "#ef4444"; // 红色
-            btn.title = `最新: ${info.latest_title}`;
+            btn.style.borderColor = "#ef4444";
+            btn.style.background = "#fef2f2";
+            btn.title = `最新：${info.latest_title}\n(${info.status_text})`;
+        } else if (btn) {
+            // 没更新或已读完：恢复默认
+            btn.innerHTML = "🔄";
+            btn.style.color = ""; 
+            btn.style.borderColor = "";
+            btn.style.background = "";
+            btn.title = "检查更新";
         }
     });
 }
@@ -910,9 +960,7 @@ function renderUpdates() {
 // 3. 手动检查更新函数
 async function checkUpdate(key, url) {
     const btn = document.getElementById(`upd-${key}`);
-    const originalIcon = btn.innerText;
-    
-    btn.innerHTML = "⏳"; // 加载中图标
+    btn.innerHTML = "⏳";
     btn.disabled = true;
 
     try {
@@ -921,28 +969,35 @@ async function checkUpdate(key, url) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ key: key, url: url })
         });
-        const data = await res.json();
+        const json = await res.json();
         
-        if (data.status === 'success') {
-            const latest = data.latest;
-            // 比较简单的判断：如果最新章节标题和当前 Value 不一样 (或者仅仅显示最新)
-            // 这里为了直观，直接弹窗告诉用户
-            alert(`🔍 检查结果：\n\n当前书籍：${key}\n最新章节：${latest.title}\n总章数：${latest.total_chapters}`);
+        if (json.status === 'success') {
+            // [关键] 这里拿到了后端算好的 data
+            const d = json.data; 
             
-            // 更新 UI 状态
-            updatesCache[key] = { latest_title: latest.title };
+            let msg = `📖 书籍检查报告\n\n`;
+            msg += `最新章节：${d.latest_title}\n`;
+            
+            if (d.unread_count > 0) {
+                msg += `⚠️ 状态：${d.status_text} (落后 ${d.unread_count} 章)`;
+            } else {
+                msg += `✅ 状态：${d.status_text}`;
+            }
+            alert(msg);
+            
+            // 更新本地缓存，让小红点立即变色
+            updatesCache[key] = d;
             renderUpdates();
         } else {
-            showMsg("检查失败: " + data.msg, "error");
+            showMsg("检查失败: " + json.msg, "error");
         }
-    } catch (e) {
+    } catch(e) {
         showMsg("网络错误", "error");
     } finally {
-        if(btn.innerText === "⏳") btn.innerText = "🔄"; // 恢复
+        if(btn.innerHTML === "⏳") btn.innerHTML = "🔄";
         btn.disabled = false;
     }
 }
-
 // 记得在 renderTable 的最后调用一次 renderUpdates()，防止翻页/搜索后红点消失
 // 在 renderTable 函数末尾加一行: renderUpdates();
         // === 替换 index.html 中的 selectResult 函数 ===

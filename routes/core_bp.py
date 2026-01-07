@@ -4,7 +4,7 @@ import os
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler
-
+import re
 core_bp = Blueprint('core', __name__)
 DEFAULT_SERVER = 'https://auth.ztrztr.top'
 DEFAULT_CALLBACK = 'https://book.ztrztr.top/callback'
@@ -112,8 +112,50 @@ def insert(): return jsonify(managers.db.insert(request.json.get('key'), request
 
 @core_bp.route('/update', methods=['POST'])
 @login_required
-def update(): return jsonify(managers.db.update(request.json.get('key'), request.json.get('value')))
+def update():
+    key = request.json.get('key')
+    value = request.json.get('value')
+    
+    # 1. 先执行原有的保存逻辑
+    result = managers.db.update(key, value)
+    
+    # 2. [新增] 顺手更新“追更状态”
+    try:
+        # 获取该书当前的更新信息
+        info = managers.update_manager.get_update(key)
+        
+        # 只有当这本书在追更列表里 (即有 info 信息) 且有数字 ID 时才计算
+        if info and info.get('latest_url'):
+            # 如果当前链接就是最新链接，直接清零
+            if value == info['latest_url']:
+                 managers.update_manager.update_progress(key, 0, "已追平")
+            
+            # 否则尝试通过 ID 计算
+            else:
+                # 尝试从 value (当前URL) 中提取数字 ID
+                # 匹配 /123.html 或 /123_2.html 中的 123
+                match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', value.split('?')[0])
+                if match:
+                    current_id = int(match.group(1))
+                    
+                    # 我们暂时没法从 info 里直接拿 latest_id (因为之前存的是 title/url/total)
+                    # 但是我们可以尝试再次解析 latest_url 的 ID
+                    latest_url = info['latest_url']
+                    l_match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', latest_url.split('?')[0])
+                    
+                    if l_match:
+                        latest_id = int(l_match.group(1))
+                        
+                        # 计算差距
+                        diff = latest_id - current_id
+                        if diff > 0:
+                            managers.update_manager.update_progress(key, diff, f"落后 {diff} 章")
+                        elif diff <= 0:
+                            managers.update_manager.update_progress(key, 0, "已追平")
+    except Exception as e:
+        print(f"[AutoUpdate] Failed to recalc progress: {e}")
 
+    return jsonify(result)
 @core_bp.route('/remove', methods=['POST'])
 @login_required
 def remove(): return jsonify(managers.db.remove(request.json.get('key')))
@@ -205,54 +247,189 @@ from managers import db, update_manager, booklist_manager
 @core_bp.route('/api/check_update', methods=['POST'])
 @login_required
 def api_check_update():
-    # 注意：前端传来的可能是章节URL，我们需要先找到目录
-    current_url = request.json.get('url') # 当前阅读的 URL
+    # 前端传来的当前阅读 URL
+    current_url = request.json.get('url') 
     book_key = request.json.get('key')
     
-    if not current_url: return jsonify({"status": "error"})
+    if not current_url: return jsonify({"status": "error", "msg": "No URL"})
 
-    # 尝试找到目录
-    # 策略：先看 DB 里有没有存 toc_url (最佳实践是 insert 时存进去，但现在可能没有)
-    # 临时策略：用 crawler 爬一下当前页找目录，或者依赖前端传 toc_url
-    # 为了简单，我们让爬虫自己去根据当前页找目录
-    
-    # 这是一个耗时操作，正常应该异步，但为了前端立即反馈，我们同步做
     try:
-        # 先尝试获取目录
-        page_data = crawler.run(current_url)
-        toc_url = page_data.get('toc_url')
-        
-        if not toc_url:
-             # 兜底：尝试直接解析当前URL是不是目录
-             toc_url = current_url 
+        # 1. 智能找目录 (优先缓存)
+        toc_url = None
+        cached_page = managers.cache.get(current_url)
+        if cached_page and cached_page.get('toc_url'): 
+            toc_url = cached_page['toc_url']
+        else:
+            page_data = crawler.run(current_url)
+            if page_data: 
+                toc_url = page_data.get('toc_url')
+                managers.cache.set(current_url, page_data)
 
-        latest = crawler.get_latest_chapter(toc_url)
+        if not toc_url: 
+            # 兜底猜测
+            toc_url = current_url.rsplit('/', 1)[0] + '/'
+
+        # 2. 爬取最新章节 (这是手动检查，必须实时爬)
+        latest_chap = crawler.get_latest_chapter(toc_url)
         
-        if latest:
-            # 存入更新管理器
-            update_manager.set_update(book_key, latest)
+        if latest_chap:
+            # 3. 保存最新信息到硬盘 (给自动轮询用)
+            save_data = {
+                "latest_title": latest_chap['title'],
+                "latest_url": latest_chap['url'],
+                "latest_id": latest_chap['id'],
+                "toc_url": toc_url
+            }
+            managers.update_manager.set_update(book_key, save_data)
             
-            # 判断是否有更新 (简单判断 URL 是否不同)
-            # 注意：这只是个粗略判断，因为 current_url 是具体的某一页
-            is_new = current_url != latest['url']
+            # ===============================================
+            # 4. [核心修复] 立即计算差值返回给前端
+            # ===============================================
             
+            # A. 获取当前阅读进度的 ID
+            current_id = parse_chapter_id(current_url)
+            # 如果 URL 里没 ID 或者是 _2.html，尝试正则提取
+            if current_id <= 0:
+                match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
+                if match: current_id = int(match.group(1))
+
+            latest_id = latest_chap['id']
+            
+            # 构造返回给前端的详细数据
+            response_data = {
+                "latest_title": latest_chap['title'],
+                "latest_url": latest_chap['url'],
+                "unread_count": 0,
+                "status_text": "已最新"
+            }
+
+            # B. 执行减法
+            if latest_id > 0 and current_id > 0:
+                diff = latest_id - current_id
+                if diff > 0:
+                    response_data["unread_count"] = diff
+                    response_data["status_text"] = f"落后 {diff} 章"
+                else:
+                    response_data["status_text"] = "已追平"
+            elif current_url != latest_chap['url']:
+                # ID 解析失败，回退到 URL 对比
+                response_data["unread_count"] = 1
+                response_data["status_text"] = "有新章节"
+
             return jsonify({
                 "status": "success", 
-                "latest": latest,
-                "is_new": is_new
+                "msg": "刷新成功", 
+                "data": response_data  # 把算好的数据传回去
             })
         else:
-            return jsonify({"status": "failed", "msg": "无法获取目录"})
-            
-    except Exception as e:
-        print(f"Update Check Error: {e}")
-        return jsonify({"status": "error", "msg": str(e)})
+            return jsonify({"status": "failed", "msg": "目录解析失败"})
 
+    except Exception as e:
+        print(f"Check Update Error: {e}")
+        return jsonify({"status": "error", "msg": str(e)})
 # 2. 获取所有更新状态 (用于前端渲染小红点)
+from spider_core import searcher, epub_handler, parse_chapter_id 
+
+# =========================================================
+# 核心接口 1：获取所有书的实时状态 (前端刷新/轮询调用)
+# =========================================================
+# routes/core_bp.py
+
+# routes/core_bp.py
+
 @core_bp.route('/api/updates/status')
 @login_required
 def api_get_updates_status():
-    return jsonify(update_manager.load())
+    # 1. 寻找 target_books (只检查 to_read 书单里的书)
+    all_lists = managers.booklist_manager.load()
+    target_books = []
+    
+    # 关键字匹配书单名
+    watch_keywords = ['to_read', '必读', '追更', 'reading', '在读']
+    
+    for list_data in all_lists.values():
+        list_name = list_data.get('name', '').lower()
+        if any(k in list_name for k in watch_keywords):
+            target_books.extend(list_data.get('books', []))
+            
+    # 如果没有匹配的书单，为了兼容性，可以检查一下 status='want' 的书
+    if not target_books:
+        for list_data in all_lists.values():
+            for book in list_data.get('books', []):
+                if book.get('status') == 'want':
+                    target_books.append(book)
+
+    # 去重
+    target_keys = list(set([b['key'] for b in target_books]))
+    
+    # 获取更新记录 (来自后台爬虫)
+    updates_record = managers.update_manager.load()
+    
+    response_data = {}
+    
+    # 获取用户当前的阅读进度 (KV Store)
+    user_progress = managers.db.list_all().get('data', {})
+
+    print(f"\n[StatusCheck] 正在为 {len(target_keys)} 本追更书籍计算进度...")
+
+    for key in target_keys:
+        current_url = user_progress.get(key)
+        if not current_url: continue
+
+        # --- A. 获取当前阅读章节的 ID (最精准的方法：爬当前页) ---
+        current_id = -1
+        
+        # 1. 先尝试从缓存读页面信息 (避免频繁爬取)
+        cached_page = managers.cache.get(current_url)
+        if cached_page and cached_page.get('title'):
+            # 使用统一的 parse_chapter_id 函数
+            current_id = parse_chapter_id(cached_page['title'])
+        
+        # 2. 如果缓存没有或没解析出ID，且不是频繁请求，才尝试爬取
+        if current_id <= 0:
+            # 这里为了性能，如果用户短时间内频繁刷新，我们不应该每次都去爬
+            # 但为了准确性，我们假设用户已经阅读了新章节
+            try:
+                page_data = crawler.run(current_url)
+                if page_data and page_data.get('title'):
+                    managers.cache.set(current_url, page_data) # 顺手存缓存
+                    current_id = parse_chapter_id(page_data['title'])
+            except: pass
+        
+        # 3. 实在不行，回退到 URL 正则提取
+        if current_id <= 0:
+            match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
+            if match: current_id = int(match.group(1))
+
+        # --- B. 获取最新章节 ID (来自 update_manager) ---
+        latest_info = updates_record.get(key)
+        if not latest_info: continue
+
+        latest_id = int(latest_info.get('latest_id', -1))
+        # 如果 json 里存的 latest_id 无效，尝试从 latest_title 现算
+        if latest_id <= 0 and latest_info.get('latest_title'):
+             latest_id = parse_chapter_id(latest_info['latest_title'])
+
+        # --- C. 计算差值 ---
+        status_payload = {
+            "unread_count": 0,
+            "status_text": "已最新",
+            "latest_title": latest_info.get('latest_title', '')
+        }
+
+        if latest_id > 0 and current_id > 0:
+            diff = latest_id - current_id
+            # 只有正向差距才算更新 (防止看番外导致 ID 变小)
+            if diff > 0:
+                status_payload['unread_count'] = diff
+                status_payload['status_text'] = f"落后 {diff} 章"
+            else:
+                status_payload['status_text'] = "已追平"
+        
+        # 存入结果
+        response_data[key] = status_payload
+
+    return jsonify(response_data)
 @core_bp.route('/api/download', methods=['POST'])
 @login_required
 def start_dl():
