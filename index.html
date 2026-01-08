@@ -199,6 +199,135 @@
         .stat-num { font-size: 24px; font-weight: bold; color: #4f46e5; }
         .heatmap-grid { display: flex; gap: 2px; height: 60px; align-items: flex-end; margin-top: 10px; }
         .heat-bar { flex: 1; background: #e5e7eb; border-radius: 2px; transition: height 0.5s; min-height: 2px; }
+        /* === 书签操作栏样式 === */
+
+/* 1. 电脑端默认：一行靠右排列 */
+.action-group {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    height: 32px; /* 强制高度，防止抖动 */
+}
+
+/* 垂直分割线 */
+.v-line {
+    border-left: 1px solid #e5e7eb;
+    height: 14px;
+    margin: 0 4px;
+}
+
+/* 按钮通用微调 */
+.action-group .p-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    white-space: nowrap;
+}
+
+/* === 2. 手机端强制优化 (宽度 <= 600px) === */
+/* === 📱 手机端强制重构 (修复重叠与乱序) === */
+@media (max-width: 600px) {
+    /* 1. 强制表格行变为块级卡片 */
+    table, tbody, tr, td {
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box;
+    }
+
+    /* 2. 给每一本书的容器（行）加底边距 */
+    table tr {
+        margin-bottom: 15px;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 10px;
+        position: relative; /* 确保内部元素定位准确 */
+    }
+
+    /* 3. 第一行：书名标题 */
+    table td:nth-child(1) {
+        padding: 0 5px 5px 5px !important;
+        border: none !important;
+        text-align: left !important;
+    }
+
+    /* 标题文字样式优化 */
+    .key-final {
+        font-size: 16px !important;
+        font-weight: 700 !important;
+        color: #1f2937;
+        margin-bottom: 4px;
+        display: block;
+        width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
+    /* 标签稍微缩小一点，放在标题下面 */
+    table td:nth-child(1) .p-tag {
+        font-size: 10px !important;
+        transform: scale(0.9);
+        transform-origin: left center;
+        margin-top: 2px;
+    }
+
+    /* 4. 第二行：按钮操作区 */
+    table td:nth-child(2) {
+        padding: 0 !important;
+        border: none !important;
+        margin-top: 5px; /* 关键：给标题留出距离，防止重叠 */
+    }
+
+    /* 核心：九宫格布局 */
+    .action-group {
+        display: grid !important;
+        /* 强制 4 列，自动撑满宽度 */
+        grid-template-columns: repeat(4, 1fr); 
+        gap: 8px !important; /* 按钮之间的间隙 */
+        width: 100% !important;
+        justify-content: stretch;
+    }
+
+    /* 隐藏分割线（网格不需要线） */
+    .action-group .v-line {
+        display: none !important;
+    }
+
+    /* 按钮统一成大方块 */
+    .action-group .p-btn {
+        width: 100% !important;
+        height: 38px !important; /* 统一高度，方便手指点击 */
+        margin: 0 !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px !important;
+        font-size: 16px !important; /* 图标放大 */
+        background-color: #f3f4f6; /* 浅灰背景，像键盘按键 */
+        border: 1px solid #e5e7eb;
+    }
+
+    /* 5. 特殊按钮微调 */
+    /* 红色更新数字 */
+    .action-group .p-btn span {
+        font-size: 12px !important;
+        font-weight: bold;
+    }
+    
+    /* 阅读按钮高亮 */
+    .action-group .p-btn-primary {
+        background-color: var(--p-primary) !important;
+        color: white !important;
+        grid-column: span 2; /* 可选：让阅读按钮占 2 格，更显眼 */
+    }
+
+    /* 隐藏文字，只留图标 (除了更新数字) */
+    .action-group .btn-text {
+        display: none !important;
+    }
+}
     </style>
 </head>
 <body>
