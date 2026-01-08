@@ -244,7 +244,8 @@
             
             <button class="p-btn p-btn-outline" onclick="openSearchModal()">🌐 搜书</button>
             
-            <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button>
+            <!-- <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button> -->
+            <button class="p-btn p-btn-outline" onclick="openHistory()">⏳ 历史</button>
             <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
@@ -383,6 +384,21 @@
         </div>
     </div>
 </div>
+<!-- 历史记录模态框 -->
+<div id="historyModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 500px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+            <h3 style="margin:0">⏳ 最近阅读</h3>
+            <div>
+                <button class="p-btn p-btn-sm p-btn-danger" onclick="clearHistory()">清空</button>
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('historyModal')">✕</button>
+            </div>
+        </div>
+        <div id="historyList" style="max-height: 400px; overflow-y: auto;">
+            <!-- JS 渲染列表 -->
+        </div>
+    </div>
+</div>
     <script>
         const API_URL = window.location.origin;
         let currentView = 'list';
@@ -507,19 +523,25 @@ function viewListDetail(listId) {
 
     list.books.forEach(book => {
         const bg = stringToColor(book.title);
+        
+        // [修改点 1] 外层 div 增加 cursor:pointer 和 onclick 事件
         const html = `
-        <div class="mini-book-card">
+        <div class="mini-book-card" style="cursor:pointer;" onclick="selectBookFromList('${book.key}')" title="点击跳转到书架">
             <div class="mini-book-info">
                 <div class="mini-book-dot" style="background:${bg}"></div>
                 <div style="font-size:14px; font-weight:500;">${book.title}</div>
             </div>
+            
             <div class="action-group">
+                <!-- [修改点 2] 内部按钮增加 event.stopPropagation() 防止冒泡 -->
                 ${book.status === 'want' ? 
-                    `<button class="p-btn p-btn-sm" onclick="updateBookStatus('${listId}', '${book.key}', 'done')">✅</button>` : 
-                    `<button class="p-btn p-btn-sm" onclick="updateBookStatus('${listId}', '${book.key}', 'want')">⏪</button>`}
-                <button class="p-btn p-btn-sm p-btn-danger" style="padding:2px 5px;" onclick="updateBookStatus('${listId}', '${book.key}', '', 'remove')">×</button>
+                    `<button class="p-btn p-btn-sm" onclick="event.stopPropagation(); updateBookStatus('${listId}', '${book.key}', 'done')">✅</button>` : 
+                    `<button class="p-btn p-btn-sm" onclick="event.stopPropagation(); updateBookStatus('${listId}', '${book.key}', 'want')">⏪</button>`}
+                
+                <button class="p-btn p-btn-sm p-btn-danger" style="padding:2px 5px;" onclick="event.stopPropagation(); updateBookStatus('${listId}', '${book.key}', '', 'remove')">×</button>
             </div>
         </div>`;
+        
         if(book.status === 'want') wantCont.innerHTML += html;
         else doneCont.innerHTML += html;
     });
@@ -634,7 +656,12 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
         async function doAction(action) {
             const key = document.getElementById('key').value.trim();
             const value = document.getElementById('value').value.trim();
-            if (action !== 'list' && action !== 'find' && !key) return showMsg('请输入 Key', 'error');
+            if (action === 'find' && !key) {
+                action = 'list';
+            } else if (action !== 'list' && action !== 'find' && !key) {
+                // 其他操作 (insert/remove) 依然必须有 key
+                return showMsg('请输入 Key', 'error');
+            }
 
             const btn = document.activeElement; if(btn && btn.tagName === 'BUTTON') btn.classList.add('loading');
 
@@ -654,7 +681,64 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
             } catch (err) { showMsg('网络错误', 'error'); } 
             finally { if(btn && btn.tagName === 'BUTTON') btn.classList.remove('loading'); }
         }
+        // 格式化时间戳
+function formatTime(timestamp) {
+    const date = new Date(timestamp * 1000);
+    return `${date.getMonth()+1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
+}
 
+async function openHistory() {
+    const res = await fetch('/api/history/list');
+    const json = await res.json();
+    const list = json.data;
+    const container = document.getElementById('historyList');
+    
+    if (!list || list.length === 0) {
+        container.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">暂无阅读记录</div>';
+    } else {
+        let html = '';
+        list.forEach(item => {
+            const bg = stringToColor(item.key); // 用书名Key生成头像颜色
+            html += `
+            <div class="list-item-card" onclick="window.open('/read?url=${encodeURIComponent(item.url)}&key=${encodeURIComponent(item.key)}', '_blank')">
+                <div style="display:flex; align-items:center; gap:10px; width:100%;">
+                    <div style="width:36px; height:36px; border-radius:6px; background:${bg}; color:white; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:12px; flex-shrink:0;">
+                        ${item.key.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div style="overflow:hidden;">
+                        <div style="font-weight:600; font-size:14px; color:#374151;">${item.key}</div>
+                        <div style="font-size:12px; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                            ${item.title}
+                        </div>
+                    </div>
+                </div>
+                <div style="font-size:12px; color:#9ca3af; white-space:nowrap; margin-left:10px;">
+                    ${formatTime(item.timestamp)}
+                </div>
+            </div>`;
+        });
+        container.innerHTML = html;
+    }
+    PureUI.modal.open('historyModal');
+}
+// [新增] 从书单选中书籍跳转
+function selectBookFromList(key) {
+    // 1. 填入 Key
+    document.getElementById('key').value = key;
+    
+    // 2. 关闭所有相关模态框 (先关详情，再关列表)
+    PureUI.modal.close('listDetailModal');
+    PureUI.modal.close('booklistModal');
+    
+    // 3. 触发“查库”操作
+    doAction('find');
+}
+async function clearHistory() {
+    if(confirm("确定清空所有阅读历史吗？")) {
+        await fetch('/api/history/clear', { method: 'POST' });
+        openHistory(); // 刷新
+    }
+}
         async function doRollback() {
             if(!confirm("确定回退到上一步吗？")) return;
             const res = await fetch(`${API_URL}/rollback`, { method: 'POST' });

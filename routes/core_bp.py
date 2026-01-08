@@ -84,9 +84,23 @@ def read_mode():
         if not data:
             data = crawler.run(u)
             if data: managers.cache.set(u, data)
-    
+    if data and k and data.get('title'):
+        # 只有当获取内容成功且有 Key 时才记录
+        # title 可能是 "第xxx章 标题"，我们最好也存一下书名(如果有的话)，
+        # 但这里只有章节标题。为了简单，我们暂时存章节标题，
+        # 或者前端展示时用 Key (书名拼音) + 章节标题。
+        managers.history_manager.add_record(k, data['title'], u)
     return render_template('reader.html', article=data, current_url=u, db_key=k)
+@core_bp.route('/api/history/list')
+@login_required
+def api_history_list():
+    return jsonify({"status": "success", "data": managers.history_manager.get_history()})
 
+@core_bp.route('/api/history/clear', methods=['POST'])
+@login_required
+def api_history_clear():
+    managers.history_manager.clear()
+    return jsonify({"status": "success"})
 @core_bp.route('/toc')
 @login_required
 def toc_page():
