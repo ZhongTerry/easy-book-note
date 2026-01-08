@@ -244,8 +244,70 @@ class IsolatedStatsManager(BaseJsonManager):
 # ==========================================
 # 4. 核心 KV 数据库 (SQL版)
 # ==========================================
+# managers.py 中的 IsolatedDB 类 (替换原有的)
+
 class IsolatedDB:
+    def _get_db_conn(self):
+        # 这是一个辅助方法，用于非 Flask 请求上下文（如后台线程）获取连接
+        # 在 web 请求中应优先使用 get_db()
+        username = session.get('user', {}).get('username', 'default_user')
+        db_path = os.path.join(USER_DATA_DIR, f"{username}.sqlite")
+        conn = sqlite3.connect(db_path)
+        return conn
+
+    def _ensure_history_table(self):
+        """确保历史记录表存在"""
+        try:
+            with get_db() as conn:
+                conn.execute('''CREATE TABLE IF NOT EXISTS book_history (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                username TEXT NOT NULL,
+                                book_key TEXT NOT NULL,
+                                value TEXT,
+                                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                            )''')
+                conn.commit()
+        except: pass
+
+    def add_version(self, key, value):
+        """添加一个历史版本，并保留最近 5 条"""
+        self._ensure_history_table()
+        u = get_current_user()
+        try:
+            with get_db() as conn:
+                # 1. 插入新记录
+                conn.execute("INSERT INTO book_history (username, book_key, value) VALUES (?, ?, ?)", (u, key, value))
+                
+                # 2. 清理旧记录 (只保留最近 5 条)
+                # 逻辑：找出该用户该书的所有记录ID，按时间倒序排列，跳过前5个，剩下的删掉
+                conn.execute(f'''
+                    DELETE FROM book_history 
+                    WHERE id IN (
+                        SELECT id FROM book_history 
+                        WHERE username=? AND book_key=? 
+                        ORDER BY recorded_at DESC 
+                        LIMIT -1 OFFSET 5
+                    )
+                ''', (u, key))
+                conn.commit()
+            return True
+        except Exception as e:
+            print(f"[DB] Add Version Error: {e}")
+            return False
+
+    def get_versions(self, key):
+        """获取某本书的最近 5 个版本"""
+        self._ensure_history_table()
+        u = get_current_user()
+        try:
+            with get_db() as conn:
+                cursor = conn.execute("SELECT value, recorded_at FROM book_history WHERE username=? AND book_key=? ORDER BY recorded_at DESC", (u, key))
+                return [{"value": row[0], "time": row[1]} for row in cursor.fetchall()]
+        except: return []
+
+    # === 原有的基础方法 (保持不变，但 update/insert 稍微调整逻辑在路由层做) ===
     def insert(self, key, value):
+        if not key: return {"status": "error", "message": "Key cannot be empty"}
         u = get_current_user()
         try:
             with get_db() as conn:
@@ -261,6 +323,7 @@ class IsolatedDB:
         try:
             with get_db() as conn:
                 conn.execute("DELETE FROM user_books WHERE username=? AND book_key=?", (u, key))
+                # 顺便把历史记录也删了？通常保留历史比较安全，这里选择保留
                 conn.commit()
             return {"status": "success", "message": f"Removed: {key}"}
         except Exception as e: return {"status": "error", "message": str(e)}
@@ -270,7 +333,7 @@ class IsolatedDB:
         try:
             conn = get_db()
             cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND book_key NOT LIKE '@%' ORDER BY updated_at DESC", (u,))
-            data = {row['book_key']: row['value'] for row in cursor.fetchall()}
+            data = {row[0]: row[1] for row in cursor.fetchall()}
             return {"status": "success", "data": data}
         except Exception as e: return {"status": "error", "message": str(e)}
 
@@ -280,7 +343,7 @@ class IsolatedDB:
             t = f'%{term}%'
             conn = get_db()
             cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND (book_key LIKE ? OR value LIKE ?)", (u, t, t))
-            data = {row['book_key']: row['value'] for row in cursor.fetchall()}
+            data = {row[0]: row[1] for row in cursor.fetchall()}
             return {"status": "success", "data": data}
         except Exception as e: return {"status": "error", "message": str(e)}
 
@@ -289,11 +352,10 @@ class IsolatedDB:
         try:
             conn = get_db()
             row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
-            return row['value'] if row else None
+            return row[0] if row else None
         except: return None
     
-    def rollback(self): return {"status": "error", "message": "Not implemented in SQLite"}
-
+    def rollback(self): return {"status": "error", "message": "Use version history instead"}
 # ==========================================
 # 5. 文件/缓存管理
 # ==========================================

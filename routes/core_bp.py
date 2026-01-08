@@ -122,17 +122,34 @@ def find(): return jsonify(managers.db.find(request.json.get('key', '')))
 
 @core_bp.route('/insert', methods=['POST'])
 @login_required
-def insert(): return jsonify(managers.db.insert(request.json.get('key'), request.json.get('value')))
+def insert():
+    key = request.json.get('key')
+    value = request.json.get('value')
+    is_manual = request.json.get('manual', False) # 获取前端传来的标记
+    
+    # 1. 保存当前值
+    res = managers.db.insert(key, value)
+    
+    # 2. 如果是手动操作，记录历史版本
+    if is_manual and res.get('status') == 'success':
+        managers.db.add_version(key, value)
+        
+    return jsonify(res)
+
 
 @core_bp.route('/update', methods=['POST'])
 @login_required
 def update():
     key = request.json.get('key')
     value = request.json.get('value')
-    
-    # 1. 先执行原有的保存逻辑
+    is_manual = request.json.get('manual', False) # 获取前端传来的标记
+
+    # 1. 保存当前值
     result = managers.db.update(key, value)
     
+    # 2. 如果是手动操作，记录历史版本
+    if is_manual and result.get('status') == 'success':
+        managers.db.add_version(key, value)
     # 2. [新增] 顺手更新“追更状态”
     try:
         # 获取该书当前的更新信息
@@ -170,6 +187,15 @@ def update():
         print(f"[AutoUpdate] Failed to recalc progress: {e}")
 
     return jsonify(result)
+
+@core_bp.route('/api/history/versions', methods=['POST'])
+@login_required
+def api_history_versions():
+    key = request.json.get('key')
+    if not key: return jsonify({"status": "error"})
+    
+    versions = managers.db.get_versions(key)
+    return jsonify({"status": "success", "data": versions})
 @core_bp.route('/remove', methods=['POST'])
 @login_required
 def remove(): return jsonify(managers.db.remove(request.json.get('key')))

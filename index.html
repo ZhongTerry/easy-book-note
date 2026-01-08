@@ -399,6 +399,19 @@
         </div>
     </div>
 </div>
+<!-- 版本回退模态框 -->
+<div id="versionModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 500px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+            <h3 style="margin:0">🕒 历史版本 (最近5次)</h3>
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('versionModal')">✕</button>
+        </div>
+        <p id="versionBookName" style="font-size:13px; color:#666; margin-bottom:10px;"></p>
+        <div id="versionList" style="max-height: 400px; overflow-y: auto;">
+            <!-- JS 渲染列表 -->
+        </div>
+    </div>
+</div>
     <script>
         const API_URL = window.location.origin;
         let currentView = 'list';
@@ -664,9 +677,16 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
             }
 
             const btn = document.activeElement; if(btn && btn.tagName === 'BUTTON') btn.classList.add('loading');
-
+            const payload = { key, value };
+            if (action === 'insert' || action === 'update') {
+                payload.manual = true; // 标记为手动保存，触发历史记录
+            }
             try {
-                const res = await fetch(`${API_URL}/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, value }) });
+                const res = await fetch(`${API_URL}/${action}`, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify(payload) 
+                });
                 const result = await res.json();
                 
                 if (['insert', 'update', 'remove', 'rollback'].includes(action)) {
@@ -845,6 +865,7 @@ let actionGroup = `
         }
         
         <span class="v-line"></span>
+<button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="openVersionModal('${k}')" title="历史版本回退">🕒</button>
         <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="downloadBook('${k}', '${v}', '${displayName}')" title="离线全本(Pro)">📥</button>
         <button class="p-btn p-btn-sm update-btn" id="upd-${k}" style="padding:4px 8px;" onclick="checkUpdate('${k}', '${v}')" title="检查更新">🔄</button>
         <!--<button class="p-btn p-btn-sm" onclick="PureUI.copy('${v}')" title="复制">📋</button> -->
@@ -875,7 +896,63 @@ let actionGroup = `
     container.innerHTML = html;
     renderUpdates();
 }
+// 打开版本历史
+async function openVersionModal(key) {
+    document.getElementById('versionBookName').innerText = `书籍 Key: ${key}`;
+    const cont = document.getElementById('versionList');
+    cont.innerHTML = '<div style="text-align:center; padding:20px;">加载中...</div>';
+    PureUI.modal.open('versionModal');
 
+    try {
+        const res = await fetch('/api/history/versions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: key })
+        });
+        const json = await res.json();
+        
+        if (json.status === 'success' && json.data.length > 0) {
+            let html = '';
+            json.data.forEach(v => {
+                // 格式化时间 (UTC转本地)
+                const date = new Date(v.time + "Z"); // 假设数据库存的是UTC字符串，如果是时间戳需调整
+                // 兼容 SQLite timestamp 格式 (通常是 "2023-01-01 12:00:00")
+                const timeStr = v.time.replace('T', ' ').split('.')[0]; 
+
+                html += `
+                <div class="list-item-card" style="flex-direction:column; gap:5px; align-items:flex-start;">
+                    <div style="display:flex; justify-content:space-between; width:100%; font-size:12px; color:#888;">
+                        <span>${timeStr}</span>
+                        <button class="p-btn p-btn-sm" style="padding:2px 6px;" onclick="restoreVersion('${key}', '${v.value}')">回退至此</button>
+                    </div>
+                    <div style="font-size:13px; color:#374151; word-break:break-all; background:#f9fafb; padding:5px; border-radius:4px; width:100%;">
+                        ${v.value}
+                    </div>
+                </div>`;
+            });
+            cont.innerHTML = html;
+        } else {
+            cont.innerHTML = '<div style="text-align:center; color:#999; padding:20px;">暂无历史版本</div>';
+        }
+    } catch(e) {
+        cont.innerHTML = '<div style="text-align:center; color:red;">加载失败</div>';
+    }
+}
+
+// 执行回退
+function restoreVersion(key, value) {
+    if(!confirm("确定要回退到这个版本吗？\n当前的进度将会被覆盖。")) return;
+    
+    // 填入输入框
+    document.getElementById('key').value = key;
+    document.getElementById('value').value = value;
+    
+    // 关闭模态框
+    PureUI.modal.close('versionModal');
+    
+    // 执行保存 (这会作为一次新的 manual save，生成新的历史记录，这是符合逻辑的)
+    doAction('update');
+}
         function renderGrid(data, container, keys) {
             let html = '<div class="bookshelf-grid">';
             keys.forEach(k => {
