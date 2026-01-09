@@ -1,20 +1,74 @@
-<!-- v1.1.0 版本块 -->
 <div class="version-block" id="v1.1.0">
     <div class="version-tag">当前版本</div>
-    <h2 class="version-title">v1.1.0 极致极简体验升级</h2>
+    <h2 class="version-title">v1.1.0 极致极简体验升级 (Tomato Style)</h2>
     <div class="version-content">
         <ul>
-            <li><strong>PC阅读器重构：</strong> 全面参考番茄小说 UI，优化页边距与容器比例，极致沉浸。</li>
-            <li><strong>功能高度整合：</strong> 原有的字号调节、换源、朗读功能统一收纳至右侧“设置”面板。</li>
-            <li><strong>交互优化：</strong> 目录弹窗支持自动滚动定位至当前章节，并增加了强制刷新目录功能。</li>
-            <li><strong>色彩适配：</strong> 深度修复黑暗模式下顶栏与背景的色彩断层，阅读更护眼。</li>
+            <li><strong>PC端沉浸式重构：</strong> 深度参考“番茄小说”视觉规范，移除所有冗余导航栏。采用 900px 黄金阅读宽度，配合羊皮纸/丝绸质感背景，打造极致护眼的 PC 阅读环境。</li>
+            <li><strong>设备自适应分流：</strong> 后端引入智能 UA 识别逻辑，实现 <code>reader_pc.html</code> 与移动端模板彻底解耦，针对不同设备特性提供差异化的交互逻辑。</li>
+            <li><strong>毛玻璃目录抽屉：</strong> 为 PC 端新增半透明毛玻璃特效的侧边目录栏，支持实时定位当前章节，并整合“强制刷新目录”功能。</li>
+            <li><strong>功能高度整合：</strong> 独家 <code>PureUI</code> 交互升级，将字号调节、换源、TTS 朗读、背景切换等功能统一收纳至右侧悬浮设置面板，阅读区“零干扰”。</li>
+            <li><strong>全键盘操作支持：</strong> 新增对键盘左右方向键的监听，实现无需鼠标点击的极速翻页体验。</li>
+            <li><strong>细节体验打磨：</strong> 在页面底部新增微型信息栏（实时时钟与阅读进度），让阅读状态一目了然。</li>
+        </ul>
+    </div>
+</div>
+<div class="version-block" id="v1.0.5">
+    <h2 class="version-title">v1.0.5 跨越“墙”的阅读自由</h2>
+    <div class="version-content">
+        <ul>
+            <li><strong>PWA 全屏应用化：</strong> 接入 Web App Manifest 与 Service Worker，支持“添加到桌面”，彻底隐藏浏览器地址栏，沉浸感媲美原生 App。</li>
+            <li><strong>爬虫底层升级：</strong> 引入 <code>curl_cffi</code> 模拟真实浏览器 TLS 指纹，配合系统级代理调度，无视 Cloudflare 等高级防火墙阻碍。</li>
+            <li><strong>自动缝合技术：</strong> 针对分页小说章节实现后端自动递归抓取并无缝拼接，用户无需点击“下一页”即可通读全章。</li>
+        </ul>
+    </div>
+</div>
+
+<div class="version-block" id="v1.0.4">
+    <h2 class="version-title">v1.0.4 追更系统的“量化感知”</h2>
+    <div class="version-content">
+        <ul>
+            <li><strong>数字化追更：</strong> 实时计算“最新 ID - 当前 ID”，前端直接显示 <code>+14</code> 等未读章节数，点击 🔄 即可一键触达。</li>
+            <li><strong>智能书名补全：</strong> 即使手动输入 URL，系统也会通过面包屑导航算法自动拾取中文书名，告别拼音 Key 的困扰。</li>
+            <li><strong>多引擎搜索增强：</strong> 实现了 DuckDuckGo 与 Bing 国际版双引擎切换，并支持系统自动代理设置，搜书效率提升 200%。</li>
+        </ul>
+    </div>
+</div>
+
+<div class="version-block" id="v1.0.3">
+    <h2 class="version-title">v1.0.3 数据主权与书单看板</h2>
+    <div class="version-content">
+        <ul>
+            <li><strong>版本回退功能：</strong> 针对手动填写的 Value 记录最近 5 次修改历史，提供“后悔药”功能，支持一键还原历史节点。</li>
+            <li><strong>阅读历史记录：</strong> 自动记录最近 50 条阅读足迹，支持按书名 Key 自动置顶与去重，方便随时“断点续读”。</li>
+            <li><strong>书单看板系统：</strong> 支持新建多个自定义书单，采用两栏式看板布局（想看/已看），并支持在书单中一键调取目录。</li>
+        </ul>
+    </div>
+</div>
+
+<div class="version-block" id="v1.0.2">
+    <h2 class="version-title">v1.0.2 工业级架构重构</h2>
+    <div class="version-content">
+        <ul>
+            <li><strong>数据大一统：</strong> 编写 <code>migrate.py</code> 脚本，将分散的 JSON 和用户 SQLite 迁移至中心化的 <code>data.sqlite</code>，大幅降低 IO 损耗。</li>
+            <li><strong>管理仪表盘：</strong> 为管理员增加专属面板，实时监控服务器 CPU、内存、磁盘占用及缓存文件规模。</li>
+            <li><strong>高级权限体系：</strong> 实现 Admin / Pro / User 三级鉴权，为 Pro 用户提供全本离线下载（Json Package）特权。</li>
+        </ul>
+    </div>
+</div>
+<div class="version-block" id="v1.0.2">
+    <h2 class="version-title">v1.0.1 增加用户角色等功能</h2>
+    <div class="version-content">
+        <ul>
+            <li>
+                增加用户角色功能
+            </li>
         </ul>
     </div>
 </div>
 <div class="version-block" id="v1.0.1">
-    <h2 class="version-title">v1.0.1 初始版本发布</h2>
+    <h2 class="version-title">v1.0.1 修复部分 UI</h2>
     <div class="version-content">
-        <p>Smart NoteDB 正式上线。实现全网小说抓取阅读、PWA 多端同步、数据自动缝合等核心功能。</p>
+        <p>修复部分 UI 的显示问题。</p>
     </div>
 </div>
 <div class="version-block" id="v1.0.0">
@@ -25,7 +79,13 @@
                 把后端的部分 C++ 转换为了 Python，极大幅度增加了性能。
             </li>
             <li>
-                运用了独家研发的
+                运用了独家研发的的爬虫技术爬取小说页面，实现统一阅读。
+            </li>
+            <li>
+                重构大部分后端接口，改为传 json 给前端。
+            </li>
+            <li>
+                增加缓存记录，优化部分 UI。
             </li>
         </ul>
     </div>

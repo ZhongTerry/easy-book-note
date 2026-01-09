@@ -1,4 +1,4 @@
-const CACHE_NAME = 'notedb-v1.0.5';
+const CACHE_NAME = 'notedb-v1.1.0';
 const ASSETS = [
   '/',
   '/purecss/pure2.1.css',
