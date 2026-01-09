@@ -259,7 +259,30 @@ class SearchHelper:
                 if len(results) >= 8: break
             return results
         except: return []
-    
+    def _clean_title(self, title):
+        """
+        清洗标题：去除类似 "- 笔趣阁", "_无弹窗" 等后缀
+        """
+        if not title: return "未知标题"
+        # 使用正则分割 - _ | 等符号，只取第一部分
+        return re.split(r'(-|_|\|)', title)[0].strip()
+
+    def _is_junk(self, title, url):
+        """
+        判断是否为垃圾结果（非小说内容）
+        """
+        t = title.lower()
+        u = url.lower()
+        
+        # 1. 排除知名非小说域名
+        bad_domains = ['zhihu.com', 'douban.com', 'baike.baidu.com', 'csdn.net', 'cnblogs.com', 'bilibili.com', 'tieba.baidu.com', '163.com', 'sohu.com', 'sina.com']
+        if any(d in u for d in bad_domains): return True
+        
+        # 2. 排除明显非小说标题关键词
+        bad_keywords = ['下载', 'txt下载', '精校版', '教程', '百科', '资讯', '手游', '攻略', '视频', '在线观看']
+        if any(k in t for k in bad_keywords): return True
+        
+        return False
     def search_bing(self, keyword):
         # 1. 如果服务器有梯子，首选 DDG/Bing国际 (最干净)
         if self.proxies:
