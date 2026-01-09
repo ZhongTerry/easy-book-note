@@ -109,7 +109,7 @@ class AdapterManager:
         return None
 
 plugin_mgr = AdapterManager()
-
+from functools import lru_cache
 # ==========================================
 # 2. 搜索助手
 # ==========================================
@@ -563,18 +563,19 @@ class SearchHelper:
     #     # 优先级 3: 百度搜索 (Baidu)
     #     # 最后兜底，收录全但可能有广告或验证码
     #     return self._do_baidu_search(keyword)
+    @lru_cache(maxsize=100) 
+    def search_bing_cached(self, keyword):
+        """带缓存的搜索入口，避免重复联网"""
+        print(f"[Search Cache] Miss, fetching: {keyword}")
+        return self.search_bing(keyword)
     def search_bing(self, keyword):
         # 1. 优先尝试 Owllook (聚合源，质量最高，且提供直链)
         res = self._do_owllook_search(keyword)
-        if res and len(res) > 0:
-            return res
-
-        # 2. 其次尝试 360 (机房IP友好，备用)
+        if res: return res
+        # 2. 360
         res = self._do_360_search(keyword)
-        if res and len(res) > 0:
-            return res
-            
-        # 3. 百度/Bing 等其他兜底...
+        if res: return res
+        # 3. 百度/Bing...
         return self._do_bing_cn_search(keyword)
     # def _resolve_real_url(self, url):
     #     """
@@ -690,71 +691,57 @@ class NovelCrawler:
     # ==========================================
     # === [调试增强版] 搜索并返回可用源列表 ===
     def search_alternative_sources(self, book_name, target_chapter_id):
-        print(f"\n[Switch] 🚀 启动换源流程")
-        print(f"[Switch] 目标书名:《{book_name}》 (如果这是拼音，搜索绝对会失败！)")
-        print(f"[Switch] 目标章节ID: {target_chapter_id}")
+        print(f"\n[Switch] 🚀 极速换源: 《{book_name}》 (ID: {target_chapter_id})")
         
-        # 1. 搜索
+        # 1. 搜索 (带缓存)
         from spider_core import searcher 
-        search_results = searcher.search_bing(book_name)
+        # 使用 search_bing_cached 而不是 search_bing
+        search_results = searcher.search_bing_cached(book_name)
         
         if not search_results:
-            print("[Switch] ❌ 搜索引擎返回 0 个结果。请检查书名是否正确。")
             return []
-            
-        print(f"[Switch] 🔍 搜索引擎返回了 {len(search_results)} 个备选源")
-        for i, res in enumerate(search_results):
-            print(f"   [{i+1}] {res['title']} -> {res['url']}")
 
+        print(f"[Switch] 🔍 缓存/搜索返回 {len(search_results)} 个源，开始极速验证...")
         valid_sources = []
         
-        # 2. 定义验证任务 (带详细日志)
+        # 2. 验证任务 (极速版)
         def check_source(result):
             toc_url = result['url']
             domain = urlparse(toc_url).netloc
-            print(f"[Switch] ⚡ 开始检查源: {domain} ...")
             
             try:
-                # 抓取目录
-                toc = self.get_toc(toc_url)
+                # [关键] 开启 fast_mode=True
+                # 超时 5秒，不重试。如果 5秒没拉下来目录，说明这个源太慢，直接丢弃！
+                toc = self.get_toc(toc_url, fast_mode=True)
+                
                 if not toc or not toc.get('chapters'):
-                    print(f"[Switch] ⚠️ 源 {domain} 目录解析失败或为空")
                     return None
                 
-                # 3. 寻找匹配 ID
-                # 倒序查找
-                # print(f"[Switch] 源 {domain} 共有 {len(toc['chapters'])} 章，正在比对 ID...")
-                
-                # 既然我们已经有了 parse_chapter_id，我们直接看能不能对上
-                # 为了调试，我们打印一下该源最后一章的 ID，看看偏离多远
-                last_chap = toc['chapters'][-1]
-                # print(f"   -> {domain} 最后一章: ID={last_chap.get('id')} ({last_chap.get('name')})")
-
+                # 倒序查找，效率更高
                 for chap in reversed(toc['chapters']):
                     if chap.get('id') == target_chapter_id:
-                        print(f"[Switch] ✅ 命中目标! [{domain}] -> {chap['name']}")
+                        # print(f"[Switch] ✅ 命中: {domain}")
                         return {
                             "source": domain,
                             "url": chap['url'],
                             "title": chap['name'],
                             "toc_url": toc_url
                         }
-            except Exception as e:
-                print(f"[Switch] ❌ 检查源 {domain} 时发生异常: {e}")
+            except: pass
             return None
 
-        # 3. 并发验证
-        candidates = search_results[:6]
-        print(f"[Switch] 正在并发检查前 {len(candidates)} 个结果...")
+        # 3. 并发验证 (最大 8 线程)
+        # 只取前 5 个结果验证，因为后面的通常质量低且浪费时间
+        candidates = search_results[:5] 
         
-        with ThreadPoolExecutor(max_workers=6) as exe:
+        with ThreadPoolExecutor(max_workers=8) as exe:
             futures = [exe.submit(check_source, res) for res in candidates]
             for future in as_completed(futures):
                 res = future.result()
                 if res:
                     valid_sources.append(res)
         
-        print(f"[Switch] 🏁 流程结束，共找到 {len(valid_sources)} 个可用源")
+        print(f"[Switch] 🏁 耗时操作结束，找到 {len(valid_sources)} 个有效源")
         return valid_sources
     def _get_book_name(self, soup):
         """
@@ -886,19 +873,37 @@ class NovelCrawler:
         except Exception as e:
             print(f"[SmartURL] Resolve Error: {e}")
             return url
-    def _fetch_page_smart(self, url, retry=3):
-        """基础请求：增强了对 lxml 解析错误的捕获"""
-        for i in range(retry):
+    def _fetch_page_smart(self, url, retry=None, timeout=None):
+        """
+        基础请求：支持自定义重试次数和超时时间
+        配合 get_toc 的 fast_mode 使用
+        """
+        # 1. 参数决断：如果未传入，则使用实例变量或默认值
+        # 这样设计是为了让 get_toc 中临时修改 self.timeout 能生效
+        current_retry = retry if retry is not None else 3
+        current_timeout = timeout if timeout is not None else self.timeout
+
+        for i in range(current_retry):
             try:
                 headers = {
                     "Referer": url, 
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
                 }
-                resp = cffi_requests.get(url, impersonate=self.impersonate, timeout=self.timeout, headers=headers, allow_redirects=True, proxies=self.proxies)
                 
-                # 1. 尝试 lxml 解析 (速度快，但对编码敏感)
+                # 发起请求
+                resp = cffi_requests.get(
+                    url, 
+                    impersonate=self.impersonate, 
+                    timeout=current_timeout,  # <--- 关键：使用动态超时
+                    headers=headers, 
+                    allow_redirects=True, 
+                    proxies=self.proxies
+                )
+                
+                # === 编码智能识别逻辑 ===
+                
+                # A. 尝试 lxml 解析 meta 标签 (最准)
                 try:
-                    # [修复] 增加 parser 参数，容错率更高
                     tree = lxml_html.fromstring(resp.content, parser=lxml_html.HTMLParser(encoding='utf-8'))
                     charset = tree.xpath('//meta[contains(@content, "charset")]/@content') or tree.xpath('//meta/@charset')
                     enc = 'utf-8'
@@ -907,18 +912,23 @@ class NovelCrawler:
                         enc = match.group(1) if match else charset[0]
                     return resp.content.decode(enc)
                 except Exception:
-                    # 如果 lxml 失败，安静地进入下面的暴力尝试，不打印错误
                     pass
                 
-                # 2. 暴力尝试常见编码
+                # B. 暴力尝试常见中文编码
                 for e in ['utf-8', 'gb18030', 'gbk', 'big5']:
                     try: return resp.content.decode(e)
                     except: continue
                 
-                # 3. 最后兜底
+                # C. 最后兜底
                 return resp.content.decode('utf-8', errors='replace')
-            except: 
+
+            except Exception as e: 
+                # 只有不是最后一次重试时才 sleep
+                if i == current_retry - 1: 
+                    # print(f"[Fetch] 最终失败: {url} | Err: {e}")
+                    return None 
                 time.sleep(1)
+        
         return None
 
     def _get_smart_title(self, soup):
@@ -1020,12 +1030,58 @@ class NovelCrawler:
         else: final_chapters = others + numbered
         return final_chapters
 
-    def get_toc(self, toc_url):
+    def get_toc(self, toc_url, fast_mode=False):
+        """
+        fast_mode=True: 不重试，超时短，专用于换源检测
+        """
+        # 参数设置
+        timeout = 5 if fast_mode else 15
+        retry = 1 if fast_mode else 3
+
         adapter = plugin_mgr.find_match(toc_url)
-        if adapter: data = adapter.get_toc(self, toc_url)
-        else: data = self._general_toc_logic(toc_url)
+        if adapter: 
+            # 注意：如果适配器里的 get_toc 调用了 _fetch_page_smart，
+            # 我们需要修改适配器才能生效，或者我们在这里 monkey patch 一下？
+            # 简单起见，我们假设适配器调用的是 self._fetch_page_smart
+            # 我们可以临时把 self.timeout 改了，虽然不优雅但有效
+            
+            old_timeout = self.timeout
+            self.timeout = timeout # 临时修改全局超时
+            try:
+                data = adapter.get_toc(self, toc_url)
+            finally:
+                self.timeout = old_timeout # 恢复
+        else: 
+            # 通用逻辑，直接传参
+            # 我们需要修改 _general_toc_logic 接受参数，或者像上面一样改 self.timeout
+             # 这里复用上面的逻辑修改 timeout 属性最稳妥
+             pass
         
+        # 为了不修改所有适配器代码，我们采用修改实例属性的方式来实现 Fast Mode
+        # 上面的逻辑其实只对 adapter 有效，对通用逻辑需要下面这段：
+        
+        # 重新写一段通用的 get_toc 调用逻辑：
+        old_timeout = self.timeout
+        self.timeout = timeout
+        
+        try:
+             # 这里调用原来的逻辑
+             if adapter: 
+                 data = adapter.get_toc(self, toc_url)
+             else:
+                 # 修改 _general_toc_logic 内部调用的 _fetch_page_smart
+                 # 由于 _fetch_page_smart 现在用的是参数默认值，我们需要它读取 self.timeout
+                 # 请确保你的 _fetch_page_smart 默认 timeout=self.timeout
+                 
+                 # 或者我们简单粗暴重写 _fetch_page_smart 让他优先用参数，没有参数用 self.timeout
+                 data = self._general_toc_logic(toc_url)
+        except Exception:
+            return None
+        finally:
+            self.timeout = old_timeout # 恢复默认 15s
+
         if not data or not data.get('chapters'): return None
+        if data.get('manual_sort') is True: return data
         final_chapters = self._standardize_chapters(data['chapters'])
         return {'title': data['title'], 'chapters': final_chapters}
 
