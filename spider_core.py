@@ -305,54 +305,37 @@ class SearchHelper:
         
         # 最后 Bing CN (机房IP经常挂，作为最后兜底)
         return self._do_bing_cn_search(keyword)
-    def _do_360_search(self, keyword):
-        print(f"[Search] 🔍 尝试 360搜索: {keyword}")
-        # 技巧：关键词加“目录”，大幅减少广告
-        url = "https://www.so.com/s"
-        params = {'q': f"{keyword} 免费阅读 目录"} 
-        
+    def _resolve_real_url(self, url):
+        """
+        [新增] 解析 360/百度的加密跳转链接
+        原理：发送请求但不跟随跳转 (allow_redirects=False)，直接读取 Location 头
+        """
+        # 如果不是加密链接，直接返回
+        if "so.com/link" not in url and "baidu.com/link" not in url:
+            return url
+            
         try:
+            # 必须禁止自动跳转，否则会下载整个目标网页，浪费流量和时间
             resp = cffi_requests.get(
-                url, params=params, 
+                url, 
                 impersonate=self.impersonate, 
-                timeout=self.timeout
+                timeout=5, 
+                allow_redirects=False 
             )
-            soup = BeautifulSoup(resp.content, 'html.parser')
             
-            # 360 的结果通常在 .res-list h3 a
-            results = []
-            links = soup.select('ul.result li.res-list h3 a')
+            # 检查状态码是否为 301/302 重定向
+            if resp.status_code in [301, 302]:
+                # 获取真实地址 (Location 头)
+                real_url = resp.headers.get('Location') or resp.headers.get('location')
+                if real_url:
+                    return real_url
+        except Exception as e: # <--- 这里加了空格，修复了语法错误
+            print(f"[Search] 解析跳转失败: {e}")
+            pass
             
-            for link in links:
-                title = link.get_text(strip=True)
-                href = link.get('data-url') or link.get('href') # 优先取 data-url
-                
-                if not href: continue
-                
-                # 360有时会有重定向链接，但也经常给直链
-                if "so.com/link" in href:
-                    # 如果是跳转链，尝试从参数里解出来，或者直接忽略等待百度兜底
-                    # 这里简单处理：直接放行，让爬虫后续处理，或者通过 parse_qs 提取 url 参数
-                    try:
-                        from urllib.parse import parse_qs, urlparse
-                        qs = parse_qs(urlparse(href).query)
-                        if 'url' in qs: href = qs['url'][0]
-                    except: pass
-
-                if self._is_junk(title, href): continue
-                if not self._is_valid_novel_site(href): continue
-
-                results.append({
-                    'title': self._clean_title(title),
-                    'url': href,
-                    'suggested_key': self.get_pinyin_key(keyword),
-                    'source': '360 🟢'
-                })
-                if len(results) >= 6: break
-            return results
-        except Exception as e:
-            print(f"[Search] 360 Error: {e}")
-            return []
+        # 如果解析失败，为了不让程序崩溃，原样返回加密链接
+        # 虽然这会导致前端可能打不开，但总比没有好
+        return url
 
     # === [核心新增 2] 百度搜索 (Baidu) - 收录最全，作为备用 ===
     def _do_baidu_search(self, keyword):
