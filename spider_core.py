@@ -190,6 +190,99 @@ class SearchHelper:
         except Exception as e:
             print(f"[Search] Bing CN Error: {e}")
             return []
+    def _do_360_search(self, keyword):
+        print(f"[Search] 🔍 尝试 360搜索: {keyword}")
+        url = "https://www.so.com/s"
+        params = {'q': f"{keyword} 免费阅读 目录"}
+        
+        try:
+            resp = cffi_requests.get(
+                url, params=params, 
+                impersonate=self.impersonate, 
+                timeout=self.timeout
+            )
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            
+            # 1. 先把所有看起来对的结果提取出来（还是加密链接）
+            raw_results = []
+            links = soup.select('ul.result li.res-list h3 a')
+            
+            for link in links:
+                title = link.get_text(strip=True)
+                href = link.get('data-url') or link.get('href')
+                
+                if not href: continue
+                if self._is_junk(title, href): continue
+                
+                # 暂时存入加密链接
+                raw_results.append({
+                    'title': self._clean_title(title),
+                    'url': href,
+                    'suggested_key': self.get_pinyin_key(keyword),
+                    'source': '360 🟢'
+                })
+                if len(raw_results) >= 6: break # 先取前6个
+            
+            if not raw_results: return []
+
+            # 2. [核心优化] 开启多线程并发解析真实 URL
+            # 如果不并发，6个链接可能要耗时 6*0.5s = 3秒，并发只要 0.5秒
+            print(f"[Search] 正在并发解析 {len(raw_results)} 个 360 加密链接...")
+            
+            final_results = []
+            with ThreadPoolExecutor(max_workers=8) as exe:
+                # 提交任务
+                future_to_item = {
+                    exe.submit(self._resolve_real_url, item['url']): item 
+                    for item in raw_results
+                }
+                
+                for future in as_completed(future_to_item):
+                    item = future_to_item[future]
+                    try:
+                        real_url = future.result()
+                        # 只有解析出有效的小说站链接才保留
+                        if self._is_valid_novel_site(real_url):
+                            item['url'] = real_url
+                            final_results.append(item)
+                    except: pass
+            
+            return final_results
+
+        except Exception as e:
+            print(f"[Search] 360 Error: {e}")
+            return []
+    def _resolve_real_url(self, url):
+        """
+        [新增] 解析 360/百度的加密跳转链接
+        原理：发送请求但不跟随跳转 (allow_redirects=False)，直接读取 Location 头
+        """
+        # 如果不是加密链接，直接返回
+        if "so.com/link" not in url and "baidu.com/link" not in url:
+            return url
+            
+        try:
+            # 必须禁止自动跳转，否则会下载整个目标网页，浪费流量和时间
+            resp = cffi_requests.get(
+                url, 
+                impersonate=self.impersonate, 
+                timeout=5, 
+                allow_redirects=False 
+            )
+            
+            # 检查状态码是否为 301/302 重定向
+            if resp.status_code in [301, 302]:
+                # 获取真实地址 (Location 头)
+                real_url = resp.headers.get('Location') or resp.headers.get('location')
+                if real_url:
+                    return real_url
+        except Exception as e: # <--- 这里加了空格，修复了语法错误
+            print(f"[Search] 解析跳转失败: {e}")
+            pass
+            
+        # 如果解析失败，为了不让程序崩溃，原样返回加密链接
+        # 虽然这会导致前端可能打不开，但总比没有好
+        return url
     def _do_sogou_search(self, keyword):
         print(f"[Search] 🚀 Bing 失败，正在尝试搜狗搜索: {keyword}")
         query = f"{keyword} 笔趣阁"
