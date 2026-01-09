@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ article.title }} - Smart NoteDB</title>
+    <style>
+        :root {
+            --bg-outer: #e0e0e0;      
+            --bg-reader: #f2f2f2;     
+            --bg-header: rgba(255, 255, 255, 0.9);
+            --text-main: #262626;     
+            --text-meta: #999999;     
+            --accent: #4f46e5;
+            --border-color: rgba(0, 0, 0, 0.05);
+            --font-main: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        }
+
+/* === 核心：深度复刻番茄黑暗模式配色 === */
+        body.dark-mode {
+            --bg-outer: #141414;      /* 极深灰背景 */
+            --bg-reader: #1e1e1e;     /* 稍浅的容器背景 */
+            --bg-header: rgba(26, 26, 26, 0.9); /* 顶栏随之变色 */
+            --text-main: #cecece;     /* 浅灰文字，不刺眼 */
+            --text-meta: #666666;     /* 暗灰辅助文字 */
+            --border-color: #2d2d2d;  /* 黑暗模式下的分割线 */
+        }
+
+        body {
+            background-color: var(--bg-outer);
+            margin: 0; padding: 0;
+            font-family: var(--font-main);
+            transition: background 0.3s, color 0.3s;
+            display: flex; flex-direction: column; align-items: center;
+        }
+
+        /* 顶栏适配变量 */
+        header {
+            width: 100%; height: 60px;
+            background: var(--bg-header); /* 使用变量 */
+            backdrop-filter: blur(10px);
+            position: fixed; top: 0; z-index: 100;
+            display: flex; justify-content: center;
+            border-bottom: 1px solid var(--border-color); /* 使用变量 */
+            transition: background 0.3s;
+        }
+
+
+
+        /* === Header === */
+        .header-content {
+            width: 90%; max-width: 1200px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .header-left { display: flex; align-items: center; cursor: pointer; color: #333; }
+        .header-left span { font-size: 16px; font-weight: 500; margin-left: 10px; }
+
+        .header-right { display: flex; align-items: center; gap: 15px; }
+        .btn-refresh-page { 
+            background: #ff4d4f; color: white; border: none; padding: 6px 12px; 
+            border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; 
+        }
+        .user-avatar { width: 32px; height: 32px; border-radius: 50%; background: #ddd; object-fit: cover; }
+
+        /* === Main Content === */
+        .main-container {
+            width: 100%; max-width: 900px;
+            background: var(--bg-reader);
+            margin-top: 80px; margin-bottom: 40px;
+            padding: 80px 100px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+            box-sizing: border-box; min-height: 100vh; position: relative;
+        }
+        .article-header { margin-bottom: 50px; }
+        .article-header h1 { font-size: 32px; font-weight: 700; color: #1a1a1a; margin: 0 0 15px 0; }
+        .article-meta { font-size: 13px; color: var(--text-meta); display: flex; gap: 20px; }
+
+        .content-body { font-size: 19px; line-height: 1.9; color: var(--text-main); text-align: justify; }
+        .content-body p { margin-bottom: 28px; }
+
+        /* === Floating Menu === */
+        .floating-menu {
+            position: fixed; right: calc(50% - 530px);
+            top: 250px; display: flex; flex-direction: column; gap: 12px; z-index: 90;
+        }
+        .menu-item {
+            width: 50px; height: 64px; background: #fff; border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            cursor: pointer; transition: 0.2s; border: 1px solid transparent; color: #666;
+        }
+        .menu-item:hover { border-color: var(--accent); color: var(--accent); }
+        .menu-item svg { width: 20px; height: 20px; margin-bottom: 4px; }
+        .menu-item span { font-size: 11px; }
+
+        /* === Modals === */
+        .modal-overlay {
+            position: fixed; left: 0; top: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); display: none; z-index: 1000;
+            align-items: center; justify-content: center;
+        }
+        .modal-box {
+            background: #fff; width: 90%; max-width: 420px; border-radius: 12px;
+            padding: 24px; box-shadow: 0 15px 40px rgba(0,0,0,0.2);
+            max-height: 85vh; overflow-y: auto; position: relative;
+        }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; }
+        .modal-title { font-size: 18px; font-weight: bold; margin: 0; }
+
+        /* 设置内部样式 */
+        .setting-row { margin-bottom: 25px; }
+        .setting-label { display: block; font-size: 14px; color: #666; margin-bottom: 12px; font-weight: bold; }
+        .slider-wrap { display: flex; align-items: center; gap: 15px; }
+        .slider { flex: 1; cursor: pointer; accent-color: var(--accent); }
+        .slider-val { font-size: 16px; font-weight: bold; color: var(--accent); min-width: 35px; text-align: center; }
+        .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .btn-action { 
+            padding: 12px; border-radius: 8px; border: 1px solid #eee; background: #f8f9fa;
+            cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        .btn-action:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* 目录内专用刷新按钮 */
+        .btn-refresh-toc { background: #eef2ff; color: var(--accent); border: 1px solid var(--accent); padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+        .btn-refresh-toc:hover { background: var(--accent); color: white; }
+
+        /* 其它 */
+        .bottom-nav { margin-top: 80px; padding-top: 40px; border-top: 1px solid #eee; display: flex; justify-content: space-between; }
+        .nav-btn { padding: 10px 35px; border-radius: 25px; border: 1px solid #ddd; color: #666; text-decoration: none; font-size: 15px; }
+        .nav-btn:hover { background: #f9f9f9; border-color: var(--accent); color: var(--accent); }
+        .nav-btn.disabled { opacity: 0.5; pointer-events: none; }
+        #toast { visibility: hidden; background: #333; color: #fff; padding: 10px 20px; border-radius: 4px; position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 3000; }
+        #toast.show { visibility: visible; }
+        .sync-alert { position: fixed; top: -60px; left: 0; width: 100%; background: var(--accent); color: white; padding: 12px; text-align: center; transition: 0.5s; z-index: 2000; }
+        .sync-alert.active { top: 0; }
+        .header-left, .user-box {
+            color: var(--text-main); /* 确保顶栏文字在黑暗模式下变白 */
+        }
+        @media (max-width: 1100px) { .floating-menu { right: 20px; } }
+        /* 右侧悬浮按钮适配 */
+.menu-item {
+    background: var(--bg-reader);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+}
+
+/* 模态框适配 */
+body.dark-mode .modal-box {
+    background: #252525;
+    color: var(--text-main);
+    border: 1px solid #333;
+}
+
+body.dark-mode .modal-header {
+    border-bottom-color: #333;
+}
+
+/* 目录项适配 */
+body.dark-mode .toc-item {
+    border-bottom-color: #2d2d2d;
+    color: #aaaaaa;
+}
+
+body.dark-mode .toc-item:hover {
+    background: #2a2a2a;
+}
+
+/* 目录当前章节高亮适配 */
+body.dark-mode .toc-item.active-chap {
+    background-color: #1a2736 !important; /* 深蓝色高亮 */
+    color: var(--accent) !important;
+}
+
+/* 设置面板内的按钮适配 */
+body.dark-mode .btn-action {
+    background: #2a2a2a;
+    border-color: #333;
+    color: #ccc;
+}
+        /* --- 修改 1: 增加 Modal 高度 --- */
+        .modal-box {
+            background: #fff; 
+            width: 90%; 
+            max-width: 420px; 
+            border-radius: 12px;
+            padding: 24px; 
+            box-shadow: 0 15px 40px rgba(0,0,0,0.2);
+            /* 从 85vh 提高到 90vh，利用最大空间 */
+            max-height: 90vh; 
+            overflow-y: auto; 
+            position: relative;
+            display: flex;
+            flex-direction: column; /* 确保内部布局更稳定 */
+        }
+
+        /* --- 修改 2: 增加目录条目高度和交互感 --- */
+        .toc-item { 
+            display: block; 
+            /* 增加上下内边距，从 10px 提高到 14px */
+            padding: 14px 12px; 
+            border-bottom: 1px solid #f5f5f5; 
+            color: #444; 
+            text-decoration: none; 
+            font-size: 14px; 
+            transition: all 0.2s;
+            border-radius: 6px; /* 增加一点圆角感 */
+        }
+
+        /* --- 修改 3: 新增当前章节高亮样式 --- */
+        .toc-item.active-chap {
+            color: var(--accent) !important;
+            background-color: #f0f4ff; /* 淡淡的蓝紫色背景 */
+            font-weight: bold;
+        }
+        /* === 优化后的强制刷新按钮：极简边框风格 === */
+.btn-refresh-page { 
+    background: transparent;           /* 透明背景 */
+    color: var(--text-meta);           /* 平时使用暗色辅助文字 */
+    border: 1px solid var(--border-color); /* 使用变量定义的边框色 */
+    padding: 5px 12px; 
+    border-radius: 6px; 
+    cursor: pointer; 
+    font-size: 12px; 
+    font-weight: 500; 
+    transition: all 0.2s ease;         /* 增加平滑过渡 */
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* 鼠标悬浮时才亮起主题色 */
+.btn-refresh-page:hover { 
+    color: var(--accent); 
+    border-color: var(--accent);
+    background: rgba(79, 70, 229, 0.05); /* 淡淡的紫色背景，增加交互感 */
+}
+
+/* 黑暗模式下的微调：降低存在感 */
+body.dark-mode .btn-refresh-page {
+    border-color: #333;
+    color: #888;
+}
+
+body.dark-mode .btn-refresh-page:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(79, 70, 229, 0.1);
+}
+.header-right { 
+    display: flex; 
+    align-items: center; 
+    gap: 20px; /* 增加一点按钮与头像的间距 */
+}
+
+.user-box { 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+    font-size: 14px; 
+    color: var(--text-main); 
+    padding-left: 20px;
+    border-left: 1px solid var(--border-color); /* 在刷新按钮和用户之间加一条很浅的竖线 */
+}
+/* === 深度复刻：番茄翻页按钮样式 === */
+.bottom-nav {
+    margin-top: 100px; 
+    padding: 60px 0; 
+    border-top: 1px solid var(--border-color); 
+    display: flex; 
+    justify-content: center; /* 按钮居中 */
+    gap: 30px;               /* 按钮间距 */
+}
+
+.nav-btn {
+    width: 220px;            /* 固定宽度 */
+    height: 56px;            /* 固定高度 */
+    border-radius: 28px;     /* 高度的一半，形成完美的半圆角 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 16px;
+    font-weight: 500;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;            /* 去掉边框 */
+    cursor: pointer;
+}
+
+/* 上一章：浅灰色风格 */
+.nav-btn.prev-style {
+    background-color: #e5e5e5; /* 截图中的浅灰 */
+    color: #333;
+}
+.nav-btn.prev-style:hover {
+    background-color: #d8d8d8;
+    transform: translateY(-2px);
+}
+
+/* 下一章：番茄醒目橙色 */
+.nav-btn.next-style {
+    background-color: #ff6633; /* 番茄标志性橙色 */
+    color: #ffffff;
+    box-shadow: 0 4px 15px rgba(255, 102, 51, 0.3); /* 橙色发光阴影 */
+}
+.nav-btn.next-style:hover {
+    background-color: #ff7744;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(255, 102, 51, 0.4);
+}
+
+/* === 黑暗模式下的按钮适配 === */
+body.dark-mode .nav-btn.prev-style {
+    background-color: #333333; /* 深灰背景 */
+    color: #aaaaaa;            /* 浅灰文字 */
+}
+
+body.dark-mode .nav-btn.next-style {
+    background-color: #cc5229; /* 稍微调暗一点的橙色，不刺眼 */
+    color: #ffffff;
+}
+
+/* 禁用状态 */
+.nav-btn.disabled {
+    opacity: 0.3;
+    pointer-events: none;
+    background-color: #ccc !important;
+}
+/* === 精简版：番茄同款统一灰色按钮 === */
+.bottom-nav {
+    margin-top: 60px;          /* 缩小顶部间距 */
+    padding: 40px 0; 
+    border-top: 1px solid var(--border-color); 
+    display: flex; 
+    justify-content: center; 
+    gap: 20px;                 /* 缩小按钮间距 */
+}
+
+.nav-btn {
+    width: 130px;             
+    height: 30px;             
+    border-radius: 20px;       /* 完美的半圆角 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 14px;           /* 字体也稍微缩小一点，更精致 */
+    font-weight: 500;
+    transition: all 0.2s ease;
+    border: none;
+    cursor: pointer;
+    
+    /* 统一配色：上一章的经典浅灰色 */
+    background-color: #e5e5e5; 
+    color: #333;
+}
+
+.nav-btn:hover {
+    background-color: #d8d8d8;
+    transform: translateY(-1px); /* 轻微上浮，PC端手感更好 */
+}
+
+/* === 黑暗模式适配 === */
+body.dark-mode .nav-btn {
+    background-color: #333333; /* 深灰背景 */
+    color: #aaaaaa;            /* 浅灰文字 */
+}
+
+body.dark-mode .nav-btn:hover {
+    background-color: #444444;
+    color: #cecece;
+}
+
+/* 禁用状态 */
+.nav-btn.disabled {
+    opacity: 0.3;
+    pointer-events: none;
+}
+    </style>
+</head>
+<body>
+
+<div id="syncAlert" class="sync-alert">
+    <span>📢 其它设备更新了进度</span>
+    <button onclick="location.reload()" style="background:white; color:var(--accent); border:none; padding:2px 10px; border-radius:10px; cursor:pointer; margin-left:10px; font-weight:bold;">同步跳转</button>
+</div>
+
+<header>
+    <div class="header-content">
+        <div class="header-left" onclick="location.href='/'">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            <span>{{ db_key }}</span>
+        </div>
+        <div class="header-right">
+            <button class="btn-refresh-page" onclick="forceRefresh()">🔄 强制刷新页面</button>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #666;">
+                <span id="userName">User</span>
+                <img class="user-avatar" id="userAvatar" src="/static/icon-192.png">
+            </div>
+        </div>
+    </div>
+</header>
+
+<div class="main-container">
+    <div class="article-header">
+        <h1 id="chapterTitle">{{ article.title }}</h1>
+        <div class="article-meta">
+            <span>本章字数: {{ article.content|join('')|length }}字</span>
+            <span>来源: {{ db_key }}</span>
+        </div>
+    </div>
+
+    <div class="content-body" id="articleBody">
+        {% for line in article.content %}
+            <p>{{ line }}</p>
+        {% endfor %}
+    </div>
+
+    <div class="bottom-nav">
+        {% if article.prev %}
+        <a id="link-prev" href="/read?url={{ article.prev }}&key={{ db_key }}" class="nav-btn">上一章</a>
+        {% else %}<span class="nav-btn disabled">已是开头</span>{% endif %}
+
+        {% if article.next %}
+        <a id="link-next" href="/read?url={{ article.next }}&key={{ db_key }}" class="nav-btn">下一章</a>
+        {% else %}<span class="nav-btn disabled">已是末尾</span>{% endif %}
+    </div>
+</div>
+
+<aside class="floating-menu">
+    <div class="menu-item" onclick="location.href='/'">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span>书架</span>
+    </div>
+    <div class="menu-item" onclick="showModal('tocOverlay')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        <span>目录</span>
+    </div>
+    <div class="menu-item" onclick="toggleDarkMode()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <span>夜间</span>
+    </div>
+    <div class="menu-item" onclick="showModal('settingsModal')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>设置</span>
+    </div>
+</aside>
+
+<!-- 设置 Modal -->
+<div id="settingsModal" class="modal-overlay" onclick="this.style.display='none'">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 class="modal-title">阅读设置</h3>
+            <button onclick="document.getElementById('settingsModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+        </div>
+        
+        <div class="setting-row">
+            <span class="setting-label">正文字号</span>
+            <div class="slider-wrap">
+                <input type="range" id="fontSlider" class="slider" min="15" max="35" value="19" oninput="updateFS(this.value)">
+                <span id="fontVal" class="slider-val">19</span>
+            </div>
+        </div>
+
+        <div class="setting-row">
+            <span class="setting-label">快捷功能</span>
+            <div class="btn-grid">
+                <button class="btn-action" onclick="triggerSourceModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3l4 4-4 4M8 21l-4-4 4-4M20 7H4M4 17h16"/></svg>
+                    全网换源
+                </button>
+                <button class="btn-action" id="ttsBtn" onclick="toggleTTS()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                    开始朗读
+                </button>
+            </div>
+        </div>
+
+        <div style="text-align:center; margin-top:10px;">
+            <button onclick="document.getElementById('settingsModal').style.display='none'" style="padding:10px 40px; border-radius:8px; border:1px solid #eee; background:var(--accent); color:white; cursor:pointer; font-weight:bold;">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 目录 Modal -->
+<div id="tocOverlay" class="modal-overlay" onclick="this.style.display='none'">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 class="modal-title">章节目录</h3>
+            <button class="btn-refresh-toc" onclick="loadTOC(true)">🔄 刷新目录</button>
+        </div>
+        <div id="tocList" style="max-height: 500px; overflow-y:auto;">正在加载...</div>
+    </div>
+</div>
+
+<!-- 换源 Modal -->
+<div id="sourceModal" class="modal-overlay" onclick="this.style.display='none'">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 class="modal-title">选择备选源</h3>
+            <button onclick="document.getElementById('sourceModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+        </div>
+        <div id="sourceLoading" style="text-align:center; padding:20px; color:#999;">🔍 正在匹配可用源站...</div>
+        <div id="sourceList"></div>
+    </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+    const dbKey = "{{ db_key }}";
+    const currentUrl = "{{ current_url }}";
+
+    window.onload = function() {
+        fetch('/api/me').then(r=>r.json()).then(u => {
+            if(u.username) document.getElementById('userName').innerText = u.username;
+            if(u.avatar) document.getElementById('userAvatar').src = u.avatar;
+        });
+        initPreferences();
+        autoSyncProgress(); 
+        setInterval(checkRemote, 5000);
+        setInterval(sendHeartbeat, 60000);
+        reportWordCount();
+        handlePrefetch();
+    };
+
+    function showModal(id) {
+        document.getElementById(id).style.display = 'flex';
+        if(id === 'tocOverlay') loadTOC(false);
+    }
+
+    function forceRefresh() {
+        showToast("🔄 正在强制刷新页面...");
+        const url = new URL(window.location.href);
+        url.searchParams.set('force', 'true');
+        window.location.href = url.toString();
+    }
+
+    // --- 设置逻辑 ---
+    function initPreferences() {
+        const fs = parseInt(localStorage.getItem('pc_reader_fs')) || 19;
+        document.getElementById('fontSlider').value = fs;
+        updateFS(fs, false);
+        if(localStorage.getItem('pc_reader_dark') === 'true') document.body.classList.add('dark-mode');
+    }
+
+    function updateFS(val, save = true) {
+        document.getElementById('articleBody').style.fontSize = val + 'px';
+        document.getElementById('fontVal').innerText = val;
+        if(save) localStorage.setItem('pc_reader_fs', val);
+    }
+
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark-mode');
+        const isDark = document.body.classList.contains('dark-mode');
+        localStorage.setItem('pc_reader_dark', isDark);
+    }
+
+    // --- 目录逻辑 (增加强制刷新) ---
+// --- 修改 4: 目录加载、高亮与自动滚动 ---
+    function loadTOC(force = false) {
+        const list = document.getElementById('tocList');
+        if(force) showToast("🔍 正在重新爬取目录...");
+        list.innerHTML = force ? '正在刷新目录，请稍候...' : '正在加载...';
+        
+        // 获取当前规范化的 URL 用于比对 (去掉 force 等参数)
+        const normalizedCurrentUrl = currentUrl.split('?')[0];
+
+        fetch(`/toc?url={{ article.toc_url }}&key=${dbKey}&api=true${force ? '&force=true' : ''}`)
+        .then(r => r.json())
+        .then(d => {
+            if(d.chapters) {
+                // 1. 渲染列表，并在匹配当前 URL 的项上加上 active-chap 类
+                list.innerHTML = d.chapters.map(c => {
+                    const isCurrent = c.url.split('?')[0] === normalizedCurrentUrl;
+                    return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${dbKey}" 
+                            class="toc-item ${isCurrent ? 'active-chap' : ''}" 
+                            data-url="${c.url.split('?')[0]}">
+                            ${c.raw_title}
+                            </a>`;
+                }).join('');
+
+                // 2. 自动滚动到当前章节
+                // 延迟一点点确保 DOM 渲染完成
+                setTimeout(() => {
+                    const activeItem = list.querySelector('.active-chap');
+                    if (activeItem) {
+                        activeItem.scrollIntoView({ 
+                            behavior: 'smooth', // 平滑滚动
+                            block: 'center'     // 滚动到容器中间，视野最好
+                        });
+                    }
+                }, 100);
+
+                if(force) showToast("✅ 目录已更新");
+            } else { 
+                list.innerText = "获取目录失败"; 
+            }
+        })
+        .catch(e => {
+            console.error("TOC Load Error:", e);
+            list.innerText = "网络异常，请重试";
+        });
+    }
+
+    // --- 换源逻辑 ---
+    function triggerSourceModal() {
+        document.getElementById('settingsModal').style.display = 'none';
+        showModal('sourceModal');
+        loadSourceList();
+    }
+    async function loadSourceList() {
+        const list = document.getElementById('sourceList');
+        const loading = document.getElementById('sourceLoading');
+        list.innerHTML = ''; loading.style.display = 'block';
+        try {
+            const res = await fetch('/api/source/list', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey, url: currentUrl, title: document.getElementById('chapterTitle').innerText })
+            });
+            const json = await res.json();
+            loading.style.display = 'none';
+            if (json.status === 'success') {
+                list.innerHTML = json.data.map(src => `
+                    <div onclick="confirmSwitch('${src.url}')" style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:8px; cursor:pointer;">
+                        <div style="font-weight:bold; color: #333;">${src.source}</div>
+                        <div style="font-size:12px; color:#666;">${src.title}</div>
+                    </div>`).join('');
+            } else { list.innerHTML = `<div style="text-align:center; padding: 20px;">${json.msg}</div>`; }
+        } catch(e) { showToast("换源服务暂时不可用"); }
+    }
+    async function confirmSwitch(newUrl) {
+        await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: newUrl }) });
+        window.location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+    }
+
+    // --- TTS 朗读 ---
+    let synth = window.speechSynthesis, utterance = null, isSpeaking = false;
+    function toggleTTS() {
+        if(isSpeaking) { synth.cancel(); isSpeaking = false; document.getElementById('ttsBtn').style.color='#666'; }
+        else {
+            const text = document.getElementById('chapterTitle').innerText + "。" + document.getElementById('articleBody').innerText;
+            utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'zh-CN'; utterance.onend = () => isSpeaking = false;
+            synth.speak(utterance); isSpeaking = true;
+            document.getElementById('ttsBtn').style.color='#ef4444';
+            showToast("🎧 正在朗读本章内容...");
+        }
+    }
+
+    // --- 同步与预加载 ---
+    function autoSyncProgress() {
+        if(!dbKey) return;
+        fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
+        fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: currentUrl }) });
+    }
+    function checkRemote() {
+        if(!dbKey) return;
+        fetch('/api/get_value', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) })
+        .then(r => r.json()).then(d => {
+            if (d.status === 'success' && d.value && d.value !== currentUrl && decodeURIComponent(d.value) !== decodeURIComponent(currentUrl)) {
+                document.getElementById('syncLink').href = `/read?url=${encodeURIComponent(d.value)}&key=${dbKey}`;
+                document.getElementById('syncAlert').classList.add('active');
+            }
+        });
+    }
+    function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
+    function reportWordCount() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ words: document.getElementById('articleBody').innerText.length, book_key: dbKey }) }); }
+    function handlePrefetch() {
+        const next = document.getElementById('link-next');
+        if(next && next.href) {
+            const target = new URL(next.href).searchParams.get('url');
+            if(target) setTimeout(() => fetch('/api/prefetch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ url: target }) }), 3000);
+        }
+    }
+
+    function showToast(m) { const x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(()=>x.className="", 3000); }
+    
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft') document.getElementById('link-prev')?.click();
+        if (e.key === 'ArrowRight') document.getElementById('link-next')?.click();
+        if (e.key === 'Escape') document.querySelectorAll('.modal-overlay').forEach(m => m.style.display='none');
+    });
+</script>
+
+</body>
+</html>

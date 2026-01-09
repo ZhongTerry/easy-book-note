@@ -328,6 +328,125 @@
         display: none !important;
     }
 }
+/* --- 更新日志相关样式 --- */
+.changelog-link-wrap {
+    text-align: center;
+    margin: 40px 0 20px;
+}
+
+.btn-changelog {
+    font-size: 12px;
+    color: var(--text-meta);
+    text-decoration: none;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.btn-changelog:hover {
+    color: var(--accent);
+}
+
+/* 日志文本容器：保持原始排版 */
+#changelogContent {
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-main);
+    white-space: pre-wrap; /* 关键：保留 .log 文件的换行和空格 */
+    background: #f8f9fa;
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+body.dark-mode #changelogContent {
+    background: #1a1a1a;
+}
+/* --- 彻底修复：日志弹窗渲染重置 --- */
+#changelogContent {
+    white-space: normal !important; /* 强制关闭 pre-wrap */
+    text-align: left !important;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 10px;
+    display: block !important; /* 确保容器是块级，不是 flex */
+}
+
+/* 每一个版本的大盒子 */
+.version-block {
+    display: block !important; /* 确保不受外层 flex 影响 */
+    padding: 20px !important;
+    margin-bottom: 20px !important;
+    border-radius: 12px !important;
+    border: 1px solid #e2e8f0 !important;
+    background: #ffffff !important;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.02) !important;
+    position: relative;
+    color: #1a202c !important;
+}
+
+/* 高亮当前版本：去除那种奇怪的蓝色块 */
+.version-block.active-ver {
+    border: 2px solid #4f46e5 !important;
+    background: #f8faff !important; /* 极浅的蓝底 */
+}
+
+/* “当前版本”的小标签 */
+.version-tag {
+    display: inline-block !important;
+    background: #4f46e5 !important;
+    color: #ffffff !important;
+    font-size: 11px !important;
+    padding: 2px 10px !important;
+    border-radius: 50px !important;
+    margin-bottom: 12px !important;
+    font-weight: bold !important;
+}
+
+/* 标题样式：防止背景溢出 */
+.version-title {
+    display: block !important;
+    font-size: 1.2rem !important;
+    font-weight: 700 !important;
+    margin: 0 0 15px 0 !important;
+    padding: 0 !important;
+    color: #111827 !important;
+    background: transparent !important; /* 彻底移除可能的背景色 */
+    border: none !important;
+}
+
+/* 列表样式重置 */
+.version-content ul {
+    list-style-type: disc !important;
+    margin: 0 !important;
+    padding-left: 25px !important;
+}
+
+.version-content li {
+    margin-bottom: 10px !important;
+    font-size: 14px !important;
+    line-height: 1.6 !important;
+    background: transparent !important; /* 核心：防止出现截图中的蓝色条 */
+    color: #4a5568 !important;
+    display: list-item !important; /* 强制表现为列表项 */
+}
+
+.version-content strong {
+    color: #4f46e5 !important;
+}
+
+/* 黑暗模式适配 */
+body.dark-mode .version-block {
+    background: #1e1e1e !important;
+    border-color: #333 !important;
+    color: #cecece !important;
+}
+body.dark-mode .version-block.active-ver {
+    background: #1a1c2e !important;
+}
+body.dark-mode .version-title { color: #f3f4f6 !important; }
+body.dark-mode .version-content li { color: #a0aec0 !important; }
     </style>
 </head>
 <body>
@@ -398,7 +517,11 @@
             <div id="tableContainer"></div>
         </div>
     </div>
-
+    <!-- 在 .main-container 闭合标签之前 -->
+    <div class="changelog-link-wrap">
+        <a class="btn-changelog" onclick="showChangelog(false)">📑 版本更新日志 (ChangeLog)</a>
+    </div>
+</div> <!-- .main-container 结束 -->
     <!-- === 模态框: 搜索 (使用 PureUI Modal 结构) === -->
     <div id="searchModal" class="p-modal">
         <div class="p-modal-content">
@@ -541,7 +664,26 @@
         </div>
     </div>
 </div>
+<!-- 更新日志 Modal -->
+<!-- 更新日志 Modal -->
+<!-- 更新日志 Modal -->
+<div id="changelogModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 600px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px; border-bottom: 1px solid #eee; padding-bottom: 10px;">
+            <h3 style="margin:0">🎉 版本更新说明</h3>
+            <!-- 右上角小叉叉（可选） -->
+            <span style="cursor:pointer; font-size:20px; color:#999;" onclick="PureUI.modal.close('changelogModal')">×</span>
+        </div>
+        <!-- 注意：这里用 innerHTML 渲染 HTML -->
+        <div id="changelogContent">正在获取更新内容...</div>
+        <div style="text-align:right; margin-top:20px;">
+            <!-- 核心：必须使用 PureUI.modal.close -->
+            <button class="p-btn p-btn-primary" onclick="PureUI.modal.close('changelogModal')">我知道了</button>
+        </div>
+    </div>
+</div>
     <script>
+        const APP_VERSION = "v1.1.0"; 
         const API_URL = window.location.origin;
         let currentView = 'list';
         let currentData = {};
@@ -725,9 +867,56 @@ async function addBookToList(bookKey, bookTitle) {
             box.style.display = 'block';
             setTimeout(() => box.style.display = 'none', 3000);
         }
+function checkAppVersion() {
+    const lastVersion = localStorage.getItem('last_seen_version');
+    if (lastVersion !== APP_VERSION) {
+        // 第一次访问或版本变动，自动弹出
+        showChangelog(true); 
+    }
+}
 
-        // 初始化
+// 3. 获取并显示日志
+async function showChangelog(isAutoPopup = false) {
+    const container = document.getElementById('changelogContent');
+    
+    // 1. 先打开 Modal 显示加载中
+    PureUI.modal.open('changelogModal');
+    container.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">正在获取更新记录...</div>';
+
+    try {
+        // 2. 异步读入 change.html
+        const response = await fetch('/static/change.html?t=' + new Date().getTime());
+        if (response.ok) {
+            const html = await response.text();
+            container.innerHTML = html; // 将读到的内容写入容器
+
+            // 3. 高亮并滚动到当前版本
+            // 使用 getElementById 处理带点的版本号 ID
+            const currentBlock = document.getElementById(APP_VERSION);
+            if (currentBlock) {
+                currentBlock.classList.add('active-ver');
+                
+                // 延迟执行滚动，确保浏览器完成重绘
+                setTimeout(() => {
+                    currentBlock.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }, 200);
+            }
+
+            // 4. 如果是新版本第一次见，记录版本号
+            if (isAutoPopup) {
+                localStorage.setItem('last_seen_version', APP_VERSION);
+            }
+        } else {
+            container.innerHTML = '<p style="color:#999; text-align:center;">未找到 change.html 文件。</p>';
+        }
+    } catch (e) {
+        console.error("ChangeLog Load Error:", e);
+        container.innerHTML = '<p style="color:red; text-align:center;">无法连接到服务器加载日志。</p>';
+    }
+}
+       // 初始化
         window.onload = function() {
+            checkAppVersion();
             // 用户
             // index.html 中的 script
 

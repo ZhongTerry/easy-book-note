@@ -4,7 +4,7 @@ import re
 import os
 import importlib.util
 import hashlib
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse 
 from urllib.request import getproxies
 from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
@@ -97,7 +97,27 @@ class SearchHelper:
             k = ''.join(s).lower()
             return k[:15] if k else "temp"
         except: return "temp"
-
+    def _is_valid_novel_site(self, url):
+        """
+        [新增] 白名单校验：只允许长得像小说站的 URL 通过
+        用于对抗 Bing 国内版的垃圾结果
+        """
+        u = url.lower()
+        # 1. 必须包含 http
+        if not u.startswith('http'): return False
+        
+        # 2. 排除知名垃圾站
+        bad_domains = ['zhihu', 'douban', 'baidu', 'bilibili', 'video', 'news', '163.com', 'qq.com', 'sohu']
+        if any(d in u for d in bad_domains): return False
+        
+        # 3. [核心] 必须包含小说站常见特征
+        valid_signs = ['book', 'novel', 'read', 'shu', 'biqu', 'bqg', 'txt', '88', 'wx', 'du', 'yuedu', 'chapter']
+        # 或者 URL 结构包含数字 (通常是书ID)
+        has_id = bool(re.search(r'\d+', u))
+        
+        if any(s in u for s in valid_signs) or has_id:
+            return True
+        return False
     def _is_junk(self, title, url):
         t = title.lower()
         u = url.lower()
@@ -128,7 +148,48 @@ class SearchHelper:
                 if len(results) >= 8: break
             return results
         except: return None
+    def _do_bing_cn_search(self, keyword):
+        """
+        [新增] Bing 国内版专用引擎 (直连可用)
+        """
+        print(f"[Search] Trying Bing CN (Direct): {keyword}")
+        # 关键词强制加上 "笔趣阁"，这在国内最好用
+        query = f"{keyword} 笔趣阁 在线阅读"
+        url = "https://cn.bing.com/search"
+        params = {'q': query}
+        
+        try:
+            # 注意：不使用 proxies，强制直连
+            resp = cffi_requests.get(
+                url, params=params, 
+                impersonate=self.impersonate, 
+                timeout=8
+            )
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            
+            # 宽容解析
+            links = soup.select('li.b_algo h2 a') or soup.select('h2 a')
+            results = []
+            
+            for link in links:
+                title = link.get_text(strip=True)
+                href = link.get('href')
+                
+                # 严格的白名单过滤
+                if not self._is_valid_novel_site(href):
+                    continue
 
+                results.append({
+                    'title': self._clean_title(title),
+                    'url': href,
+                    'suggested_key': self.get_pinyin_key(keyword),
+                    'source': 'Bing CN 🇨🇳'
+                })
+                if len(results) >= 8: break
+            return results
+        except Exception as e:
+            print(f"[Search] Bing CN Error: {e}")
+            return []
     def _do_bing_search(self, keyword):
         url = "https://www.bing.com/search"
         params = {'q': f"{keyword} 笔趣阁 目录", 'setmkt': 'en-US'}
@@ -150,9 +211,19 @@ class SearchHelper:
                 if len(results) >= 8: break
             return results
         except: return []
-
+    
     def search_bing(self, keyword):
-        return self._do_ddg_search(keyword) or self._do_bing_search(keyword)
+        if self.proxies:
+            res = self._do_ddg_search(keyword)
+            if res: return res
+            
+            # 国际版 Bing 也尝试走代理
+            res = self._do_bing_search(keyword)
+            if res: return res
+            
+        # 最终回退：直连国内 Bing
+        return self._do_bing_cn_search(keyword)
+        # return self._do_ddg_search(keyword) or self._do_bing_search(keyword)
 
 # ==========================================
 # 3. 小说爬虫 (NovelCrawler - 修复KeyError版)
@@ -162,7 +233,208 @@ class NovelCrawler:
         self.impersonate = "chrome110"
         self.timeout = 15
         self.proxies = getproxies()
+    # spider_core.py -> NovelCrawler 类内部
+    # ==========================================
+    # [新增] 智能换源核心逻辑
+    # ==========================================
+    # === [调试增强版] 搜索并返回可用源列表 ===
+    def search_alternative_sources(self, book_name, target_chapter_id):
+        print(f"\n[Switch] 🚀 启动换源流程")
+        print(f"[Switch] 目标书名:《{book_name}》 (如果这是拼音，搜索绝对会失败！)")
+        print(f"[Switch] 目标章节ID: {target_chapter_id}")
+        
+        # 1. 搜索
+        from spider_core import searcher 
+        search_results = searcher.search_bing(book_name)
+        
+        if not search_results:
+            print("[Switch] ❌ 搜索引擎返回 0 个结果。请检查书名是否正确。")
+            return []
+            
+        print(f"[Switch] 🔍 搜索引擎返回了 {len(search_results)} 个备选源")
+        for i, res in enumerate(search_results):
+            print(f"   [{i+1}] {res['title']} -> {res['url']}")
 
+        valid_sources = []
+        
+        # 2. 定义验证任务 (带详细日志)
+        def check_source(result):
+            toc_url = result['url']
+            domain = urlparse(toc_url).netloc
+            print(f"[Switch] ⚡ 开始检查源: {domain} ...")
+            
+            try:
+                # 抓取目录
+                toc = self.get_toc(toc_url)
+                if not toc or not toc.get('chapters'):
+                    print(f"[Switch] ⚠️ 源 {domain} 目录解析失败或为空")
+                    return None
+                
+                # 3. 寻找匹配 ID
+                # 倒序查找
+                # print(f"[Switch] 源 {domain} 共有 {len(toc['chapters'])} 章，正在比对 ID...")
+                
+                # 既然我们已经有了 parse_chapter_id，我们直接看能不能对上
+                # 为了调试，我们打印一下该源最后一章的 ID，看看偏离多远
+                last_chap = toc['chapters'][-1]
+                # print(f"   -> {domain} 最后一章: ID={last_chap.get('id')} ({last_chap.get('name')})")
+
+                for chap in reversed(toc['chapters']):
+                    if chap.get('id') == target_chapter_id:
+                        print(f"[Switch] ✅ 命中目标! [{domain}] -> {chap['name']}")
+                        return {
+                            "source": domain,
+                            "url": chap['url'],
+                            "title": chap['name'],
+                            "toc_url": toc_url
+                        }
+            except Exception as e:
+                print(f"[Switch] ❌ 检查源 {domain} 时发生异常: {e}")
+            return None
+
+        # 3. 并发验证
+        candidates = search_results[:6]
+        print(f"[Switch] 正在并发检查前 {len(candidates)} 个结果...")
+        
+        with ThreadPoolExecutor(max_workers=6) as exe:
+            futures = [exe.submit(check_source, res) for res in candidates]
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    valid_sources.append(res)
+        
+        print(f"[Switch] 🏁 流程结束，共找到 {len(valid_sources)} 个可用源")
+        return valid_sources
+    def _get_book_name(self, soup):
+        """
+        通用的小说名识别逻辑
+        """
+        # 1. 尝试从常见面包屑导航中提取
+        # 匹配包含 'path', 'breadcrumb', 'crumb' 的 class 或 id
+        path_box = soup.find(class_=re.compile(r'path|crumb|breadcrumb', re.I)) or \
+                   soup.find(id=re.compile(r'path|crumb|breadcrumb', re.I))
+        
+        if path_box:
+            links = path_box.find_all('a')
+            # 逻辑：首页 > 分类 > 书名 > 章节名，通常倒数第二个或第三个是书名
+            if len(links) >= 3:
+                # 针对书香阁这种：首页(0) > 分类(1) > 书名(2) > 章节
+                return links[2].get_text(strip=True)
+            elif len(links) == 2:
+                return links[1].get_text(strip=True)
+
+        # 2. 尝试从 Meta Keywords 提取 (第一个词通常是书名)
+        meta_kw = soup.find('meta', attrs={'name': 'keywords'})
+        if meta_kw:
+            kw = meta_kw.get('content', '').split(',')[0]
+            if kw and len(kw) < 20: return kw
+
+        # 3. 尝试从 Title 标签拆分
+        if soup.title:
+            t_text = soup.title.get_text(strip=True)
+            # 常见格式：章节名_书名_站点名 或 书名_章节名
+            if "_" in t_text:
+                parts = t_text.split('_')
+                for p in parts:
+                    if "第" not in p and "章" not in p and "节" not in p:
+                        # 剔除常见的后缀
+                        name = re.sub(r'(小说|全文|阅读|最新章节|笔趣阁).*', '', p)
+                        if len(name) > 1: return name.strip()
+
+        return "未知书名"
+    def search_and_switch_source(self, book_name, target_chapter_id):
+        """
+        根据书名和目标章节ID，全网搜索备选源，并寻找匹配的章节链接
+        """
+        print(f"[Switch] 正在为《{book_name}》第 {target_chapter_id} 章寻找新源...")
+        
+        # 1. 全网搜索备选源 (复用 SearchHelper)
+        # 搜索关键词加上 "目录"，提高命中率
+        from spider_core import searcher # 确保引用
+        search_results = searcher.search_bing(book_name)
+        
+        if not search_results:
+            print("[Switch] 未搜索到任何结果")
+            return None
+
+        # 2. 定义单个源的验证任务
+        def check_source(result):
+            toc_url = result['url']
+            domain = urlparse(toc_url).netloc
+            
+            # 简单过滤：如果是当前正在使用的源(略)，或者明显不是小说站的，可以在这里过滤
+            # 这里先不做复杂过滤，信任 SearchHelper 的黑名单
+            
+            try:
+                # 抓取目录 (复用 get_toc，它会自动进行 ID 解析和排序)
+                toc = self.get_toc(toc_url)
+                if not toc or not toc.get('chapters'):
+                    return None
+                
+                # 3. 在目录中二分查找或遍历寻找目标 ID
+                # 因为我们已经排好序了，理论上二分更快，但列表不长，遍历也行
+                for chap in toc['chapters']:
+                    if chap.get('id') == target_chapter_id:
+                        print(f"[Switch] ✅ 在 [{domain}] 找到匹配章节: {chap['name']}")
+                        return {
+                            "new_url": chap['url'],
+                            "source_name": domain,
+                            "chapter_title": chap['name']
+                        }
+            except Exception as e:
+                # print(f"[Switch] 检查源 {domain} 失败: {e}")
+                pass
+            return None
+
+        # 3. 并发验证 (速度至上)
+        # 我们同时检查前 5 个搜索结果
+        candidates = search_results[:6] 
+        found_target = None
+        
+        with ThreadPoolExecutor(max_workers=6) as exe:
+            futures = [exe.submit(check_source, res) for res in candidates]
+            
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    found_target = res
+                    # 只要找到一个能用的，立马停止其他任务（虽然线程池没法立刻kill，但我们可以break返回）
+                    # 实际上为了最快响应，谁先返回就用谁
+                    break
+        
+        return found_target
+    def resolve_start_url(self, url):
+        """
+        [新增] 智能入口解析：如果给的是目录，自动转为第一章
+        """
+        print(f"[SmartURL] Analyzing: {url}")
+        
+        # 1. 特征预判：如果 URL 以 .html 结尾且包含数字，大概率是章节，直接返回
+        # (这能节省一次网络请求)
+        if re.search(r'\d+\.html$', url) and "index" not in url:
+            return url
+            
+        # 2. 爬取页面分析
+        # 这里的 run 会自动识别目录链接 (toc_url)
+        # 我们利用 get_toc 方法，看看它是不是一个目录页
+        
+        try:
+            # 尝试当做目录抓取
+            toc_data = self.get_toc(url)
+            
+            # 如果抓到了大量章节，说明它确实是目录
+            if toc_data and len(toc_data['chapters']) > 5:
+                first_chap = toc_data['chapters'][0]['url']
+                print(f"[SmartURL] 检测到目录页，自动跳转第一章: {first_chap}")
+                return first_chap
+                
+            # 如果不是目录，说明可能是一个不带 .html 后缀的章节页 (如 xbqg77)
+            # 或者爬虫没解析对，为了安全，原样返回
+            return url
+            
+        except Exception as e:
+            print(f"[SmartURL] Resolve Error: {e}")
+            return url
     def _fetch_page_smart(self, url, retry=3):
         """基础请求：增强了对 lxml 解析错误的捕获"""
         for i in range(retry):
@@ -339,8 +611,19 @@ class NovelCrawler:
         }
 
     def run(self, url):
+        print(f"\n[Run] 🚀 开始处理 URL: {url}")
+        
+        # 1. 尝试匹配插件
         adapter = plugin_mgr.find_match(url)
-        if adapter: return adapter.run(self, url)
+        if adapter:
+            print(f"[Run] ✨ 匹配到适配器: {adapter.__class__.__name__}")
+            result = adapter.run(self, url)
+            # 打印插件返回的书名
+            print(f"[Run] 📦 插件返回书名: {result.get('book_name', '未获取')}")
+            return result
+        
+        print(f"[Run] 🌐 未找到插件，使用通用逻辑...")
+        # 2. 如果没插件，执行通用逻辑
         return self._general_run_logic(url)
     
     def _general_run_logic(self, url):

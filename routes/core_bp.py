@@ -71,26 +71,32 @@ def read_mode():
     force = request.args.get('force')
     if not u.startswith('epub:') and not is_safe_url(u): return "Illegal URL", 403
     
+    # 获取数据逻辑 (保持不变)
+    data = None
     if u.startswith('epub:'):
         p = u.split(':')
         if p[2] == 'toc': return redirect(url_for('core.toc_page', url=u, key=k))
         data = epub_handler.get_chapter_content(p[1], int(p[2]))
     else:
-        # 优先读离线包
         data = managers.offline_manager.get_chapter(k, u) if k and not force else None
-        # 其次读缓存
         if not data and not force: data = managers.cache.get(u)
-        # 最后抓取
         if not data:
             data = crawler.run(u)
             if data: managers.cache.set(u, data)
+
     if data and k and data.get('title'):
-        # 只有当获取内容成功且有 Key 时才记录
-        # title 可能是 "第xxx章 标题"，我们最好也存一下书名(如果有的话)，
-        # 但这里只有章节标题。为了简单，我们暂时存章节标题，
-        # 或者前端展示时用 Key (书名拼音) + 章节标题。
-        managers.history_manager.add_record(k, data['title'], u)
-    return render_template('reader.html', article=data, current_url=u, db_key=k)
+        managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
+
+    # === [核心修改] 设备识别分流 ===
+    ua = request.headers.get('User-Agent', '').lower()
+    is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
+    
+    if is_mobile:
+        # 手机端暂时还用这个，我们之后会专门重构它
+        return render_template('reader.html', article=data, current_url=u, db_key=k)
+    else:
+        # 电脑端使用全新的“番茄风格”模板
+        return render_template('reader_pc.html', article=data, current_url=u, db_key=k)
 @core_bp.route('/api/history/list')
 @login_required
 def api_history_list():
@@ -105,11 +111,20 @@ def api_history_clear():
 @login_required
 def toc_page():
     u, k = request.args.get('url'), request.args.get('key', '')
-    force = request.args.get('force')
+    # 接收 force 参数，如果是 'true' 则跳过缓存
+    force = request.args.get('force') == 'true'
+    is_api = request.args.get('api')
+
     data = None if force else managers.cache.get(u)
+    
     if not data:
         data = crawler.get_toc(u)
-        if data: managers.cache.set(u, data)
+        if data:
+            managers.cache.set(u, data)
+    
+    if is_api:
+        return jsonify(data if data else {"status": "error", "message": "无法获取目录"})
+
     return render_template('toc.html', toc=data, toc_url=u, db_key=k)
 
 @core_bp.route('/list', methods=['POST'])
@@ -124,15 +139,21 @@ def find(): return jsonify(managers.db.find(request.json.get('key', '')))
 @login_required
 def insert():
     key = request.json.get('key')
-    value = request.json.get('value')
-    is_manual = request.json.get('manual', False) # 获取前端传来的标记
+    raw_value = request.json.get('value') # 原始输入
+    is_manual = request.json.get('manual', False)
     
-    # 1. 保存当前值
-    res = managers.db.insert(key, value)
+    # [核心修改] 智能纠错
+    # 只有在手动输入时才尝试纠错，自动同步时不纠错(节省性能)
+    final_value = raw_value
+    if is_manual:
+        # 调用爬虫的智能解析
+        final_value = crawler.resolve_start_url(raw_value)
     
-    # 2. 如果是手动操作，记录历史版本
+    # 保存纠错后的值
+    res = managers.db.insert(key, final_value)
+    
     if is_manual and res.get('status') == 'success':
-        managers.db.add_version(key, value)
+        managers.db.add_version(key, final_value)
         
     return jsonify(res)
 
@@ -143,7 +164,10 @@ def update():
     key = request.json.get('key')
     value = request.json.get('value')
     is_manual = request.json.get('manual', False) # 获取前端传来的标记
-
+    final_value = value
+    if is_manual:
+        final_value = crawler.resolve_start_url(value)
+    value = final_value
     # 1. 保存当前值
     result = managers.db.update(key, value)
     
@@ -187,7 +211,143 @@ def update():
         print(f"[AutoUpdate] Failed to recalc progress: {e}")
 
     return jsonify(result)
+@core_bp.route('/api/switch_source', methods=['POST'])
+@login_required
+def api_switch_source():
+    current_url = request.json.get('url')
+    book_key = request.json.get('key')
+    
+    if not current_url or not book_key:
+        return jsonify({"status": "error", "msg": "Missing params"})
 
+    try:
+        # 1. 获取当前书名 (从书单或缓存拿，或者重新爬当前页)
+        # 为了准确，我们先尝试从缓存拿当前页信息
+        book_name = ""
+        current_id = -1
+        
+        cached_page = managers.cache.get(current_url)
+        if cached_page:
+            # 尝试从页面标题提取书名 (通常格式: 第xx章 标题 - 书名 - 网站名)
+            # 这步比较难，如果缓存里没存书名，我们只能用 SearchHelper 的 key 反推或者让前端传
+            # 简单起见，我们用 key (拼音) 去书单里反查书名，或者让用户前端传书名
+            pass
+            
+        # 更好的方案：前端传 book_title 过来。
+        # 如果前端没传，我们去书单管理器里查这个 key 对应的书名
+        book_name = request.json.get('title')
+        if not book_name:
+             # 尝试从书单反查
+             all_lists = managers.booklist_manager.load()
+             for lid, ldata in all_lists.items():
+                 for book in ldata.get('books', []):
+                     if book['key'] == book_key:
+                         book_name = book['title']
+                         break
+                 if book_name: break
+        
+        if not book_name:
+            return jsonify({"status": "error", "msg": "无法获取书名，请先将书加入书单"})
+
+        # 2. 获取当前章节 ID
+        if cached_page and cached_page.get('title'):
+             current_id = parse_chapter_id(cached_page['title'])
+        
+        if current_id <= 0:
+             # 尝试正则
+             import re
+             match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
+             if match: current_id = int(match.group(1))
+
+        if current_id <= 0:
+            return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
+
+        # 3. 执行换源
+        result = crawler.search_and_switch_source(book_name, current_id)
+        
+        if result:
+            # 找到新源了！
+            new_url = result['new_url']
+            
+            # 4. 更新数据库 (无缝衔接)
+            managers.db.update(book_key, new_url)
+            
+            # 5. 顺便更新下缓存 (预热)
+            # threading.Thread(target=crawler.run, args=(new_url,)).start()
+            
+            return jsonify({
+                "status": "success", 
+                "new_url": new_url,
+                "msg": f"已切换至: {result['source_name']}"
+            })
+        else:
+            return jsonify({"status": "failed", "msg": "全网未找到该章节的其他源"})
+
+    except Exception as e:
+        print(f"Switch Error: {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+    
+# @core_bp.route('/api/source/list', methods=['POST'])
+# @login_required
+@core_bp.route('/api/source/list', methods=['POST'])
+@login_required
+def api_source_list():
+    current_url = request.json.get('url')
+    book_key = request.json.get('key')
+    frontend_title = request.json.get('title', '') # 章节标题
+    
+    if not current_url: return jsonify({"status": "error", "msg": "参数错误"})
+
+    # === 核心逻辑：多级探测真实书名 ===
+    book_name = None
+    
+    # 1. 尝试从书单反查 (用户定义的标题最优先)
+    all_lists = managers.booklist_manager.load()
+    for list_data in all_lists.values():
+        for b in list_data.get('books', []):
+            if b['key'] == book_key:
+                book_name = b['title']
+                break
+        if book_name: break
+
+    # 2. 【关键补丁】如果书单没找到，直接“现场爬取”当前阅读页提取书名
+    if not book_name or re.match(r'^[a-zA-Z0-9_]+$', book_name):
+        print(f"[Switch] 无法从本地获取书名，正在现场爬取源站: {current_url}")
+        try:
+            # 现场爬取当前页面内容
+            # 注意：这里 run 会自动识别是走插件还是走通用逻辑
+            temp_data = crawler.run(current_url)
+            if temp_data and temp_data.get('book_name'):
+                book_name = temp_data['book_name']
+                print(f"[Switch] 🎯 现场抓取书名成功: {book_name}")
+        except Exception as e:
+            print(f"[Switch] 现场抓取书名失败: {e}")
+
+    # 3. 最终校验
+    # 如果还是拿不到中文（全是字母数字），说明真的没法搜
+    if not book_name or re.match(r'^[a-zA-Z0-9_]+$', str(book_name)):
+        return jsonify({
+            "status": "error", 
+            "msg": f"无法识别书名(当前:{book_name})。建议手动将本书加入书单并填写中文书名。"
+        })
+
+    # === 获取当前章节 ID ===
+    current_id = parse_chapter_id(frontend_title)
+    if current_id <= 0:
+         match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
+         if match: current_id = int(match.group(1))
+    
+    if current_id <= 0:
+        return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
+
+    # === 搜索并比对 ===
+    print(f"[Switch] 准备搜索新源，关键词: {book_name}, 目标章节: {current_id}")
+    sources = crawler.search_alternative_sources(book_name, current_id)
+    
+    if not sources:
+        return jsonify({"status": "failed", "msg": "全网未找到包含该章节的其他源"})
+        
+    return jsonify({"status": "success", "data": sources})
 @core_bp.route('/api/history/versions', methods=['POST'])
 @login_required
 def api_history_versions():

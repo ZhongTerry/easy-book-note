@@ -101,7 +101,7 @@ class RoleManager:
 class HistoryManager(BaseJsonManager):
     def __init__(self): super().__init__('history')
 
-    def add_record(self, book_key, title, url):
+    def add_record(self, book_key, title, url, book_name=None):
         data = self.load()
         if "records" not in data: data["records"] = []
         # 去重并置顶
@@ -110,7 +110,8 @@ class HistoryManager(BaseJsonManager):
             "key": book_key,
             "title": title,
             "url": url,
-            "timestamp": int(time.time())
+            "timestamp": int(time.time()),
+            "book_name": book_name or book_key
         })
         data["records"] = records[:50] # 保留最近50条
         self.save(data)

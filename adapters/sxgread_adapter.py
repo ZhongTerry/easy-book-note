@@ -7,7 +7,17 @@ class SxgreadAdapter:
     书香阁 (sxgread.com) 适配器
     特点：导航链接隐藏在 JS 变量中 (prevpage, nextpage)
     """
-    
+    def get_book_name(self, soup):
+        print("[SxgreadAdapter] 🔎 尝试从面包屑提取书名...")
+        path = soup.find('div', class_='pagepath')
+        if path:
+            links = path.find_all('a')
+            if len(links) >= 3:
+                name = links[2].get_text(strip=True)
+                print(f"[SxgreadAdapter] ✅ 提取成功: {name}")
+                return name
+        print("[SxgreadAdapter] ❌ 提取失败")
+        return None
     def can_handle(self, url):
         return "sxgread.com" in url
 
@@ -41,7 +51,7 @@ class SxgreadAdapter:
             meta['title'] = h1.get_text(strip=True)
         else:
             meta['title'] = crawler._get_smart_title(soup)
-
+        book_name = self.get_book_name(soup) or crawler._get_smart_title(soup)
         # 2. 正文提取
         # 书香阁正文在 .NovelTxt
         content_div = soup.find('div', class_='NovelTxt')
@@ -55,7 +65,7 @@ class SxgreadAdapter:
             meta['content'] = crawler._clean_text_lines(text)
         else:
             meta['content'] = ["正文提取失败，请尝试刷新或更换源。"]
-
+        meta["book_name"] = book_name
         # 3. [核心] 导航提取 (Regex 解析 JS)
         # 源码示例: var prevpage="/book/1/738/4083161.html";
         

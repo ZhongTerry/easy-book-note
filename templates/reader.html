@@ -132,7 +132,10 @@
     <div class="nav-title">{% if db_key %}📚 {{ db_key }}{% else %}📖 预览{% endif %}</div>
     <div class="nav-links">
         <a href="/">🏠 书架</a>
-        
+        <!-- 导航栏里 -->
+        <button class="nav-btn btn-exchange" onclick="openSourceModal()" title="切换书源" style="background-color:#8b5cf6;">
+            ⇄ <span>换源</span>
+        </button>
         <!-- [回归] 经典带颜色的按钮 -->
         <button class="nav-btn btn-refresh" onclick="forceRefresh()" title="强制刷新">
             🔄 <span>刷新</span>
@@ -215,7 +218,23 @@
 </div>
 
 <div id="toast"></div>
-
+<!-- 换源模态框 -->
+<div id="sourceModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+    <div style="background:white; width:90%; max-width:400px; border-radius:12px; padding:20px; max-height:80vh; display:flex; flex-direction:column;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+            <h3 style="margin:0; font-size:18px;">📚 切换书源</h3>
+            <button onclick="document.getElementById('sourceModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+        </div>
+        
+        <div id="sourceLoading" style="text-align:center; padding:20px; color:#666;">
+            🔍 正在全网搜索可用源...<br><span style="font-size:12px;">(可能需要 5-10 秒)</span>
+        </div>
+        
+        <div id="sourceList" style="overflow-y:auto; display:none;">
+            <!-- JS 渲染列表 -->
+        </div>
+    </div>
+</div>
 <script>
     const dbKey = "{{ db_key }}";
     const currentUrl = "{{ current_url }}";
@@ -224,7 +243,69 @@
     let synth = window.speechSynthesis;
     let utterance = null;
     let isSpeaking = false;
+    async function openSourceModal() {
+    const modal = document.getElementById('sourceModal');
+    const loading = document.getElementById('sourceLoading');
+    const list = document.getElementById('sourceList');
+    
+    modal.style.display = 'flex';
+    loading.style.display = 'block';
+    list.style.display = 'none';
+    list.innerHTML = '';
 
+    try {
+        const res = await fetch('/api/source/list', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                key: dbKey, 
+                url: currentUrl,
+                title: document.getElementById('chapterTitle').innerText // 传标题辅助后端解析ID
+            })
+        });
+        const json = await res.json();
+        
+        loading.style.display = 'none';
+        list.style.display = 'block';
+
+        if (json.status === 'success' && json.data.length > 0) {
+            let html = '';
+            json.data.forEach(src => {
+                // 简单的域名提取展示
+                html += `
+                <div onclick="confirmSwitch('${src.url}')" style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:10px; cursor:pointer; transition:0.2s; display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <div style="font-weight:bold; color:#333;">${src.source}</div>
+                        <div style="font-size:12px; color:#666; margin-top:4px;">${src.title}</div>
+                    </div>
+                    <div style="color:#8b5cf6; font-size:12px;">Go →</div>
+                </div>`;
+            });
+            list.innerHTML = html;
+        } else {
+            list.innerHTML = `<div style="text-align:center; padding:20px; color:#999;">${json.msg || "未找到可用源"}</div>`;
+        }
+    } catch (e) {
+        loading.style.display = 'none';
+        list.style.display = 'block';
+        list.innerHTML = '<div style="text-align:center; color:red;">网络错误，请重试</div>';
+    }
+}
+
+async function confirmSwitch(newUrl) {
+    // 1. 更新数据库
+    await fetch('/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ key: dbKey, value: newUrl })
+    });
+    
+    // 2. 刷新页面跳转
+    showToast("✅ 切换成功，正在跳转...");
+    setTimeout(() => {
+        window.location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+    }, 500);
+}
     // === 设置应用逻辑 ===
     function loadSettings() {
         const saved = localStorage.getItem('reader_settings');
@@ -260,7 +341,48 @@
         r.style.setProperty('--font-size', settings.fontSize + 'px');
         document.getElementById('fontSizeDisplay').innerText = settings.fontSize;
     }
-    
+    async function switchSource() {
+        // 获取书名：尝试从 document.title 提取，或者只传 key 让后端查
+        // document.title 格式通常是 "第xxx章 标题 - PureRead"
+        // 我们主要依赖 key 让后端去书单里查准确书名
+        
+        if(!confirm("⚠️ 自动换源\n\n系统将全网搜索本书的当前章节，并切换到加载最快的源。\n是否继续？")) return;
+
+        const btn = document.querySelector('.btn-exchange');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = "🔍 <span>搜索中</span>";
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/api/switch_source', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    key: dbKey, 
+                    url: currentUrl,
+                    // 尝试传一个书名给后端兜底，这里假设 title 是章节名
+                    // 后端会优先用 key 查书单，查不到再用这个，或者你可以从后端传过来 book_title
+                })
+            });
+            const json = await res.json();
+            
+            if (json.status === 'success') {
+                showToast("✅ " + json.msg);
+                // 延迟跳转
+                setTimeout(() => {
+                    window.location.href = `/read?url=${encodeURIComponent(json.new_url)}&key=${encodeURIComponent(dbKey)}`;
+                }, 1000);
+            } else {
+                showToast("❌ " + json.msg);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        } catch (e) {
+            showToast("❌ 网络错误");
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    }
     function toggleSettings() { document.getElementById('settingsPanel').classList.toggle('active'); }
     function setTheme(t) { settings.theme = t; applySettings(); saveSettings(); }
     
