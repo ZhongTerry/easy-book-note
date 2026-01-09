@@ -377,7 +377,8 @@ class SearchHelper:
         
         return False
     def search_bing(self, keyword):
-        # 1. 如果服务器有梯子，首选 DDG/Bing国际 (最干净)
+        # 1. 策略 A：如果有代理，首选 DuckDuckGo 和 Bing 国际版
+        # (这两个结果最干净，优先级最高)
         if self.proxies:
             res = self._do_ddg_search(keyword)
             if res: return res
@@ -385,19 +386,22 @@ class SearchHelper:
             res = self._do_bing_search(keyword)
             if res: return res
             
-        # 2. 国内直连策略：Owllook 模式
+        # 2. 策略 B：国内直连策略 (Bing CN -> 360 -> 百度)
         
-        # 优先 360 (反爬较松，链接通常是直链)
+        # 优先级 1: Bing 国内版 (cn.bing.com)
+        # 尝试直连 Bing，如果服务器 IP 没被微软拉黑，这个结果最好
+        res = self._do_bing_cn_search(keyword)
+        if res and len(res) > 0:
+            return res
+
+        # 优先级 2: 360搜索 (So.com)
+        # 如果 Bing 挂了（返回空），尝试 360（带多线程解密，机房IP通过率高）
         res = self._do_360_search(keyword)
         if res: return res
         
-        # 其次 百度 (收录全，但可能是加密链)
-        # 注意：使用加密链会导致用户第一次点击时稍微慢一点(需要跳转)，但能用
-        res = self._do_baidu_search(keyword)
-        if res: return res
-        
-        # 最后 Bing CN (机房IP经常挂，作为最后兜底)
-        return self._do_bing_cn_search(keyword)
+        # 优先级 3: 百度搜索 (Baidu)
+        # 最后兜底，收录全但可能有广告或验证码
+        return self._do_baidu_search(keyword)
     def _resolve_real_url(self, url):
         """
         [新增] 解析 360/百度的加密跳转链接
