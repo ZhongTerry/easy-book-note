@@ -110,12 +110,13 @@ class AdapterManager:
 
 plugin_mgr = AdapterManager()
 from functools import lru_cache
+import requests
 # ==========================================
 # 2. 搜索助手
 # ==========================================
 class SearchHelper:
     def __init__(self):
-        self.impersonate = "chrome100"
+        self.impersonate = "chrome110"
         self.timeout = 10
         self.proxies = self._get_proxies()
     
@@ -139,11 +140,15 @@ class SearchHelper:
         
         try:
             # 伪装成浏览器请求
-            resp = cffi_requests.get(
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+            
+            # 直接用普通 requests
+            resp = requests.get(
                 url, 
                 params=params, 
-                impersonate=self.impersonate,
-                timeout=15 # 聚合搜索可能稍慢，给多点时间
+                headers=headers,
+                timeout=15,
+                verify=False # 忽略 SSL 验证，有时候能解决握手问题
             )
             
             soup = BeautifulSoup(resp.content, 'html.parser')
