@@ -261,24 +261,144 @@ class SearchHelper:
         except: return []
     
     def search_bing(self, keyword):
-        # 1. 如果有代理，首选 DDG (质量最高)
+        # 1. 如果服务器有梯子，首选 DDG/Bing国际 (最干净)
         if self.proxies:
             res = self._do_ddg_search(keyword)
             if res: return res
             
-        # 2. 尝试 Bing CN (国内服务器直连常用)
-        res = self._do_bing_cn_search(keyword)
-        if res and len(res) > 0:
-            return res
+            res = self._do_bing_search(keyword)
+            if res: return res
             
-        # 3. [关键补充] 如果 Bing CN 在机房由于 IP 问题返回 0，尝试搜狗
-        res = self._do_sogou_search(keyword)
-        if res and len(res) > 0:
-            return res
+        # 2. 国内直连策略：Owllook 模式
+        
+        # 优先 360 (反爬较松，链接通常是直链)
+        res = self._do_360_search(keyword)
+        if res: return res
+        
+        # 其次 百度 (收录全，但可能是加密链)
+        # 注意：使用加密链会导致用户第一次点击时稍微慢一点(需要跳转)，但能用
+        res = self._do_baidu_search(keyword)
+        if res: return res
+        
+        # 最后 Bing CN (机房IP经常挂，作为最后兜底)
+        return self._do_bing_cn_search(keyword)
+    def _do_360_search(self, keyword):
+        print(f"[Search] 🔍 尝试 360搜索: {keyword}")
+        # 技巧：关键词加“目录”，大幅减少广告
+        url = "https://www.so.com/s"
+        params = {'q': f"{keyword} 免费阅读 目录"} 
+        
+        try:
+            resp = cffi_requests.get(
+                url, params=params, 
+                impersonate=self.impersonate, 
+                timeout=self.timeout
+            )
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            
+            # 360 的结果通常在 .res-list h3 a
+            results = []
+            links = soup.select('ul.result li.res-list h3 a')
+            
+            for link in links:
+                title = link.get_text(strip=True)
+                href = link.get('data-url') or link.get('href') # 优先取 data-url
+                
+                if not href: continue
+                
+                # 360有时会有重定向链接，但也经常给直链
+                if "so.com/link" in href:
+                    # 如果是跳转链，尝试从参数里解出来，或者直接忽略等待百度兜底
+                    # 这里简单处理：直接放行，让爬虫后续处理，或者通过 parse_qs 提取 url 参数
+                    try:
+                        from urllib.parse import parse_qs, urlparse
+                        qs = parse_qs(urlparse(href).query)
+                        if 'url' in qs: href = qs['url'][0]
+                    except: pass
 
-        # 4. 彻底兜底：直接去某个稳定的笔趣阁镜像站“盲猜”搜索 (可选扩展)
-        return []
+                if self._is_junk(title, href): continue
+                if not self._is_valid_novel_site(href): continue
 
+                results.append({
+                    'title': self._clean_title(title),
+                    'url': href,
+                    'suggested_key': self.get_pinyin_key(keyword),
+                    'source': '360 🟢'
+                })
+                if len(results) >= 6: break
+            return results
+        except Exception as e:
+            print(f"[Search] 360 Error: {e}")
+            return []
+
+    # === [核心新增 2] 百度搜索 (Baidu) - 收录最全，作为备用 ===
+    def _do_baidu_search(self, keyword):
+        print(f"[Search] 🔍 尝试 百度搜索: {keyword}")
+        url = "https://www.baidu.com/s"
+        # 技巧：wd 必须带 "最新章节"，否则全是贴吧
+        params = {'wd': f"{keyword} 小说 最新章节"}
+        
+        try:
+            # 百度对 User-Agent 非常敏感，且对 Referer 有校验
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+                "Referer": "https://www.baidu.com/"
+            }
+            # 必须不带代理访问百度国内版，否则可能跳到验证码
+            resp = cffi_requests.get(
+                url, params=params, 
+                impersonate=self.impersonate,
+                headers=headers,
+                timeout=6
+            )
+            
+            # 检测是否被百度拦截
+            if "wappass.baidu.com" in resp.url or "验证码" in resp.text:
+                print("[Search] ⚠️ 触发百度验证码，跳过")
+                return []
+
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            results = []
+            
+            # 百度的结果块通常是 c-container
+            containers = soup.select('div.c-container')
+            
+            for box in containers:
+                try:
+                    # 提取标题链接
+                    title_elem = box.select_one('h3 a') or box.select_one('a')
+                    if not title_elem: continue
+                    
+                    title = title_elem.get_text(strip=True)
+                    href = title_elem.get('href') # 这是百度的加密链接
+                    
+                    # 提取下方显示的真实域名 (辅助判断)
+                    footer_text = box.get_text()
+                    
+                    # 强力过滤
+                    if self._is_junk(title, ""): continue # URL是加密的，暂时只能检查标题
+                    
+                    # 百度特色：广告通常有 '广告' 字样
+                    if "广告" in footer_text: continue
+
+                    # 既然拿不到真实URL（需要再次请求解密，太慢），
+                    # 我们这里做一个大胆的策略：
+                    # 直接返回这个加密链接。
+                    # 因为你的 NovelCrawler.run() 能够处理 302 跳转！
+                    
+                    results.append({
+                        'title': self._clean_title(title),
+                        'url': href, # 这是一个 http://www.baidu.com/link?url=...
+                        'suggested_key': self.get_pinyin_key(keyword),
+                        'source': 'Baidu 🔵'
+                    })
+                    if len(results) >= 6: break
+                except: pass
+                
+            return results
+        except Exception as e:
+            print(f"[Search] Baidu Error: {e}")
+            return []
 # ==========================================
 # 3. 小说爬虫 (NovelCrawler - 修复KeyError版)
 # ==========================================
