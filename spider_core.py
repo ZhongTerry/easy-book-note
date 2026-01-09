@@ -191,9 +191,13 @@ class SearchHelper:
             print(f"[Search] Bing CN Error: {e}")
             return []
     def _do_360_search(self, keyword):
-        print(f"[Search] 🔍 尝试 360搜索: {keyword}")
+        """
+        [主力] 360搜索 + 多线程并发解密
+        """
+        print(f"[Search] 🔍 [调试模式] 仅尝试 360搜索: {keyword}")
         url = "https://www.so.com/s"
-        params = {'q': f"{keyword}  笔趣阁 在线阅读"}
+        # 关键词加“目录”，结果更精准
+        params = {'q': f"{keyword} 免费阅读 目录"} 
         
         try:
             resp = cffi_requests.get(
@@ -203,8 +207,8 @@ class SearchHelper:
             )
             soup = BeautifulSoup(resp.content, 'html.parser')
             
-            # 1. 先把所有看起来对的结果提取出来（还是加密链接）
             raw_results = []
+            # 360 结果选择器
             links = soup.select('ul.result li.res-list h3 a')
             
             for link in links:
@@ -212,26 +216,35 @@ class SearchHelper:
                 href = link.get('data-url') or link.get('href')
                 
                 if not href: continue
+                
+                # 尝试从 URL 参数提取 (某些 360 链接是 ...?url=http%3A%2F%2F...)
+                if "so.com/link" in href:
+                    try:
+                        from urllib.parse import parse_qs, urlparse
+                        qs = parse_qs(urlparse(href).query)
+                        if 'url' in qs: href = qs['url'][0]
+                    except: pass
+
                 if self._is_junk(title, href): continue
                 
-                # 暂时存入加密链接
+                # 先存下来，稍后并发解密
                 raw_results.append({
                     'title': self._clean_title(title),
                     'url': href,
                     'suggested_key': self.get_pinyin_key(keyword),
                     'source': '360 🟢'
                 })
-                if len(raw_results) >= 6: break # 先取前6个
+                if len(raw_results) >= 8: break
             
-            if not raw_results: return []
+            if not raw_results:
+                print("[Search] 360 未找到初步结果")
+                return []
 
-            # 2. [核心优化] 开启多线程并发解析真实 URL
-            # 如果不并发，6个链接可能要耗时 6*0.5s = 3秒，并发只要 0.5秒
-            print(f"[Search] 正在并发解析 {len(raw_results)} 个 360 加密链接...")
-            
+            # 多线程并发解密真实 URL
+            print(f"[Search] 正在并发解析 {len(raw_results)} 个 360 链接...")
             final_results = []
+            
             with ThreadPoolExecutor(max_workers=8) as exe:
-                # 提交任务
                 future_to_item = {
                     exe.submit(self._resolve_real_url, item['url']): item 
                     for item in raw_results
@@ -241,7 +254,7 @@ class SearchHelper:
                     item = future_to_item[future]
                     try:
                         real_url = future.result()
-                        # 只有解析出有效的小说站链接才保留
+                        # 再次校验解密后的 URL 是否为小说站
                         if self._is_valid_novel_site(real_url):
                             item['url'] = real_url
                             final_results.append(item)
@@ -376,32 +389,34 @@ class SearchHelper:
         if any(k in t for k in bad_keywords): return True
         
         return False
-    def search_bing(self, keyword):
-        # 1. 策略 A：如果有代理，首选 DuckDuckGo 和 Bing 国际版
-        # (这两个结果最干净，优先级最高)
-        if self.proxies:
-            res = self._do_ddg_search(keyword)
-            if res: return res
+    # def search_bing(self, keyword):
+    #     # 1. 策略 A：如果有代理，首选 DuckDuckGo 和 Bing 国际版
+    #     # (这两个结果最干净，优先级最高)
+    #     if self.proxies:
+    #         res = self._do_ddg_search(keyword)
+    #         if res: return res
             
-            res = self._do_bing_search(keyword)
-            if res: return res
+    #         res = self._do_bing_search(keyword)
+    #         if res: return res
             
-        # 2. 策略 B：国内直连策略 (Bing CN -> 360 -> 百度)
+    #     # 2. 策略 B：国内直连策略 (Bing CN -> 360 -> 百度)
         
-        # 优先级 1: Bing 国内版 (cn.bing.com)
-        # 尝试直连 Bing，如果服务器 IP 没被微软拉黑，这个结果最好
-        res = self._do_bing_cn_search(keyword)
-        if res and len(res) > 0:
-            return res
+    #     # 优先级 1: Bing 国内版 (cn.bing.com)
+    #     # 尝试直连 Bing，如果服务器 IP 没被微软拉黑，这个结果最好
+    #     res = self._do_bing_cn_search(keyword)
+    #     if res and len(res) > 0:
+    #         return res
 
-        # 优先级 2: 360搜索 (So.com)
-        # 如果 Bing 挂了（返回空），尝试 360（带多线程解密，机房IP通过率高）
-        res = self._do_360_search(keyword)
-        if res: return res
+    #     # 优先级 2: 360搜索 (So.com)
+    #     # 如果 Bing 挂了（返回空），尝试 360（带多线程解密，机房IP通过率高）
+    #     res = self._do_360_search(keyword)
+    #     if res: return res
         
-        # 优先级 3: 百度搜索 (Baidu)
-        # 最后兜底，收录全但可能有广告或验证码
-        return self._do_baidu_search(keyword)
+    #     # 优先级 3: 百度搜索 (Baidu)
+    #     # 最后兜底，收录全但可能有广告或验证码
+    #     return self._do_baidu_search(keyword)
+    def search_bing(self, keyword):
+        return self._do_360_search(keyword)
     def _resolve_real_url(self, url):
         """
         [新增] 解析 360/百度的加密跳转链接
