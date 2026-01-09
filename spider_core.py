@@ -115,7 +115,7 @@ from functools import lru_cache
 # ==========================================
 class SearchHelper:
     def __init__(self):
-        self.impersonate = "chrome110"
+        self.impersonate = "chrome100"
         self.timeout = 10
         self.proxies = self._get_proxies()
     
