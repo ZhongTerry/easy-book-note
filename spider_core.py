@@ -190,6 +190,54 @@ class SearchHelper:
         except Exception as e:
             print(f"[Search] Bing CN Error: {e}")
             return []
+    def _do_sogou_search(self, keyword):
+        print(f"[Search] 🚀 Bing 失败，正在尝试搜狗搜索: {keyword}")
+        query = f"{keyword} 笔趣阁"
+        url = "https://www.sogou.com/web"
+        params = {'query': query}
+        
+        try:
+            # 搜狗需要一个比较真实的 Referer
+            headers = {
+                "Referer": "https://www.sogou.com/",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+            }
+            resp = cffi_requests.get(
+                url, params=params, 
+                impersonate=self.impersonate, 
+                headers=headers,
+                timeout=10
+            )
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            
+            # 搜狗的结构比较特殊，通常在 .rb-tit a 或 h3 a
+            links = soup.select('.rb-tit a') or soup.select('h3 a')
+            results = []
+            
+            for link in links:
+                title = link.get_text(strip=True)
+                href = link.get('href')
+                
+                # 搜狗的 href 往往是经过混淆的 /link?url=...
+                if not href: continue
+                if not href.startswith('http'):
+                    href = urljoin("https://www.sogou.com", href)
+
+                # 简单过滤垃圾结果
+                if self._is_junk(title, href): continue
+                if not self._is_valid_novel_site(href): continue
+
+                results.append({
+                    'title': re.split(r'(-|_|\|)', title)[0].strip(),
+                    'url': href,
+                    'suggested_key': self.get_pinyin_key(keyword),
+                    'source': 'Sogou 🐶'
+                })
+                if len(results) >= 8: break
+            return results
+        except Exception as e:
+            print(f"[Search] Sogou Error: {e}")
+            return []
     def _do_bing_search(self, keyword):
         url = "https://www.bing.com/search"
         params = {'q': f"{keyword} 笔趣阁 目录", 'setmkt': 'en-US'}
@@ -213,17 +261,23 @@ class SearchHelper:
         except: return []
     
     def search_bing(self, keyword):
+        # 1. 如果有代理，首选 DDG (质量最高)
         if self.proxies:
             res = self._do_ddg_search(keyword)
             if res: return res
             
-            # 国际版 Bing 也尝试走代理
-            res = self._do_bing_search(keyword)
-            if res: return res
+        # 2. 尝试 Bing CN (国内服务器直连常用)
+        res = self._do_bing_cn_search(keyword)
+        if res and len(res) > 0:
+            return res
             
-        # 最终回退：直连国内 Bing
-        return self._do_bing_cn_search(keyword)
-        # return self._do_ddg_search(keyword) or self._do_bing_search(keyword)
+        # 3. [关键补充] 如果 Bing CN 在机房由于 IP 问题返回 0，尝试搜狗
+        res = self._do_sogou_search(keyword)
+        if res and len(res) > 0:
+            return res
+
+        # 4. 彻底兜底：直接去某个稳定的笔趣阁镜像站“盲猜”搜索 (可选扩展)
+        return []
 
 # ==========================================
 # 3. 小说爬虫 (NovelCrawler - 修复KeyError版)
