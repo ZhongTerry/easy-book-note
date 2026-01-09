@@ -244,57 +244,96 @@ class SearchHelper:
             print(f"[Search] 正在并发解析 {len(raw_results)} 个 360 链接...")
             final_results = []
             
-            with ThreadPoolExecutor(max_workers=8) as exe:
-                future_to_item = {
-                    exe.submit(self._resolve_real_url, item['url']): item 
-                    for item in raw_results
-                }
-                
-                for future in as_completed(future_to_item):
-                    item = future_to_item[future]
-                    try:
-                        real_url = future.result()
-                        # 再次校验解密后的 URL 是否为小说站
-                        if self._is_valid_novel_site(real_url):
-                            item['url'] = real_url
-                            final_results.append(item)
-                    except: pass
+            # ... 前面的代码保持不变 ...
+            
+            if not raw_results:
+                print("[Search] 360 未找到初步结果")
+                return []
+
+            # [修改] 改为单线程串行解析
+            print(f"[Search] 正在顺序解析 {len(raw_results)} 个 360 链接...")
+            final_results = []
+            
+            for item in raw_results:
+                try:
+                    # 直接调用函数，而不是提交给线程池
+                    real_url = self._resolve_real_url(item['url'])
+                    # print(111)
+                    # [重要] 只有当 URL 不再包含 "so.com/link" 时，才算解析成功
+                    # 并且要符合小说站白名单
+                    if "so.com/link" not in real_url and self._is_valid_novel_site(real_url):
+                        item['url'] = real_url
+                        final_results.append(item)
+                        # print(f"[Search] 解析成功: {real_url}") # 调试用
+                    else:
+                        # print(f"[Search] 丢弃无效链接: {real_url}") # 调试用
+                        pass
+                except Exception as e:
+                    print(f"[Search] 单项解析出错: {e}")
+                    pass
             
             return final_results
 
         except Exception as e:
             print(f"[Search] 360 Error: {e}")
             return []
+    # def _resolve_real_url(url) :
+        # print("[fff]")
+        # return url
     def _resolve_real_url(self, url):
+        # print("1111111")
         """
-        [新增] 解析 360/百度的加密跳转链接
-        原理：发送请求但不跟随跳转 (allow_redirects=False)，直接读取 Location 头
+        [增强版] 解析 360/百度的加密跳转链接
+        支持：302 Header 跳转、Meta Refresh 跳转、JS Window.location 跳转
         """
-        # 如果不是加密链接，直接返回
-        if "so.com/link" not in url and "baidu.com/link" not in url:
+        # 如果本身就是直链，直接返回
+        if "so.com" not in url:
             return url
             
         try:
-            # 必须禁止自动跳转，否则会下载整个目标网页，浪费流量和时间
+            print("111")
+            # 1. 第一次尝试：禁止重定向，看 Header
+            # 这里的 timeout 设置稍长一点，防止网络波动
             resp = cffi_requests.get(
                 url, 
                 impersonate=self.impersonate, 
-                timeout=5, 
+                timeout=8, 
                 allow_redirects=False 
             )
             
-            # 检查状态码是否为 301/302 重定向
+            # 情况 A: 标准 301/302 跳转
             if resp.status_code in [301, 302]:
-                # 获取真实地址 (Location 头)
                 real_url = resp.headers.get('Location') or resp.headers.get('location')
+                print(real_url)
                 if real_url:
+                    print(f"[Resolve] 302跳转成功: {real_url[:40]}...")
                     return real_url
-        except Exception as e: # <--- 这里加了空格，修复了语法错误
-            print(f"[Search] 解析跳转失败: {e}")
+            
+            # 情况 B: 200 OK，但是是一个中间跳转页 (360 经常干这个)
+            if resp.status_code == 200:
+                html = resp.text
+                # B1. 尝试提取 JS 跳转: window.location.replace("...")
+                # 360 的特征通常是 window.location.replace
+                import re
+                js_match = re.search(r"window\.location\.replace\(['\"](.+?)['\"]", html)
+                if js_match:
+                    real_url = js_match.group(1)
+                    print(f"[Resolve] JS提取成功: {real_url[:40]}...")
+                    return real_url
+                
+                # B2. 尝试提取 Meta Refresh: <meta http-equiv="refresh" content="0;url=...">
+                meta_match = re.search(r'url=([^"]+)"', html, re.IGNORECASE)
+                if meta_match:
+                    real_url = meta_match.group(1)
+                    print(f"[Resolve] Meta提取成功: {real_url[:40]}...")
+                    return real_url
+
+        except Exception as e:
+            print(f"[Resolve] 解析出错: {e}")
             pass
             
-        # 如果解析失败，为了不让程序崩溃，原样返回加密链接
-        # 虽然这会导致前端可能打不开，但总比没有好
+        # 如果所有手段都失效，为了防止前端报错，还是返回原链接
+        # 但大概率这个链接前端也打不开，所以最好是在 _do_360_search 里过滤掉
         return url
     def _do_sogou_search(self, keyword):
         print(f"[Search] 🚀 Bing 失败，正在尝试搜狗搜索: {keyword}")
@@ -417,37 +456,37 @@ class SearchHelper:
     #     return self._do_baidu_search(keyword)
     def search_bing(self, keyword):
         return self._do_360_search(keyword)
-    def _resolve_real_url(self, url):
-        """
-        [新增] 解析 360/百度的加密跳转链接
-        原理：发送请求但不跟随跳转 (allow_redirects=False)，直接读取 Location 头
-        """
-        # 如果不是加密链接，直接返回
-        if "so.com/link" not in url and "baidu.com/link" not in url:
-            return url
+    # def _resolve_real_url(self, url):
+    #     """
+    #     [新增] 解析 360/百度的加密跳转链接
+    #     原理：发送请求但不跟随跳转 (allow_redirects=False)，直接读取 Location 头
+    #     """
+    #     # 如果不是加密链接，直接返回
+    #     if "so.com/link" not in url and "baidu.com/link" not in url:
+    #         return url
             
-        try:
-            # 必须禁止自动跳转，否则会下载整个目标网页，浪费流量和时间
-            resp = cffi_requests.get(
-                url, 
-                impersonate=self.impersonate, 
-                timeout=5, 
-                allow_redirects=False 
-            )
+    #     try:
+    #         # 必须禁止自动跳转，否则会下载整个目标网页，浪费流量和时间
+    #         resp = cffi_requests.get(
+    #             url, 
+    #             impersonate=self.impersonate, 
+    #             timeout=5, 
+    #             allow_redirects=False 
+    #         )
             
-            # 检查状态码是否为 301/302 重定向
-            if resp.status_code in [301, 302]:
-                # 获取真实地址 (Location 头)
-                real_url = resp.headers.get('Location') or resp.headers.get('location')
-                if real_url:
-                    return real_url
-        except Exception as e: # <--- 这里加了空格，修复了语法错误
-            print(f"[Search] 解析跳转失败: {e}")
-            pass
+    #         # 检查状态码是否为 301/302 重定向
+    #         if resp.status_code in [301, 302]:
+    #             # 获取真实地址 (Location 头)
+    #             real_url = resp.headers.get('Location') or resp.headers.get('location')
+    #             if real_url:
+    #                 return real_url
+    #     except Exception as e: # <--- 这里加了空格，修复了语法错误
+    #         print(f"[Search] 解析跳转失败: {e}")
+    #         pass
             
-        # 如果解析失败，为了不让程序崩溃，原样返回加密链接
-        # 虽然这会导致前端可能打不开，但总比没有好
-        return url
+    #     # 如果解析失败，为了不让程序崩溃，原样返回加密链接
+    #     # 虽然这会导致前端可能打不开，但总比没有好
+    #     return url
 
     # === [核心新增 2] 百度搜索 (Baidu) - 收录最全，作为备用 ===
     def _do_baidu_search(self, keyword):
