@@ -129,7 +129,7 @@ class SearchHelper:
 
     def _do_ddg_search(self, keyword):
         url = "https://html.duckduckgo.com/html/"
-        data = {'q': f"{keyword} 笔趣阁 目录"}
+        data = {'q': f"{keyword} 笔趣阁"}
         try:
             resp = cffi_requests.post(url, data=data, impersonate=self.impersonate, timeout=self.timeout, proxies=self.proxies)
             soup = BeautifulSoup(resp.content, 'html.parser')
@@ -193,7 +193,7 @@ class SearchHelper:
     def _do_360_search(self, keyword):
         print(f"[Search] 🔍 尝试 360搜索: {keyword}")
         url = "https://www.so.com/s"
-        params = {'q': f"{keyword} 免费阅读 目录"}
+        params = {'q': f"{keyword}  笔趣阁 在线阅读"}
         
         try:
             resp = cffi_requests.get(
@@ -333,7 +333,7 @@ class SearchHelper:
             return []
     def _do_bing_search(self, keyword):
         url = "https://www.bing.com/search"
-        params = {'q': f"{keyword} 笔趣阁 目录", 'setmkt': 'en-US'}
+        params = {'q': f"{keyword} 笔趣阁", 'setmkt': 'en-US'}
         try:
             resp = cffi_requests.get(url, params=params, impersonate=self.impersonate, timeout=self.timeout, proxies=self.proxies)
             soup = BeautifulSoup(resp.content, 'html.parser')
