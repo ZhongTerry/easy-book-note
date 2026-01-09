@@ -5,37 +5,91 @@ from bs4 import BeautifulSoup
 class SxgreadAdapter:
     """
     书香阁 (sxgread.com) 适配器
-    特点：导航链接隐藏在 JS 变量中 (prevpage, nextpage)
+    特点：
+    1. 导航链接隐藏在 JS 变量中
+    2. 目录页源码是乱序的，必须根据 data-id 属性进行排序
     """
+    def can_handle(self, url):
+        return "sxgread.com" in url
+
     def get_book_name(self, soup):
-        print("[SxgreadAdapter] 🔎 尝试从面包屑提取书名...")
+        # 优先从 meta property="og:novel:book_name" 获取，这是最准的
+        meta_name = soup.find('meta', property='og:novel:book_name')
+        if meta_name:
+            return meta_name.get('content', '').strip()
+            
+        # 其次尝试面包屑
         path = soup.find('div', class_='pagepath')
         if path:
             links = path.find_all('a')
             if len(links) >= 3:
-                name = links[2].get_text(strip=True)
-                print(f"[SxgreadAdapter] ✅ 提取成功: {name}")
-                return name
-        print("[SxgreadAdapter] ❌ 提取失败")
+                return links[2].get_text(strip=True).replace('最新章节列表', '')
+                
         return None
-    def can_handle(self, url):
-        return "sxgread.com" in url
 
     def get_toc(self, crawler, toc_url):
-        # 目录页解析复用通用逻辑，因为书香阁目录页是标准的 HTML
         html = crawler._fetch_page_smart(toc_url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
         
-        # 尝试提取书名
-        title = "未知书籍"
-        h1 = soup.find('h1')
-        if h1: title = h1.get_text(strip=True)
+        # 1. 获取书名
+        title = self.get_book_name(soup)
+        if not title:
+            h1 = soup.find('h1')
+            title = h1.get_text(strip=True) if h1 else "未知书籍"
+
+        # 2. [核心修复] 解析乱序目录
+        # 网站源码中章节是乱的，依靠 <li data-id="xxx"> 中的 data-id 排序
+        chapter_list = []
         
-        # 利用爬虫自带的通用目录解析器 (它会自动处理排序和去重)
-        chapters = crawler._parse_chapters_from_soup(soup, toc_url)
-        
-        return {'title': title, 'chapters': chapters}
+        # 找到 id="newlist" 的 ul
+        ul = soup.find('ul', id='newlist')
+        if ul:
+            lis = ul.find_all('li')
+            for li in lis:
+                a = li.find('a')
+                if not a: continue
+                
+                # 提取链接
+                href = a.get('href')
+                if not href: continue
+                full_url = urljoin(toc_url, href)
+                
+                # 提取标题
+                raw_title = a.get_text(strip=True)
+                
+                # [关键] 提取 data-id
+                data_id_str = li.get('data-id')
+                
+                # 过滤掉无效数据 (如 data-id="999999" 的隐藏项)
+                if not data_id_str or not data_id_str.isdigit():
+                    continue
+                
+                chap_id = int(data_id_str)
+                if chap_id >= 999999: continue # 排除那个隐藏的空li
+                
+                # 清洗标题，去除 "第xxx章" 前缀，只保留名字（可选）
+                # 这里为了稳妥，保留原标题，name 字段做简单清洗
+                pure_name = re.sub(r'^(?:第)?\s*[0-9零一二三四五六七八九十百千万]+\s*[章节回]', '', raw_title).strip()
+
+                chapter_list.append({
+                    'id': chap_id,        # 既然网站给了明确ID，直接用，不要自己解析了
+                    'title': raw_title,   # 完整标题：第1章 xxxx
+                    'name': pure_name,    # 纯净标题：xxxx
+                    'url': full_url,
+                    'raw_title': raw_title
+                })
+
+            # 3. 按照 data-id 进行升序排列
+            chapter_list.sort(key=lambda x: x['id'])
+            
+            print(f"[SxgreadAdapter] 成功通过 data-id 重排 {len(chapter_list)} 个章节")
+            return {'title': title, 'chapters': chapter_list}
+            
+        else:
+            print("[SxgreadAdapter] 未找到 #newlist，尝试通用解析")
+            # 如果改版了找不到 newlist，回退到通用逻辑
+            return crawler._general_toc_logic(toc_url)
 
     def run(self, crawler, url):
         html = crawler._fetch_page_smart(url)
@@ -44,49 +98,34 @@ class SxgreadAdapter:
         soup = BeautifulSoup(html, 'html.parser')
         meta = {}
 
-        # 1. 标题提取
-        # 优先找 h1，书香阁正文标题在 .Noveltitle h1
+        # 1. 标题与书名
         h1 = soup.find('div', class_='Noveltitle')
-        if h1:
-            meta['title'] = h1.get_text(strip=True)
-        else:
-            meta['title'] = crawler._get_smart_title(soup)
-        book_name = self.get_book_name(soup) or crawler._get_smart_title(soup)
+        meta['title'] = h1.get_text(strip=True) if h1 else crawler._get_smart_title(soup)
+        meta['book_name'] = self.get_book_name(soup)
+
         # 2. 正文提取
-        # 书香阁正文在 .NovelTxt
         content_div = soup.find('div', class_='NovelTxt')
         if content_div:
-            # 移除广告脚本和无用标签
             for junk in content_div.find_all(['script', 'style', 'div']): 
                 junk.decompose()
-            
-            # 移除 <br> 标签 (get_text 会自动处理换行，但为了保险)
             text = content_div.get_text('\n')
             meta['content'] = crawler._clean_text_lines(text)
         else:
-            meta['content'] = ["正文提取失败，请尝试刷新或更换源。"]
-        meta["book_name"] = book_name
-        # 3. [核心] 导航提取 (Regex 解析 JS)
-        # 源码示例: var prevpage="/book/1/738/4083161.html";
-        
-        # 提取上一页
-        prev_match = re.search(r'var\s+prevpage\s*=\s*["\']([^"\']+)["\']', html)
-        if prev_match:
-            link = prev_match.group(1)
-            # 这里的 index.html 通常指目录，如果上一页是目录，说明这是第一章
-            if "index.html" not in link:
-                meta['prev'] = urljoin(url, link)
+            meta['content'] = ["正文提取失败"]
 
-        # 提取下一页
+        # 3. JS 导航提取
+        # var prevpage="/book/1/738/4083161.html";
+        prev_match = re.search(r'var\s+prevpage\s*=\s*["\']([^"\']+)["\']', html)
+        if prev_match and "index.html" not in prev_match.group(1):
+            meta['prev'] = urljoin(url, prev_match.group(1))
+
         next_match = re.search(r'var\s+nextpage\s*=\s*["\']([^"\']+)["\']', html)
         if next_match:
             link = next_match.group(1)
-            # 如果下一页是 index.html，说明是最后一章，或者是没有下一章了
-            # 注意：书香阁有时候最后一章的 nextpage 是空的 ""
+            # 只有当下一页不是 index.html 时才算有下一章
             if link and "index.html" not in link:
                 meta['next'] = urljoin(url, link)
 
-        # 提取目录
         toc_match = re.search(r'var\s+bookpage\s*=\s*["\']([^"\']+)["\']', html)
         if toc_match:
             meta['toc_url'] = urljoin(url, toc_match.group(1))

@@ -16,34 +16,68 @@ from werkzeug.utils import secure_filename
 from shared import BASE_DIR, LIB_DIR
 
 # ==========================================
-# 0. 辅助工具
+# 0. 辅助工具 (中文数字转阿拉伯数字 - 增强版)
 # ==========================================
 def parse_chapter_id(text):
     if not text: return -1
     text = text.strip()
-    match = re.search(r'(?:第)?\s*([0-9零一二三四五六七八九十百千万]+)\s*[章节回幕]', text)
-    if match: return _smart_convert_int(match.group(1))
-    match = re.search(r'^(\d+)', text)
-    if match: return int(match.group(1))
+    
+    # 1. 优先匹配纯数字 (例如: "49. 章节名" 或 "第49章")
+    match_num = re.search(r'(?:第)?\s*(\d+)\s*[章节回幕\.]', text)
+    if match_num: 
+        return int(match_num.group(1))
+        
+    # 2. 匹配中文数字 (例如: "第十一章")
+    # 注意：这里把两、千、万等都加全了
+    match_cn = re.search(r'(?:第)?\s*([零一二两三四五六七八九十百千万]+)\s*[章节回幕]', text)
+    if match_cn: 
+        return _smart_convert_int(match_cn.group(1))
+        
+    # 3. 实在不行，匹配开头的数字 (例如 "123 章节名")
+    match_start = re.search(r'^(\d+)', text)
+    if match_start: 
+        return int(match_start.group(1))
+        
     return -1
 
 def _smart_convert_int(s):
+    """
+    将中文数字转换为阿拉伯数字 (支持: 十一 -> 11, 一百零五 -> 105)
+    """
+    # 尝试直接转数字 (防止传入的是 "123")
     try: return int(s)
     except: pass
-    common_map = {'零':0, '一':1, '二':2, '三':3, '四':4, '五':5, '六':6, '七':7, '八':8, '九':9, '十':10, '百':100, '千':1000, '万':10000, '两':2}
-    if len(s) == 1 and s in common_map: return common_map[s]
-    res = 0
-    unit = 1
-    temp = 0
-    for char in reversed(s):
-        if char in common_map:
-            val = common_map[char]
-            if val >= 10:
-                if val > unit: unit = val
-                else: unit *= val
-            else: temp += val * unit
-    if temp == 0 and '十' in s: temp = 10
-    return temp if temp > 0 else 0
+
+    # 映射表
+    cn_nums = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, 
+               '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+    cn_units = {'十': 10, '百': 100, '千': 1000, '万': 10000}
+
+    # [核心修复] 特殊处理以"十"开头的数字 (如: 十一 => 一十一, 十五 => 一十五)
+    if s.startswith('十'):
+        s = '一' + s
+
+    result = 0
+    temp_val = 0 # 暂存当前读取的数字
+    
+    for char in s:
+        if char in cn_nums:
+            temp_val = cn_nums[char]
+        elif char in cn_units:
+            unit = cn_units[char]
+            if unit >= 10000:
+                # 处理"万"这种大单位，先结算前面的
+                result = (result + temp_val) * unit
+                temp_val = 0
+            else:
+                # 处理"十/百/千"
+                result += temp_val * unit
+                temp_val = 0
+    
+    # 加上最后剩下的个位数
+    result += temp_val
+    return result
+    
 
 # ==========================================
 # 1. 插件管理器
@@ -97,6 +131,81 @@ class SearchHelper:
             k = ''.join(s).lower()
             return k[:15] if k else "temp"
         except: return "temp"
+    # === [核心新增] Owllook 聚合搜索 (基于 HTML 解析) ===
+    def _do_owllook_search(self, keyword):
+        print(f"[Search] 🦉 尝试 Owllook 聚合搜索: {keyword}")
+        url = "https://www.owlook.com.cn/search"
+        params = {'wd': keyword}
+        
+        try:
+            # 伪装成浏览器请求
+            resp = cffi_requests.get(
+                url, 
+                params=params, 
+                impersonate=self.impersonate,
+                timeout=15 # 聚合搜索可能稍慢，给多点时间
+            )
+            
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            results = []
+            
+            # 提取所有结果项
+            items = soup.select('.result_item')
+            
+            for item in items:
+                try:
+                    # 1. 提取真实源链接 (最关键的一步)
+                    # 源码结构: <div class="netloc"> ... <a href="真实URL">查看源网址</a></div>
+                    source_link_tag = item.select_one('.netloc a[href^="http"]')
+                    if not source_link_tag: continue
+                    
+                    href = source_link_tag.get('href')
+                    
+                    # 2. 提取标题和作者信息
+                    # 源码结构: <a>网站名--书名--作者</a>
+                    main_link = item.select_one('li a')
+                    if not main_link: continue
+                    
+                    full_text = main_link.get_text(strip=True)
+                    
+                    # 解析 "网站--书名--作者" 格式
+                    parts = full_text.split('--')
+                    title = ""
+                    
+                    if len(parts) >= 2:
+                        # 通常中间的是书名
+                        title = parts[1]
+                    else:
+                        title = full_text # 格式不对就全拿
+                    
+                    # 3. 清洗数据
+                    clean_title = self._clean_title(title)
+                    
+                    # 过滤无效链接
+                    if not href: continue
+                    if self._is_junk(clean_title, href): continue
+                    
+                    # Owllook 已经帮我们筛选过一轮了，通常都是有效小说站
+                    # 但为了保险，还是过一下我们的白名单
+                    if not self._is_valid_novel_site(href): continue
+
+                    results.append({
+                        'title': clean_title,
+                        'url': href,
+                        'suggested_key': self.get_pinyin_key(keyword),
+                        'source': 'Owllook 🦉'
+                    })
+                    
+                except Exception as e:
+                    continue
+
+                if len(results) >= 10: break
+            
+            return results
+
+        except Exception as e:
+            print(f"[Search] Owllook Error: {e}")
+            return []
     def _is_valid_novel_site(self, url):
         """
         [新增] 白名单校验：只允许长得像小说站的 URL 通过
@@ -455,7 +564,18 @@ class SearchHelper:
     #     # 最后兜底，收录全但可能有广告或验证码
     #     return self._do_baidu_search(keyword)
     def search_bing(self, keyword):
-        return self._do_360_search(keyword)
+        # 1. 优先尝试 Owllook (聚合源，质量最高，且提供直链)
+        res = self._do_owllook_search(keyword)
+        if res and len(res) > 0:
+            return res
+
+        # 2. 其次尝试 360 (机房IP友好，备用)
+        res = self._do_360_search(keyword)
+        if res and len(res) > 0:
+            return res
+            
+        # 3. 百度/Bing 等其他兜底...
+        return self._do_bing_cn_search(keyword)
     # def _resolve_real_url(self, url):
     #     """
     #     [新增] 解析 360/百度的加密跳转链接

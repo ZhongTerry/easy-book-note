@@ -557,43 +557,52 @@ body.dark-mode .nav-btn:hover {
 
     // --- 目录逻辑 (增加强制刷新) ---
 // --- 修改 4: 目录加载、高亮与自动滚动 ---
+// --- 目录加载逻辑 (前端强制排序版) ---
+// --- 目录加载逻辑 (前端强制排序 + 格式化标题) ---
     function loadTOC(force = false) {
         const list = document.getElementById('tocList');
         if(force) showToast("🔍 正在重新爬取目录...");
         list.innerHTML = force ? '正在刷新目录，请稍候...' : '正在加载...';
         
-        // 获取当前规范化的 URL 用于比对 (去掉 force 等参数)
         const normalizedCurrentUrl = currentUrl.split('?')[0];
 
         fetch(`/toc?url={{ article.toc_url }}&key=${dbKey}&api=true${force ? '&force=true' : ''}`)
         .then(r => r.json())
         .then(d => {
-            if(d.chapters) {
-                // 1. 渲染列表，并在匹配当前 URL 的项上加上 active-chap 类
+            if(d.chapters && d.chapters.length > 0) {
+                // 1. 强制按 ID 数字排序
+                d.chapters.sort((a, b) => (a.id || 0) - (b.id || 0));
+                
+                // 2. 渲染列表
                 list.innerHTML = d.chapters.map(c => {
                     const isCurrent = c.url.split('?')[0] === normalizedCurrentUrl;
+                    
+                    // [核心修改] 标题格式化逻辑
+                    let displayTitle = c.raw_title || c.title || c.name;
+                    
+                    // 如果是正文章节 (ID > 0)，强制统一格式：第X章 标题
+                    // 这样视觉上最整齐，且能看出排序是否正确
+                    if (c.id && c.id > 0) {
+                        displayTitle = `第${c.id}章 ${c.name}`;
+                    }
+
                     return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${dbKey}" 
-                            class="toc-item ${isCurrent ? 'active-chap' : ''}" 
-                            data-url="${c.url.split('?')[0]}">
-                            ${c.raw_title}
+                               class="toc-item ${isCurrent ? 'active-chap' : ''}">
+                               ${displayTitle}
                             </a>`;
                 }).join('');
 
-                // 2. 自动滚动到当前章节
-                // 延迟一点点确保 DOM 渲染完成
+                // 3. 自动滚动
                 setTimeout(() => {
                     const activeItem = list.querySelector('.active-chap');
                     if (activeItem) {
-                        activeItem.scrollIntoView({ 
-                            behavior: 'smooth', // 平滑滚动
-                            block: 'center'     // 滚动到容器中间，视野最好
-                        });
+                        activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }
                 }, 100);
 
                 if(force) showToast("✅ 目录已更新");
             } else { 
-                list.innerText = "获取目录失败"; 
+                list.innerText = "获取目录失败或目录为空"; 
             }
         })
         .catch(e => {

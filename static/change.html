@@ -1,5 +1,18 @@
-<div class="version-block" id="v1.1.0">
+<!-- v1.1.1 版本块 -->
+<div class="version-block" id="v1.1.1">
     <div class="version-tag">当前版本</div>
+    <h2 class="version-title">v1.1.1 搜索重构与细节打磨</h2>
+    <div class="version-content">
+        <ul>
+            <li><strong>聚合搜索重构：</strong> 引入 <code>Owllook</code> 聚合搜索接口作为核心引擎，配合 360 搜索多线程解密兜底，彻底解决云服务器 IP 被搜索引擎风控导致“搜书无结果”的顽疾。</li>
+            <li><strong>CDN 穿透优化：</strong> 后端强制禁用 <code>/read</code> 路由的 HTML 缓存，彻底解决 EdgeOne 等 CDN 导致的“PC端误显示手机版页面”的缓存死锁问题。</li>
+            <li><strong>智能目录交互：</strong> 目录弹窗新增“自动定位”功能，打开即平滑滚动至当前章节；修复章节乱序问题（前端强制 ID 排序）；优化中文数字解析算法（修复“第十一章”识别错误）。</li>
+            <li><strong>PC 视觉微调：</strong> 翻页按钮迭代为更克制的“胶囊”样式（130px），统一低饱和度配色以减少阅读干扰；深度修复黑暗模式下顶栏与模态框的色差问题。</li>
+            <li><strong>双重刷新机制：</strong> 在阅读器顶部和目录栏分别增加“强制刷新”入口，支持分别重载页面逻辑和重新抓取目录结构。</li>
+        </ul>
+    </div>
+</div>
+<div class="version-block" id="v1.1.0">
     <h2 class="version-title">v1.1.0 极致极简体验升级 (Tomato Style)</h2>
     <div class="version-content">
         <ul>

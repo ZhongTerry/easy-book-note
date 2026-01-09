@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory, session
+from flask import Blueprint, render_template_string, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory, session
 import requests
 import os
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR
@@ -62,7 +62,19 @@ def api_me():
 
 @core_bp.route('/')
 @login_required
-def index(): return send_file(os.path.join(BASE_DIR, 'index.html'))
+def index():
+    # 旧代码: return send_file(os.path.join(BASE_DIR, 'index.html'))
+    
+    # === [新代码] 读取文件并当做模板渲染 ===
+    try:
+        index_path = os.path.join(BASE_DIR, 'index.html')
+        with open(index_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # 这里的 render_template_string 会自动接收 context_processor 注入的 app_version
+        return render_template_string(html_content)
+    except Exception as e:
+        return f"Error loading index: {str(e)}", 500
 
 @core_bp.route('/read')
 @login_required
