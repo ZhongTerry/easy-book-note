@@ -605,6 +605,26 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 .tag-360 { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
 .tag-baidu { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
 .tag-direct { background: #fce7f3; color: #9d174d; border: 1px solid #fbcfe8; }
+/* 新增：作者信息样式 */
+.res-author {
+    font-size: 12px;
+    color: #4b5563;            /* 深灰色文字，不是纯白 */
+    background-color: #f3f4f6; /* 极浅的灰色背景 */
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 8px;
+    font-weight: 500;
+    border: 1px solid #e5e7eb; /* 增加一个微弱的边框，更有质感 */
+}
+
+/* 2. 黑暗模式适配：深色底 */
+@media (prefers-color-scheme: dark), body.dark-mode {
+    .res-author {
+        color: #d1d5db;        /* 亮灰文字 */
+        background-color: #374151; /* 深灰背景 */
+        border-color: #4b5563;
+    }
+}
     </style>
 </head>
 <body>
@@ -1494,17 +1514,27 @@ function restoreVersion(key, value) {
                 const d = await res.json();
                 
                 if(d.data && d.data.length > 0) {
+                    // index.html -> doOnlineSearch 函数内部
+
                     div.innerHTML = d.data.map(i => {
-                        // 根据 source 决定标签颜色
+                        // 1. 确定标签颜色
                         let tagClass = 'tag-360';
                         if (i.source.includes('Baidu')) tagClass = 'tag-baidu';
                         else if (i.source.includes('Bing')) tagClass = 'tag-bing';
-                        else if (i.source.includes('XBiquge') || i.source.includes('Direct')) tagClass = 'tag-direct';
+                        else if (i.source.includes('书香') || i.source.includes('笔趣') || i.source.includes('Direct')) tagClass = 'tag-direct';
 
+                        // 2. [新增] 处理作者显示 (如果没有描述，就不显示)
+                        // 后端插件返回格式为: description: "作者: 辰东"
+                        const authorHtml = i.description ? `<span class="res-author">${i.description}</span>` : '';
+
+                        // 3. 构建 HTML
                         return `
                         <div class="result-item" onclick="selectResult('${i.suggested_key}', '${i.url}')">
                             <div class="res-left">
-                                <div class="res-title">${i.title}</div>
+                                <div class="res-title">
+                                    ${i.title}
+                                    ${authorHtml} <!-- 这里插入作者 -->
+                                </div>
                                 <div class="res-meta">
                                     <span class="source-tag ${tagClass}">${i.source || 'Unknown'}</span>
                                     <span class="res-url">${i.url}</span>

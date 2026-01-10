@@ -146,6 +146,147 @@ class SearchHelper:
         }
         self.plugins = []
         self._load_search_plugins()
+        self.sites = [
+            {
+                "name": "笔趣阁.cc", 
+                "url": "https://www.biquge.cc", 
+                "search": "/search.php", 
+                "param": "q", 
+                "encoding": "gbk" # GBK编码站点
+            },
+            {
+                "name": "笔趣卡", 
+                "url": "https://www.bqgka.com", 
+                "search": "/search.php", 
+                "param": "q", 
+                "encoding": "utf-8"
+            },
+            {
+                "name": "52小说", 
+                "url": "https://www.52bqg.cc", 
+                "search": "/modules/article/search.php", 
+                "param": "searchkey", 
+                "encoding": "gbk"
+            },
+            {
+                "name": "新笔趣阁", 
+                "url": "https://www.xbiquge.so", 
+                "search": "/search.php", 
+                "param": "keyword", 
+                "encoding": "utf-8"
+            },
+            {
+                "name": "23小说", 
+                "url": "https://www.23us.so", 
+                "search": "/files/article/search.html", 
+                "param": "searchkey", 
+                "encoding": "gbk"
+            }
+        ]
+
+    def _search_single_site(self, site, keyword):
+        """搜索单个站点"""
+        results = []
+        try:
+            # 1. 编码处理
+            if site['encoding'] == 'gbk':
+                # GBK 站点通常需要手动编码参数
+                kw_val = keyword.encode('gbk')
+            else:
+                kw_val = keyword
+
+            params = {site['param']: kw_val}
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': site['url']
+            }
+
+            # 2. 发起请求 (短超时，快速失败)
+            resp = requests.get(
+                f"{site['url']}{site['search']}", 
+                params=params, 
+                headers=headers, 
+                timeout=6, 
+                verify=False
+            )
+            
+            # 3. 强制设置编码防止乱码
+            resp.encoding = site['encoding']
+            
+            # 4. 通用解析逻辑
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # 尝试匹配常见的笔趣阁列表结构
+            items = []
+            # 结构A: .result-list .result-item (xbiquge类)
+            items.extend(soup.select('.result-list .result-item'))
+            # 结构B: .grid tr (杰奇CMS类)
+            items.extend(soup.select('tr')) 
+            # 结构C: .novelslist2 li (部分老站)
+            items.extend(soup.select('li'))
+
+            for item in items:
+                try:
+                    # 尝试寻找链接
+                    link = item.find('a', href=True)
+                    if not link: continue
+                    
+                    href = link['href']
+                    title = link.get_text(strip=True)
+                    
+                    # 过滤无效链接
+                    if not title or len(title) < 2: continue
+                    if "小说" in title and len(title) > 20: continue # 过滤导航栏
+                    
+                    # 模糊匹配：只有包含关键词才收录 (防止解析到页眉页脚)
+                    if keyword not in title: continue
+
+                    # 提取作者 (尝试找附近的文本)
+                    text_content = item.get_text()
+                    author = "未知"
+                    if "作者：" in text_content:
+                        author = text_content.split("作者：")[1].split()[0].strip()
+                    elif item.find_next_sibling('td'): # 表格结构作者在下一列
+                        author = item.find_next_sibling('td').get_text(strip=True)
+
+                    # URL 补全
+                    if not href.startswith('http'):
+                        href = urljoin(site['url'], href)
+                    
+                    # 修正目录页 (部分站点搜出来是详情页 /book/123/，需要转 /123/)
+                    # 这里保持原样，交给爬虫核心去纠错，或者简单替换
+                    
+                    results.append({
+                        'title': title,
+                        'url': href,
+                        'source': f"{site['name']} 📚",
+                        'description': f"作者: {author}"
+                    })
+                    
+                    if len(results) >= 3: break # 每个站只取前3个
+                except: continue
+
+        except Exception as e:
+            # print(f"[Universal] {site['name']} Error: {e}")
+            pass
+            
+        return results
+
+    def search(self, keyword):
+        print(f"[Plugin] 🚀 启动笔趣阁聚合搜索 ({len(self.sites)}个源)...")
+        all_results = []
+        
+        # 线程池并发搜索所有源
+        with ThreadPoolExecutor(max_workers=5) as exe:
+            futures = [exe.submit(self._search_single_site, site, keyword) for site in self.sites]
+            
+            for future in as_completed(futures):
+                res = future.result()
+                if res:
+                    all_results.extend(res)
+        
+        return all_results
 
     def _load_search_plugins(self):
         """动态加载 search_plugins 目录下的所有插件"""
@@ -267,7 +408,7 @@ class SearchHelper:
         
         try:
             res = []
-            for i in range(1, 4) :
+            for i in range(1, 3) :
                 params['pn'] = i
                 resp = cffi_requests.get(url, params=params, impersonate=self.impersonate, timeout=self.timeout)
                 soup = BeautifulSoup(resp.content, 'html.parser')
@@ -533,9 +674,11 @@ class SearchHelper:
         
         # 1. 定义参赛选手 (所有搜索引擎一起上)
         search_funcs = [
+            self._do_direct_source_search,
             self._do_so_search,             # 360 (主力)
-            self._do_baidu_search,          # 百度 (互补)
-            self._do_direct_source_search,  # 直连 (兜底+高质量)
+            # self._do_baidu_search,          # 百度 (互补)
+            # self.search,
+              # 直连 (兜底+高质量)
             # self._do_bing_search            # Bing (国际源)
         ]
 
