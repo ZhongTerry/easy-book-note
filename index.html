@@ -447,6 +447,164 @@ body.dark-mode .version-block.active-ver {
 }
 body.dark-mode .version-title { color: #f3f4f6 !important; }
 body.dark-mode .version-content li { color: #a0aec0 !important; }
+/* === 搜索模态框优化 === */
+
+/* 1. 让弹窗变宽 */
+#searchModal .p-modal-content {
+    max-width: 800px !important; /* 宽度加倍 */
+    width: 90%;                  /* 移动端适配 */
+    height: 80vh;                /*以此固定高度，防止内容少时太短 */
+    display: flex;
+    flex-direction: column;
+}
+
+/* 2. 搜索结果容器：允许滚动 */
+.search-results {
+    flex: 1;                     /* 占满剩余空间 */
+    overflow-y: auto;            /* 内部滚动 */
+    padding: 10px;
+    background: #f9fafb;         /* 浅灰底色 */
+    border-radius: 8px;
+    margin-top: 15px;
+    border: 1px solid #eee;
+}
+
+/* 3. 搜索结果单项：卡片式设计 */
+.result-item {
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    border: 1px solid #e5e7eb;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    justify-content: space-between; /* 左右布局 */
+    align-items: center;
+}
+
+.result-item:hover {
+    border-color: #4f46e5;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+
+/* 左侧信息区 */
+.res-left {
+    flex: 1;
+    min-width: 0; /* 防止文本溢出撑开 */
+}
+
+.res-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1f2937;
+    margin-bottom: 6px;
+}
+
+.res-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+/* 来源标签 */
+.source-tag {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-size: 11px;
+}
+/* 不同源不同色 */
+.tag-360 { background: #dcfce7; color: #166534; }   /* 绿色 */
+.tag-baidu { background: #dbeafe; color: #1e40af; } /* 蓝色 */
+.tag-bing { background: #fef3c7; color: #92400e; }  /* 黄色 */
+.tag-direct { background: #fce7f3; color: #9d174d; }/* 粉色 */
+
+.res-url {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+}
+
+/* 右侧动作图标 */
+.res-action {
+    color: #4f46e5;
+    font-weight: bold;
+    font-size: 14px;
+    padding-left: 15px;
+}
+
+/* 黑暗模式适配 */
+@media (prefers-color-scheme: dark) { /* 或者你的 body.dark-mode */
+    .search-results { background: #1a1a1a; border-color:#333; }
+    .result-item { background: #262626; border-color:#333; }
+    .res-title { color: #e5e7eb; }
+    .res-meta { color: #9ca3af; }
+}
+/* === 搜索结果 - 亮色模式精修 (Light Mode) === */
+
+/* 1. 列表容器：清爽的灰白底色，衬托卡片 */
+.search-results {
+    background-color: #f3f4f6 !important; /* 极浅的冷灰色 */
+    border: 1px solid #e5e7eb !important;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.02); /* 内部微阴影，增加深度 */
+}
+
+/* 2. 单个结果卡片：纯白、圆润、轻盈 */
+.result-item {
+    background-color: #ffffff !important;
+    border: 1px solid #ffffff !important; /* 默认白边框，更干净 */
+    box-shadow: 0 2px 5px rgba(0,0,0,0.03) !important; /* 极轻的悬浮阴影 */
+    margin-bottom: 12px !important;
+}
+
+/* 3. 鼠标悬浮：卡片上浮，投影加深，边框亮起 */
+.result-item:hover {
+    background-color: #ffffff !important;
+    border-color: #6366f1 !important; /* 亮紫色边框 */
+    box-shadow: 0 8px 20px rgba(99, 102, 241, 0.15) !important; /* 紫色调的柔和光晕 */
+    transform: translateY(-2px);
+}
+
+/* 4. 文字排版优化 */
+.res-title {
+    color: #111827 !important; /* 接近纯黑，高对比度 */
+    font-size: 17px !important;
+    letter-spacing: -0.01em;
+}
+
+.res-url {
+    color: #9ca3af !important; /* 浅灰，不抢视觉 */
+    font-family: monospace;    /* 网址用等宽字体更有科技感 */
+    background: #f9fafb;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* 5. 右侧“解析阅读”按钮美化 */
+.res-action {
+    color: #4f46e5 !important;
+    background: #eef2ff !important; /* 淡紫色胶囊背景 */
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.result-item:hover .res-action {
+    background: #4f46e5 !important; /* 悬浮时变实心紫 */
+    color: #ffffff !important;
+}
+
+/* 6. 标签配色微调 (更鲜艳一点) */
+.tag-360 { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+.tag-baidu { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+.tag-direct { background: #fce7f3; color: #9d174d; border: 1px solid #fbcfe8; }
     </style>
 </head>
 <body>
@@ -1323,17 +1481,46 @@ function restoreVersion(key, value) {
         async function doOnlineSearch() {
             const k = document.getElementById('onlineSearchInput').value.trim();
             if(!k) return;
+            
             const div = document.getElementById('searchResults');
-            div.innerHTML = '<div style="text-align:center; padding:10px;">🔍 搜索中...</div>';
-            const res = await fetch(`${API_URL}/api/search_novel`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({keyword:k})});
-            const d = await res.json();
-            if(d.data && d.data.length > 0) {
-                div.innerHTML = d.data.map(i => `
-                    <div class="result-item" onclick="selectResult('${i.suggested_key}', '${i.url}')">
-                        <div style="font-weight:bold; color:var(--p-primary)">${i.title}</div>
-                        <div style="font-size:12px; color:#888">${i.url}</div>
-                    </div>`).join('');
-            } else div.innerHTML = '<div style="text-align:center; padding:10px;">无结果</div>';
+            div.innerHTML = '<div style="text-align:center; padding:40px; color:#666;">Trying hard to search...<br>🔍 全网聚合搜索中...</div>';
+            
+            try {
+                const res = await fetch(`${API_URL}/api/search_novel`, { 
+                    method:'POST', 
+                    headers:{'Content-Type':'application/json'}, 
+                    body:JSON.stringify({keyword:k})
+                });
+                const d = await res.json();
+                
+                if(d.data && d.data.length > 0) {
+                    div.innerHTML = d.data.map(i => {
+                        // 根据 source 决定标签颜色
+                        let tagClass = 'tag-360';
+                        if (i.source.includes('Baidu')) tagClass = 'tag-baidu';
+                        else if (i.source.includes('Bing')) tagClass = 'tag-bing';
+                        else if (i.source.includes('XBiquge') || i.source.includes('Direct')) tagClass = 'tag-direct';
+
+                        return `
+                        <div class="result-item" onclick="selectResult('${i.suggested_key}', '${i.url}')">
+                            <div class="res-left">
+                                <div class="res-title">${i.title}</div>
+                                <div class="res-meta">
+                                    <span class="source-tag ${tagClass}">${i.source || 'Unknown'}</span>
+                                    <span class="res-url">${i.url}</span>
+                                </div>
+                            </div>
+                            <div class="res-action">
+                                解析并阅读 →
+                            </div>
+                        </div>`;
+                    }).join('');
+                } else {
+                    div.innerHTML = '<div style="text-align:center; padding:40px; color:#999;">未找到相关结果，请尝试更换关键词</div>';
+                }
+            } catch(e) {
+                div.innerHTML = '<div style="text-align:center; padding:40px; color:red;">搜索服务连接失败</div>';
+            }
         }
         async function downloadBook(key, url, title) {
     // 1. 简单的权限检查 (可选，提升体验)

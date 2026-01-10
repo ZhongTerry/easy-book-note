@@ -144,6 +144,37 @@ class SearchHelper:
             # 'qidian.com', 'zongheng.com', '17k.com', 'faloo.com', 'jjwxc.net',
             'facebook.com', 'twitter.com', 'youtube.com', 'bilibili.com'
         }
+        self.plugins = []
+        self._load_search_plugins()
+
+    def _load_search_plugins(self):
+        """动态加载 search_plugins 目录下的所有插件"""
+        plugin_dir = os.path.join(BASE_DIR, 'search_plugins')
+        if not os.path.exists(plugin_dir):
+            os.makedirs(plugin_dir)
+            return
+
+        print(f"[System] 正在加载搜索插件...")
+        for filename in os.listdir(plugin_dir):
+            if filename.endswith(".py") and filename != "__init__.py":
+                try:
+                    # 动态导入模块
+                    module_name = filename[:-3]
+                    file_path = os.path.join(plugin_dir, filename)
+                    
+                    spec = importlib.util.spec_from_file_location(module_name, file_path)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    
+                    # 寻找插件类 (约定类名为 SourceWorker)
+                    if hasattr(module, 'SourceWorker'):
+                        plugin_instance = module.SourceWorker()
+                        self.plugins.append(plugin_instance)
+                        print(f"  -> 已加载源: {plugin_instance.source_name}")
+                except Exception as e:
+                    print(f"  -> 插件 {filename} 加载失败: {e}")
+        
+        print(f"[System] 共加载 {len(self.plugins)} 个直连搜索源")
     
     def get_pinyin_key(self, text):
         clean = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
@@ -434,27 +465,34 @@ class SearchHelper:
             print(f"[Search] Bing Error: {e}")
             return []
     def _do_direct_source_search(self, keyword):
-        print(f"[Search] 🧱 直连 XBiquge: {keyword}")
-        target_url = "https://www.xbiquge.so/search.php"
-        try:
-            resp = requests.get(target_url, params={'keyword': keyword}, timeout=10, verify=False)
-            resp.encoding = 'utf-8'
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            items = soup.select('.result-list .result-item')
-            results = []
-            for item in items:
-                t = item.select_one('.result-game-item-title-link')
-                if t:
-                    href = t.get('href')
-                    if href and not href.startswith('http'): href = "https://www.xbiquge.so" + href
-                    results.append({
-                        'title': self._clean_title(t.get_text(strip=True)),
-                        'url': href,
-                        'suggested_key': self.get_pinyin_key(keyword),
-                        'source': 'XBiquge 📚'
-                    })
-            return results
-        except: return []
+        if not self.plugins:
+            return []
+            
+        print(f"[Search] 🧱 启动直连插件搜索 (共{len(self.plugins)}个): {keyword}")
+        all_results = []
+        
+        # 使用线程池并发调用所有插件
+        with ThreadPoolExecutor(max_workers=len(self.plugins)) as exe:
+            future_to_plugin = {
+                exe.submit(plugin.search, keyword): plugin 
+                for plugin in self.plugins
+            }
+            
+            for future in as_completed(future_to_plugin):
+                plugin = future_to_plugin[future]
+                try:
+                    res = future.result()
+                    if res:
+                        # 给结果补上 pinyin_key (插件里可能没加)
+                        for item in res:
+                            if 'suggested_key' not in item:
+                                item['suggested_key'] = self.get_pinyin_key(keyword)
+                        all_results.extend(res)
+                        print(f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
+                except Exception as e:
+                    print(f"  -> {plugin.source_name} 运行时异常: {e}")
+
+        return all_results
     # ==========================================
     # 辅助: 并发解析真实地址
     # ==========================================
