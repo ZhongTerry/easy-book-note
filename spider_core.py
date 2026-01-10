@@ -116,26 +116,35 @@ import requests
 # ==========================================
 # 2. 搜索助手
 # ==========================================
+
+
+# ==========================================
+# 2. 搜索助手 (调试增强版)
+# ==========================================import re
+import time
+from urllib.parse import urlparse, parse_qs, unquote, urljoin
+from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
+from pypinyin import lazy_pinyin, Style
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 class SearchHelper:
     def __init__(self):
-        self.impersonate = "chrome110"
+        # [Owllook 配置] 模拟 Chrome 指纹，这是过盾的关键
+        self.impersonate = "chrome110" 
         self.timeout = 10
-        self.proxies = self._get_proxies()
         
-        # [移植 Owllook] 黑名单域名，遇到这些直接跳过
-        self.black_domains = [
+        # [Owllook 移植] 域名黑名单 (Black Domain)
+        # 来源: owllook/config/config.py
+        self.black_domains = {
             'baidu.com', 'tieba.baidu.com', 'zhidao.baidu.com', 'wenku.baidu.com',
-            'so.com', 'baike.so.com', 'wenda.so.com',
+            # 'so.com', 'baike.so.com', 'wenda.so.com',
             'zhihu.com', 'douban.com', '163.com', 'qq.com', 'sina.com.cn',
             'amazon.cn', 'dangdang.com', 'jd.com', 'tmall.com', 'taobao.com',
-            'qidian.com', 'zongheng.com', '17k.com', 'faloo.com', # 过滤正版收费站，我们要的是免费阅读
-            'jjwxc.net', 'hongxiu.com' 
-        ]
-
-    def _get_proxies(self):
-        try: return getproxies()
-        except: return None
-
+            # 'qidian.com', 'zongheng.com', '17k.com', 'faloo.com', 'jjwxc.net',
+            'facebook.com', 'twitter.com', 'youtube.com', 'bilibili.com'
+        }
+    
     def get_pinyin_key(self, text):
         clean = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
         clean = re.sub(r'(小说|笔趣阁|最新章节|全文阅读)', '', clean)
@@ -151,179 +160,304 @@ class SearchHelper:
 
     def _is_valid_result(self, title, url):
         """
-        [移植 Owllook] 综合校验逻辑
+        [Owllook 移植] 结果校验逻辑
         """
         if not url or not url.startswith('http'): return False
         
-        domain = urlparse(url).netloc
-        title_lower = title.lower()
+        netloc = urlparse(url).netloc
         
         # 1. 黑名单校验
-        for black in self.black_domains:
-            if black in domain: return False
+        for domain in self.black_domains:
+            if domain in netloc: return False
             
-        # 2. 关键词校验
+        # 2. 必须是 html 结尾或者是目录页 (Owllook 偏好)
+        # if '.html' not in url and not url.endswith('/'): return False
+        
+        # 3. 关键词校验
         bad_keywords = ['下载', 'txt', '精校', '百科', '手游', '视频', '在线观看']
-        if any(k in title_lower for k in bad_keywords): return False
+        if any(k in title.lower() for k in bad_keywords): return False
         
         return True
 
-    # === 核心解析：获取真实 URL (移植自 baidu_novels.py get_real_url) ===
-    def _resolve_real_url(self, url):
-        # 360 和 百度 的加密链接特征
-        if "so.com/link" not in url and "baidu.com/link" not in url:
+    def _get_real_url(self, url):
+        """
+        [Owllook 移植] 解析真实 URL (Get Real URL)
+        核心：处理百度和360的加密跳转链接
+        """
+        # 如果不是加密链，直接返回
+        if "baidu.com/link" not in url and "so.com/link" not in url:
             return url
             
         try:
-            # 使用 HEAD 请求获取 Location，比 GET 快得多
-            # allow_redirects=False 禁止自动跳转
-            resp = requests.head(url, timeout=5, allow_redirects=False, verify=False)
+            # 1. 尝试 HEAD 请求 (Owllook 策略: async with client.head...)
+            # 禁止自动跳转，只看 Location
+            resp = cffi_requests.head(
+                url, 
+                impersonate=self.impersonate, 
+                timeout=5, 
+                allow_redirects=False
+            )
             
             if resp.status_code in [301, 302]:
                 real_url = resp.headers.get('Location') or resp.headers.get('location')
-                if real_url:
-                    # print(f"[Resolve] HEAD解析成功: {real_url}")
+                if real_url and "baidu.com" not in real_url and "so.com" not in real_url:
                     return real_url
-                    
-            # 如果 HEAD 失败 (某些网站屏蔽 HEAD)，尝试 GET
-            resp = requests.get(url, timeout=6, allow_redirects=False, verify=False)
+
+            # 2. 如果 HEAD 失败，尝试 GET (针对 360 的 JS 跳转)
+            resp = cffi_requests.get(
+                url,
+                impersonate=self.impersonate,
+                timeout=8,
+                allow_redirects=False
+            )
+            
             if resp.status_code == 200:
-                # 针对 360 的 JS 跳转页面解析
                 html = resp.text
-                import re
+                # 360 特有的 JS 跳转提取
                 js_match = re.search(r"window\.location\.replace\(['\"](.+?)['\"]", html)
                 if js_match: return js_match.group(1)
                 
                 meta_match = re.search(r'url=([^"]+)"', html, re.IGNORECASE)
                 if meta_match: return meta_match.group(1)
-                
-        except: pass
+
+        except Exception: 
+            pass
+            
         return url
 
-    # === 1. 360 搜索 (移植自 so_novels.py) ===
-    def _do_360_search(self, keyword):
-        print(f"[Search] 🔍 360搜索: {keyword}")
+    # ==========================================
+    # 引擎 1: 360搜索 (SoNovels)
+    # ==========================================
+    def _do_so_search(self, keyword):
+        print(f"[Search] 🔍 启动 Owllook-360 引擎: {keyword}")
         url = "https://www.so.com/s"
-        params = {'q': f"{keyword} 免费阅读 目录", 'ie': 'utf-8', 'src': 'noscript_home'}
+        # Owllook 参数: ie=utf-8, src=noscript_home, shb=1
+        params = {'q': keyword, 'ie': 'utf-8', 'src': 'noscript_home', 'shb': 1, 'pn': 1}
         
         try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-            resp = requests.get(url, params=params, headers=headers, timeout=10, verify=False)
-            resp.encoding = 'utf-8'
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            raw_results = []
-            # Owllook Selector: .res-list h3 a
-            links = soup.select('.res-list h3 a')
-            
-            for link in links:
-                title = link.get_text(strip=True)
-                href = link.get('data-url') or link.get('href') # 360 特有属性
+            res = []
+            for i in range(1, 4) :
+                params['pn'] = i
+                resp = cffi_requests.get(url, params=params, impersonate=self.impersonate, timeout=self.timeout)
+                soup = BeautifulSoup(resp.content, 'html.parser')
                 
-                # 尝试从 URL 参数提取 (url=...)
-                if href and "so.com/link" in href:
-                    from urllib.parse import parse_qs
-                    qs = parse_qs(urlparse(href).query)
-                    if 'url' in qs: href = qs['url'][0]
+                raw_results = []
+                # Owllook 选择器: .res-list
+                items = soup.select('.res-list')
+                print(len(items))
+                for item in items:
+                    try:
+                        title_tag = item.select_one('h3 a')
+                        if not title_tag: continue
+                        
+                        title = title_tag.get_text(strip=True)
+                        href = title_tag.get('href')
+                        
+                        # Owllook: 针对不同的请求进行 url 的提取
+                        if "www.so.com/link?m=" in href:
+                            href = title_tag.get('data-mdurl') or href
+                        if "www.so.com/link?url=" in href:
+                            qs = parse_qs(urlparse(href).query)
+                            if 'url' in qs: href = qs['url'][0]
+                        
+                        # if self._is_valid_result(title, href):
+                        if True:
+                            raw_results.append({
+                                'title': self._clean_title(title),
+                                'url': href, # 可能是加密链，稍后解析
+                                'suggested_key': self.get_pinyin_key(keyword),
+                                'source': '360 (Owllook)'
+                            })
 
-                if self._is_valid_result(title, href):
-                    raw_results.append({
-                        'title': self._clean_title(title),
-                        'url': href,
-                        'suggested_key': self.get_pinyin_key(keyword),
-                        'source': '360 🟢'
-                    })
-                if len(raw_results) >= 8: break
-            
-            # 并发解析真实 URL
-            return self._concurrent_resolve(raw_results)
-
+                    except: continue
+                    for item in raw_results :
+                        res.append(item)
+                    if len(raw_results) >= 10: break
+            return self._concurrent_resolve(res)
         except Exception as e:
-            print(f"[Search] 360 Error: {e}")
+            print(f"[Search] So Error: {e}")
             return []
+            
 
-    # === 2. 百度搜索 (移植自 baidu_novels.py) ===
+        
+    def _resolve_real_url(self, url):
+        """
+        [核心修复] 解析真实 URL
+        针对服务器 IP，360 经常返回一个 200 OK 的中间页，而不是 302 跳转
+        """
+        if "so.com/link" not in url and "baidu.com/link" not in url:
+            return url
+            
+        try:
+            # 这里使用标准 requests，因为处理重定向和 header 比较方便且稳定
+            # timeout 设置短一点，快速失败
+            resp = requests.get(
+                url, 
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
+                timeout=6, 
+                allow_redirects=False, # 禁止自动跳转，我们要拦截第一跳
+                verify=False
+            )
+            
+            # 情况 1: 标准 302 跳转
+            if resp.status_code in [301, 302]:
+                return resp.headers.get('Location') or url
+            
+            # 情况 2: 服务器 IP 常见的 "正在跳转..." 中间页
+            if resp.status_code == 200:
+                html = resp.text
+                # 提取 window.location.replace("...")
+                js_match = re.search(r"window\.location\.replace\(['\"](.+?)['\"]", html)
+                if js_match: 
+                    return js_match.group(1)
+                
+                # 提取 <meta http-equiv="refresh" content="0;url=...">
+                meta_match = re.search(r'url=([^"]+)"', html, re.IGNORECASE)
+                if meta_match: 
+                    return meta_match.group(1)
+
+        except Exception:
+            pass
+            
+        # 解析失败返回原加密链接，后续会被清洗掉
+        return url
+    # ==========================================
+    # 引擎 2: 百度搜索 (BaiduNovels)
+    # ==========================================
     def _do_baidu_search(self, keyword):
-        print(f"[Search] 🔍 百度搜索: {keyword}")
+        print(f"[Search] 🔍 启动 Owllook-Baidu 引擎: {keyword}")
         url = "https://www.baidu.com/s"
-        params = {'wd': f"{keyword} 小说 目录", 'rn': 10} # rn=10 每页条数
+        
+        # [Owllook 参数]
+        # rn: 每页条数 (Owllook 设为 15，我们设 10)
+        # vf_bl: 1 (这个参数很重要，有时能减少广告)
+        params = {'wd': f"{keyword} 小说 最新章节", 'ie': 'utf-8', 'rn': 10, 'vf_bl': 1}
         
         try:
-            # 百度需要较新的 UA
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'}
-            resp = requests.get(url, params=params, headers=headers, timeout=8, verify=False)
+            # 百度反爬较严，必须带 Referer
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+                'Referer': 'https://www.baidu.com/'
+            }
+            # 使用 curl_cffi 模拟指纹，通过率比 requests 高
+            resp = cffi_requests.get(url, params=params, headers=headers, impersonate=self.impersonate, timeout=8)
             
-            if "安全验证" in resp.text:
+            if "安全验证" in resp.text or "wappass" in resp.url:
                 print("[Search] 百度触发验证码")
                 return []
                 
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            soup = BeautifulSoup(resp.content, 'html.parser')
             raw_results = []
             
-            # Owllook Selector: h3.t a
-            # 现在的百度结构可能是 .result h3 a 或 .c-container h3 a
-            links = soup.select('div.c-container h3 a') or soup.select('h3.t a')
+            # [Owllook 选择器]
+            # 兼容旧版 .result 和新版 .c-container
+            items = soup.select('div.result') or soup.select('div.c-container')
             
-            for link in links:
-                title = link.get_text(strip=True)
-                href = link.get('href') # 这是百度加密链接
-                
-                if self._is_valid_result(title, href):
-                    raw_results.append({
-                        'title': self._clean_title(title),
-                        'url': href,
-                        'suggested_key': self.get_pinyin_key(keyword),
-                        'source': 'Baidu 🔵'
-                    })
-                if len(raw_results) >= 6: break
+            for item in items:
+                try:
+                    # 提取标题链接 (h3.t a 是百度经典结构)
+                    title_tag = item.select_one('h3.t a') or item.select_one('h3 a') or item.select_one('a')
+                    if not title_tag: continue
+                    
+                    title = title_tag.get_text(strip=True)
+                    href = title_tag.get('href') # 这是一个加密链接
+                    
+                    if not href: continue
+
+                    if self._is_valid_result(title, href):
+                        raw_results.append({
+                            'title': self._clean_title(title),
+                            'url': href,
+                            'suggested_key': self.get_pinyin_key(keyword),
+                            'source': 'Baidu (Owllook)'
+                        })
+                except: continue
+                if len(raw_results) >= 8: break
             
-            # 百度必须解析真实 URL，否则前端可能无法跳转
+            # 百度链接全是加密的，必须并发解密
             return self._concurrent_resolve(raw_results)
 
         except Exception as e:
             print(f"[Search] Baidu Error: {e}")
             return []
-
-    # === 3. DuckDuckGo (移植自 duck_go_novels.py) ===
-    def _do_ddg_search(self, keyword):
-        if not self.proxies: return []
-        print(f"[Search] 🦆 DuckDuckGo: {keyword}")
+    # ==========================================
+    # 引擎 3: 必应搜索 (BingNovels)
+    # ==========================================
+    def _do_bing_search(self, keyword):
+        print(f"[Search] 🔍 启动 Owllook-Bing 引擎: {keyword}")
+        url = "https://www.bing.com/search"
         
-        # 使用 html.duckduckgo.com 纯静态版，更容易爬
-        url = "https://html.duckduckgo.com/html/"
-        data = {'q': f"{keyword} 小说"}
+        # [Owllook 参数]
+        # ensearch=0: 强制中文搜索逻辑
+        params = {'q': f"{keyword} 小说 目录", 'ensearch': 0}
         
         try:
-            # DDG 通常需要 POST 请求
-            resp = requests.post(url, data=data, proxies=self.proxies, timeout=10, verify=False)
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            # Bing 需要 Referer
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+                'Referer': 'https://www.bing.com/'
+            }
+            resp = cffi_requests.get(url, params=params, headers=headers, impersonate=self.impersonate, timeout=10)
+            soup = BeautifulSoup(resp.content, 'html.parser')
             results = []
             
-            # Owllook Logic: 解析 uddg 参数
-            from urllib.parse import parse_qs, unquote
+            # [Owllook 选择器]
+            # .b_algo 是 Bing 搜索结果的标准容器
+            items = soup.select('li.b_algo')
             
-            links = soup.select('a.result__a')
-            for link in links:
-                title = link.get_text(strip=True)
-                raw_href = link.get('href')
-                
-                # DDG 的链接通常是 /l/?kh=-1&uddg=http%3A%2F%2F...
-                href = raw_href
-                if "uddg=" in raw_href:
-                    qs = parse_qs(urlparse(raw_href).query)
-                    if 'uddg' in qs:
-                        href = unquote(qs['uddg'][0])
-                
-                if self._is_valid_result(title, href):
+            for item in items:
+                try:
+                    title_tag = item.select_one('h2 a')
+                    if not title_tag: continue
+                    
+                    title = title_tag.get_text(strip=True)
+                    href = title_tag.get('href')
+                    
+                    if not href: continue
+
+                    # 过滤掉百度百科等在 Bing 中的结果
+                    if "baike.baidu.com" in href: continue
+
+                    if self._is_valid_result(title, href):
+                        results.append({
+                            'title': self._clean_title(title),
+                            'url': href,
+                            'suggested_key': self.get_pinyin_key(keyword),
+                            'source': 'Bing (Owllook)'
+                        })
+                except: continue
+                if len(results) >= 8: break
+            
+            return results
+
+        except Exception as e:
+            print(f"[Search] Bing Error: {e}")
+            return []
+    def _do_direct_source_search(self, keyword):
+        print(f"[Search] 🧱 直连 XBiquge: {keyword}")
+        target_url = "https://www.xbiquge.so/search.php"
+        try:
+            resp = requests.get(target_url, params={'keyword': keyword}, timeout=10, verify=False)
+            resp.encoding = 'utf-8'
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            items = soup.select('.result-list .result-item')
+            results = []
+            for item in items:
+                t = item.select_one('.result-game-item-title-link')
+                if t:
+                    href = t.get('href')
+                    if href and not href.startswith('http'): href = "https://www.xbiquge.so" + href
                     results.append({
-                        'title': self._clean_title(title),
+                        'title': self._clean_title(t.get_text(strip=True)),
                         'url': href,
                         'suggested_key': self.get_pinyin_key(keyword),
-                        'source': 'DuckDuckGo 🦆'
+                        'source': 'XBiquge 📚'
                     })
-                if len(results) >= 8: break
             return results
         except: return []
+    # ==========================================
+    # 辅助: 并发解析真实地址
+    # ==========================================
     def _concurrent_resolve(self, raw_results):
         if not raw_results: return []
         print(f"[Search] 并发解析 {len(raw_results)} 个链接...")
@@ -338,32 +472,80 @@ class SearchHelper:
                 item = future_to_item[future]
                 try:
                     real_url = future.result()
-                    if self._is_valid_result(item['title'], real_url):
+                    # 确保解析出来的是 http 且不是加密链
+                    if (real_url.startswith('http') and 
+                        "baidu.com/link" not in real_url and 
+                        "so.com/link" not in real_url and 
+                        self._is_valid_result(item['title'], real_url)):
+                        
                         item['url'] = real_url
                         final_results.append(item)
                 except: pass
         
-        # 按照原来的顺序排序（线程池会打乱顺序，如果不介意乱序可忽略）
-        # 这里不做强排序，能用就行
         return final_results
+    # ==========================================
+    # 统一入口
+    # ==========================================
+    # ... (前面的 _do_so_search, _do_baidu_search 等保持不变) ...
 
-    # === 主入口 ===
+    # === [核心升级] 全网并发聚合搜索 (Aggregated Search) ===
     def search_bing(self, keyword):
-        # 1. 梯子用户优先
-        if self.proxies:
-            res = self._do_ddg_search(keyword)
-            if res: return res
-
-        # 2. 国内主力：360 (参考 Owllook 策略)
-        res = self._do_360_search(keyword)
-        if res: return res
+        print(f"\n[Search] 🚀 启动全网并发聚合搜索: {keyword}")
+        start_time = time.time()
         
-        # 3. 直连小说站 (最强兜底)
-        # res = self._do_direct_source_search(keyword)
-        # if res: return res
+        # 1. 定义参赛选手 (所有搜索引擎一起上)
+        search_funcs = [
+            self._do_so_search,             # 360 (主力)
+            self._do_baidu_search,          # 百度 (互补)
+            self._do_direct_source_search,  # 直连 (兜底+高质量)
+            # self._do_bing_search            # Bing (国际源)
+        ]
 
-        # 4. 百度 (最后尝试，因为容易触发验证码)
-        return self._do_baidu_search(keyword)
+        # 如果有代理，把 DDG 也加上
+        # if self.proxies:
+            # search_funcs.insert(0, self._do_ddg_search)
+
+        all_results = []
+        seen_urls = set()  # 用于 URL 去重
+        
+        # 2. 开启线程池，最大并发数 = 引擎数量
+        # 注意：这里不仅搜索引擎并发，内部解析真实链接也是并发的(嵌套并发)，速度极快
+        with ThreadPoolExecutor(max_workers=len(search_funcs)) as exe:
+            # 提交所有搜索任务
+            future_to_name = {
+                exe.submit(func, keyword): func.__name__ 
+                for func in search_funcs
+            }
+            
+            # 3. 收集结果 (谁先回来谁先上榜，或者等全部回来)
+            for future in as_completed(future_to_name):
+                engine_name = future_to_name[future]
+                try:
+                    results = future.result()
+                    if results:
+                        print(f"  [Aggregator] {engine_name} 贡献了 {len(results)} 条结果")
+                        
+                        for item in results:
+                            url = item['url']
+                            # 简单去重逻辑 (去掉协议头和尾部斜杠进行比对)
+                            clean_url = url.replace('https://', '').replace('http://', '').rstrip('/')
+                            
+                            if clean_url not in seen_urls:
+                                seen_urls.add(clean_url)
+                                all_results.append(item)
+                                
+                except Exception as e:
+                    print(f"  [Aggregator] {engine_name} 异常: {e}")
+
+        # 4. 结果排序优化 (可选)
+        # 目前是按“谁快谁排前面”的自然顺序。
+        # 如果你想让直连源 (XBiquge) 始终排在前面，可以在这里对 all_results sort 一下
+        # 例如: all_results.sort(key=lambda x: 0 if 'XBiquge' in x['source'] else 1)
+
+        print(f"[Search] 聚合完成，耗时 {time.time() - start_time:.2f}s，共获取 {len(all_results)} 个有效源\n")
+        return all_results
+
+
 class SearchHelperOld:
     def __init__(self):
         self.impersonate = "chrome110"
