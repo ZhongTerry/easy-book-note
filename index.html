@@ -625,6 +625,59 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         border-color: #4b5563;
     }
 }
+/* === 新版热力图 (GitHub 风格) === */
+.heatmap-container {
+    overflow-x: auto; /* 允许横向滚动 */
+    padding-bottom: 10px;
+}
+
+.heatmap-grid {
+    display: grid;
+    /* 7行 (一周7天)，列数自动填充 */
+    grid-template-rows: repeat(7, 12px); 
+    grid-auto-flow: column; /* 纵向排列，横向延伸 */
+    gap: 3px;
+    height: auto;
+    margin-top: 10px;
+}
+
+.heat-cell {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    background-color: #ebedf0;
+    cursor: pointer;
+    position: relative;
+}
+
+/* Tooltip 提示 */
+.heat-cell:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.8);
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    white-space: nowrap;
+    z-index: 10;
+    pointer-events: none;
+}
+
+/* 颜色等级 */
+.heat-lv-0 { background-color: #ebedf0; }
+.heat-lv-1 { background-color: #9be9a8; }
+.heat-lv-2 { background-color: #40c463; }
+.heat-lv-3 { background-color: #30a14e; }
+.heat-lv-4 { background-color: #216e39; }
+
+/* 黑暗模式适配 */
+@media (prefers-color-scheme: dark), body.dark-mode {
+    .heat-lv-0 { background-color: #2d333b; } /* 暗色底 */
+}
     </style>
         <script>
             // === [核心修复] 智能关闭 Modal ===
@@ -753,7 +806,23 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
             <!-- 图表 -->
             <div style="margin-bottom:15px;">
                 <div style="font-size:12px; color:#888; margin-bottom:5px;">活跃度热力图</div>
-                <div class="heatmap-grid" id="heatmapGrid"></div>
+                <!-- 图表 -->
+            <div style="margin-bottom:15px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div style="font-size:12px; color:#888;">活跃度热力图 (最近半年)</div>
+                    <div style="font-size:10px; color:#888; display:flex; gap:2px;">
+                        <span>少</span>
+                        <span style="width:10px;height:10px;" class="heat-lv-0"></span>
+                        <span style="width:10px;height:10px;" class="heat-lv-2"></span>
+                        <span style="width:10px;height:10px;" class="heat-lv-4"></span>
+                        <span>多</span>
+                    </div>
+                </div>
+                <!-- 包裹层 -->
+                <div class="heatmap-container">
+                    <div class="heatmap-grid" id="heatmapGrid"></div>
+                </div>
+            </div>
             </div>
             
             <div style="height:150px; position:relative;">
@@ -1781,15 +1850,42 @@ async function checkUpdate(key, url) {
             }
         }
         function renderHeatmap(data) {
-            const g = document.getElementById('heatmapGrid'); g.innerHTML = '';
-            const max = Math.max(...data.map(d=>d.count)) || 1;
-            data.slice(-30).forEach(d => {
-                const b = document.createElement('div'); b.className = 'heat-bar';
-                b.style.height = (d.count>0 ? (d.count/max*100) : 5) + '%';
-                b.style.backgroundColor = `rgba(79, 70, 229, ${d.count>0?0.3+(d.count/max*0.7):0.1})`;
-                b.setAttribute('data-date', d.date.slice(5)); b.setAttribute('data-count', d.count+'m');
-                g.appendChild(b);
-            });
+            const grid = document.getElementById('heatmapGrid');
+            grid.innerHTML = '';
+            
+            // 1. 构建日期映射 Map { "2023-10-01": 120 }
+            const map = {};
+            data.forEach(d => map[d.date] = d.count);
+            
+            // 2. 生成过去 24 周 (约半年) 的数据
+            // 为了让网格对齐，通常生成 7 的倍数
+            const days = 24 * 7; 
+            let html = '';
+            
+            const today = new Date();
+            
+            // 倒序生成还是正序？Grid auto-flow column 是先竖后横
+            // 我们需要计算出起始日期，然后一天天往后推
+            
+            for (let i = 0; i < days; i++) {
+                // 计算日期：从 (days) 天前开始
+                const d = new Date();
+                d.setDate(today.getDate() - (days - 1) + i);
+                
+                const dateStr = d.toISOString().split('T')[0];
+                const count = map[dateStr] || 0; // 分钟数
+                
+                // 计算等级
+                let lv = 0;
+                if (count > 0) lv = 1;
+                if (count > 30) lv = 2;
+                if (count > 60) lv = 3;
+                if (count > 120) lv = 4;
+                
+                html += `<div class="heat-cell heat-lv-${lv}" data-tip="${dateStr}: ${count}分钟"></div>`;
+            }
+            
+            grid.innerHTML = html;
         }
         function renderChart(trend) {
             if(chartInstance) chartInstance.destroy();

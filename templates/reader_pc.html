@@ -574,10 +574,14 @@ body.dark-mode .share-text-area textarea:focus {
 </head>
 <body>
 
-<div id="syncAlert" class="sync-alert">
-    <span>📢 其它设备更新了进度</span>
-    <button onclick="location.reload()" style="background:white; color:var(--accent); border:none; padding:2px 10px; border-radius:10px; cursor:pointer; margin-left:10px; font-weight:bold;">同步跳转</button>
-</div>
+    <div id="syncAlert" class="sync-alert">
+        <span>📢 其它设备更新了进度</span>
+        <!-- [核心修复] 改回 a 标签，并加上 id="syncLink" -->
+        <a id="syncLink" href="#" style="background:white; color:var(--accent); text-decoration:none; padding:4px 12px; border-radius:12px; cursor:pointer; margin-left:10px; font-weight:bold; font-size:13px;">
+            跳转最新
+        </a>
+        <button onclick="document.getElementById('syncAlert').classList.remove('active')" style="background:none; border:none; color:white; margin-left:10px; cursor:pointer; font-size:16px;">×</button>
+    </div>
 
 <header>
     <div class="header-content">
@@ -744,153 +748,155 @@ body.dark-mode .share-text-area textarea:focus {
     </div>
 </div>
 <script>
-    
+    const localChapterId = parseInt("{{ chapter_id }}") || -1;
     const dbKey = "{{ db_key }}";
+    // 从后端获取当前页面对应的 URL (通常是未编码或部分编码的)
     const currentUrl = "{{ current_url }}";
-    // --- 分享功能逻辑 ---
-    
-    function openShareModal() {
-        // 1. 关闭设置，打开分享
-        document.getElementById('settingsModal').style.display = 'none';
-        document.getElementById('shareModal').style.display = 'flex';
-        
-        // 2. 生成文案
-        const title = document.getElementById('chapterTitle').innerText;
-        // 尝试从 document.title 或者后端变量获取书名
-        // document.title 格式通常是 "章节名 - Smart NoteDB"
-        // 我们最好有一个全局变量存书名，如果没有，就用 document.title 截取
-        let bookName = "精彩小说";
-        // 简单的提取逻辑：假设标题不包含书名，我们用 "Smart NoteDB" 代替，或者你自己定义变量
-        
-        // 构造纯净链接 (不带 key 的显示链接，虽然技术上访问需要 key，但分享文案里为了美观可以隐藏参数，或者缩短)
-        // 但为了朋友能点开，必须带完整参数。我们只在“文案展示”上做文章。
-        const shareUrl = window.location.href;
-        
-        // 生成文案模板
-        const shareText = `📖 正在阅读\n${title}\n\n🔗 点击链接直接阅读：\n${shareUrl}`;
-        
-        const textArea = document.getElementById('shareTextArea');
-        textArea.value = shareText;
-        
-        // 3. 生成二维码
-        const qrContainer = document.getElementById('qrcode');
-        qrContainer.innerHTML = ""; // 清空旧的
-        
-        new QRCode(qrContainer, {
-            text: shareUrl,
-            width: 160,
-            height: 160,
-            colorDark : "#000000",
-            colorLight : "#ffffff",
-            correctLevel : QRCode.CorrectLevel.L // L级容错，生成的码点少，容易扫
-        });
+    // 自动注入版本号
+    const APP_VERSION = "{{ app_version }}";
+    function getPageIndex(url) {
+        const match = url.match(/_(\d+)\./);
+        return match ? parseInt(match[1]) : 1;
     }
+    // 判断是否应该同步
+    function shouldSync(remoteUrl, remoteMeta) {
+        // 1. URL 相同，直接跳过
+        if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) return false;
 
-    function copyShareText() {
-        const textArea = document.getElementById('shareTextArea');
-        textArea.select();
-        document.execCommand("copy"); // 兼容性最好的复制方法
-        showToast("✅ 文案已复制到剪贴板");
-    }
-
-    // 绑定到原生分享 (手机端适配)
-    // 修改后的分享逻辑：PC端强制弹窗，手机端才唤起系统分享
-    async function nativeShare() {
-        // 1. 判断是否为移动设备 (简单的正则判断)
-        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-        // 2. 只有在移动端且支持原生分享时，才调用 navigator.share
-        if (isMobile && navigator.share) {
-            try {
-                await navigator.share({
-                    title: document.title,
-                    text: '我在 Smart NoteDB 发现了一本好书',
-                    url: window.location.href
-                });
-            } catch (err) {
-                // 用户取消分享，不做处理
-                console.log('分享取消');
+        // 2. [核心] ID 比对 (整数比大小)
+        // remoteMeta.chapter_id 是后端根据存入时的标题算出来的，绝对准确
+        // localChapterId 是后端渲染当前页时算出来的，绝对准确
+        if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
+            if (remoteMeta.chapter_id > localChapterId) {
+                console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) > 本地ID(${localChapterId}) -> 提示更新`);
+                return true;
             }
-        } else {
-            // 3. 电脑端（或者不支持原生分享的手机），直接打开我们自己写的模态框
-            openShareModal();
+            // 远程 <= 本地，说明本地是最新的，无需提示
+            return false;
         }
-    }
-    function initCustomColors() {
-        // 读取 localStorage
-        const savedColors = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
-        
-        const root = document.documentElement;
-        const outerPicker = document.getElementById('bgOuterPicker');
-        const readerPicker = document.getElementById('bgReaderPicker');
 
-        // 如果有保存的颜色，应用到 CSS 变量并更新 Picker 显示
-        if (savedColors.outer) {
-            root.style.setProperty('--bg-outer', savedColors.outer);
-            if(outerPicker) outerPicker.value = savedColors.outer;
-        }
-        
-        if (savedColors.reader) {
-            root.style.setProperty('--bg-reader', savedColors.reader);
-            if(readerPicker) readerPicker.value = savedColors.reader;
-        }
+        // 3. 兜底：如果没 ID，只能瞎猜 (URL 不同就提示)
+        return true; 
+    }
+    // === [工具] URL 强力归一化 (解决同步误报核心) ===
+    function normalizeUrl(url) {
+        if (!url) return "";
+        let res = url;
+        try {
+            // 递归解码，直到不再变化 (解决 %253A 等多重编码)
+            while (decodeURIComponent(res) !== res) {
+                res = decodeURIComponent(res);
+            }
+        } catch (e) {}
+        // 去除末尾斜杠
+        if (res.endsWith('/')) res = res.slice(0, -1);
+        return res.trim();
     }
 
-    // 2. 实时更新并保存
-    function updateCustomColor(type, color) {
-        const root = document.documentElement;
-        
-        if (type === 'outer') {
-            root.style.setProperty('--bg-outer', color);
-        } else if (type === 'reader') {
-            root.style.setProperty('--bg-reader', color);
-        }
-        
-        // 保存到 localStorage
-        const currentSaved = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
-        currentSaved[type] = color;
-        localStorage.setItem('pc_custom_colors', JSON.stringify(currentSaved));
-        
-        // [小优化] 如果用户手动改了颜色，建议把“夜间模式”的开关状态视觉上关掉（可选）
-        // 因为内联样式优先级高于 class，所以此时已经是用户自定义模式了
-    }
-
-    // 3. 重置回默认主题
-    function resetCustomColors() {
-        const root = document.documentElement;
-        
-        // 移除内联样式，让 CSS 类（默认或 dark-mode）重新生效
-        root.style.removeProperty('--bg-outer');
-        root.style.removeProperty('--bg-reader');
-        
-        // 清除存储
-        localStorage.removeItem('pc_custom_colors');
-        
-        // 恢复 Picker 的默认显示颜色 (仅视觉)
-        document.getElementById('bgOuterPicker').value = '#e0e0e0';
-        document.getElementById('bgReaderPicker').value = '#f2f2f2';
-        
-        showToast("已恢复默认配色");
-    }
+    // === 初始化入口 ===
     window.onload = function() {
+        // 1. 获取用户信息
         fetch('/api/me').then(r=>r.json()).then(u => {
             if(u.username) document.getElementById('userName').innerText = u.username;
             if(u.avatar) document.getElementById('userAvatar').src = u.avatar;
         });
+
+        // 2. 加载用户偏好 (字号、颜色、夜间模式)
         initCustomColors();
         initPreferences();
-        autoSyncProgress(); 
-        setInterval(checkRemote, 5000);
-        setInterval(sendHeartbeat, 60000);
-        reportWordCount();
-        handlePrefetch();
+
+        // 3. [核心] 启动同步检查 (先检查，无冲突再自动保存)
+        checkRemoteAndInit(); 
+
+        // 4. 启动后台任务
+        setInterval(sendHeartbeat, 60000); // 1分钟一次心跳
+        reportWordCount();                 // 上报字数
+        handlePrefetch();                  // 预加载下一章
     };
 
+    // === 同步核心逻辑 (Check First, Save Later) ===
+    async function checkRemoteAndInit() {
+        if(!dbKey) return;
+        try {
+            const res = await fetch('/api/get_value', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({ key: dbKey }) 
+            });
+            const d = await res.json();
+            
+            if (d.status === 'success' && d.value) {
+                // 传入 meta 数据进行智能对比
+                if (shouldSync(d.value, d.meta)) {
+                    console.log("[Sync] 发现更新的远程进度，暂停自动保存。");
+                    showSyncAlert(d.value);
+                } else {
+                    // 远程没我新，或者一样 -> 开启自动保存 (覆盖远程)
+                    autoSyncProgress();
+                }
+            } else {
+                autoSyncProgress();
+            }
+        } catch (e) { console.error(e); }
+        
+        setInterval(checkRemoteLoop, 5000);
+    }
+
+    // 轮询检查 (仅提示，不自动跳转)
+    function checkRemoteLoop() {
+        if(!dbKey) return;
+        fetch('/api/get_value', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) })
+        .then(r => r.json()).then(d => {
+            if (d.status === 'success' && d.value) {
+                // 轮询时也使用智能对比
+                if (shouldSync(d.value, d.meta)) {
+                    showSyncAlert(d.value);
+                } else {
+                    // 只要本地 >= 远程，就隐藏提示
+                    document.getElementById('syncAlert').classList.remove('active');
+                }
+            }
+        });
+    }
+
+    // 显示同步提示条
+    function showSyncAlert(targetUrl) {
+        const link = document.getElementById('syncLink');
+        if(link) {
+            link.href = `/read?url=${encodeURIComponent(targetUrl)}&key=${dbKey}`;
+            document.getElementById('syncAlert').classList.add('active');
+        }
+    }
+
+    // 执行保存 (更新阅读进度)
+    // 执行保存
+    function autoSyncProgress() {
+        if(!dbKey) return;
+        
+        // 获取当前标题 (用于后端计算真实ID)
+        const currentTitle = document.getElementById('chapterTitle').innerText;
+
+        fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
+        
+        fetch('/update', { 
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({ 
+                key: dbKey, 
+                value: currentUrl,
+                title: currentTitle // <--- [新增] 必须带上标题！
+            }) 
+        });
+    }
+
+    // === UI 交互逻辑 ===
     function showModal(id) {
         document.getElementById(id).style.display = 'flex';
         if(id === 'tocOverlay') loadTOC(false);
+        if(id === 'statsModal') loadStats(); // 加载热力图
     }
 
+    // 强制刷新
     function forceRefresh() {
         showToast("🔄 正在强制刷新页面...");
         const url = new URL(window.location.href);
@@ -898,17 +904,19 @@ body.dark-mode .share-text-area textarea:focus {
         window.location.href = url.toString();
     }
 
-    // --- 设置逻辑 ---
+    // 设置相关
     function initPreferences() {
         const fs = parseInt(localStorage.getItem('pc_reader_fs')) || 19;
-        document.getElementById('fontSlider').value = fs;
+        const slider = document.getElementById('fontSlider');
+        if(slider) slider.value = fs;
         updateFS(fs, false);
         if(localStorage.getItem('pc_reader_dark') === 'true') document.body.classList.add('dark-mode');
     }
 
     function updateFS(val, save = true) {
         document.getElementById('articleBody').style.fontSize = val + 'px';
-        document.getElementById('fontVal').innerText = val;
+        const disp = document.getElementById('fontVal');
+        if(disp) disp.innerText = val;
         if(save) localStorage.setItem('pc_reader_fs', val);
     }
 
@@ -918,36 +926,57 @@ body.dark-mode .share-text-area textarea:focus {
         localStorage.setItem('pc_reader_dark', isDark);
     }
 
-    // --- 目录逻辑 (增加强制刷新) ---
-// --- 修改 4: 目录加载、高亮与自动滚动 ---
-// --- 目录加载逻辑 (前端强制排序版) ---
-// --- 目录加载逻辑 (前端强制排序 + 格式化标题) ---
+    // 自定义颜色
+    function initCustomColors() {
+        const savedColors = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
+        const root = document.documentElement;
+        if (savedColors.outer) {
+            root.style.setProperty('--bg-outer', savedColors.outer);
+            const p = document.getElementById('bgOuterPicker'); if(p) p.value = savedColors.outer;
+        }
+        if (savedColors.reader) {
+            root.style.setProperty('--bg-reader', savedColors.reader);
+            const p = document.getElementById('bgReaderPicker'); if(p) p.value = savedColors.reader;
+        }
+    }
+    function updateCustomColor(type, color) {
+        const root = document.documentElement;
+        if (type === 'outer') root.style.setProperty('--bg-outer', color);
+        else if (type === 'reader') root.style.setProperty('--bg-reader', color);
+        
+        const currentSaved = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
+        currentSaved[type] = color;
+        localStorage.setItem('pc_custom_colors', JSON.stringify(currentSaved));
+    }
+    function resetCustomColors() {
+        const root = document.documentElement;
+        root.style.removeProperty('--bg-outer');
+        root.style.removeProperty('--bg-reader');
+        localStorage.removeItem('pc_custom_colors');
+        document.getElementById('bgOuterPicker').value = '#e0e0e0';
+        document.getElementById('bgReaderPicker').value = '#f2f2f2';
+        showToast("已恢复默认配色");
+    }
+
+    // === 目录加载 ===
     function loadTOC(force = false) {
         const list = document.getElementById('tocList');
         if(force) showToast("🔍 正在重新爬取目录...");
         list.innerHTML = force ? '正在刷新目录，请稍候...' : '正在加载...';
         
-        const normalizedCurrentUrl = currentUrl.split('?')[0];
+        const normCurrent = normalizeUrl(currentUrl);
 
         fetch(`/toc?url={{ article.toc_url }}&key=${dbKey}&api=true${force ? '&force=true' : ''}`)
         .then(r => r.json())
         .then(d => {
             if(d.chapters && d.chapters.length > 0) {
-                // 1. 强制按 ID 数字排序
+                // 强制排序
                 d.chapters.sort((a, b) => (a.id || 0) - (b.id || 0));
                 
-                // 2. 渲染列表
                 list.innerHTML = d.chapters.map(c => {
-                    const isCurrent = c.url.split('?')[0] === normalizedCurrentUrl;
-                    
-                    // [核心修改] 标题格式化逻辑
+                    const isCurrent = normalizeUrl(c.url) === normCurrent;
                     let displayTitle = c.raw_title || c.title || c.name;
-                    
-                    // 如果是正文章节 (ID > 0)，强制统一格式：第X章 标题
-                    // 这样视觉上最整齐，且能看出排序是否正确
-                    if (c.id && c.id > 0) {
-                        displayTitle = `第${c.id}章 ${c.name}`;
-                    }
+                    if (c.id && c.id > 0) displayTitle = `第${c.id}章 ${c.name}`;
 
                     return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${dbKey}" 
                                class="toc-item ${isCurrent ? 'active-chap' : ''}">
@@ -955,26 +984,57 @@ body.dark-mode .share-text-area textarea:focus {
                             </a>`;
                 }).join('');
 
-                // 3. 自动滚动
+                // 自动滚动
                 setTimeout(() => {
                     const activeItem = list.querySelector('.active-chap');
-                    if (activeItem) {
-                        activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }
+                    if (activeItem) activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }, 100);
 
                 if(force) showToast("✅ 目录已更新");
             } else { 
-                list.innerText = "获取目录失败或目录为空"; 
+                list.innerText = "获取目录失败"; 
             }
         })
         .catch(e => {
-            console.error("TOC Load Error:", e);
-            list.innerText = "网络异常，请重试";
+            console.error(e);
+            list.innerText = "网络异常";
         });
     }
 
-    // --- 换源逻辑 ---
+    // === 分享功能 ===
+    function openShareModal() {
+        document.getElementById('settingsModal').style.display = 'none';
+        document.getElementById('shareModal').style.display = 'flex';
+        
+        const title = document.getElementById('chapterTitle').innerText;
+        const shareUrl = window.location.href;
+        const shareText = `📖 正在阅读\n${title}\n\n🔗 点击链接直接阅读：\n${shareUrl}`;
+        
+        document.getElementById('shareTextArea').value = shareText;
+        
+        const qrContainer = document.getElementById('qrcode');
+        qrContainer.innerHTML = ""; 
+        new QRCode(qrContainer, {
+            text: shareUrl, width: 160, height: 160,
+            colorDark : "#000000", colorLight : "#ffffff",
+            correctLevel : QRCode.CorrectLevel.L
+        });
+    }
+    function copyShareText() {
+        document.getElementById('shareTextArea').select();
+        document.execCommand("copy");
+        showToast("✅ 文案已复制");
+    }
+    async function nativeShare() {
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        if (isMobile && navigator.share) {
+            try { await navigator.share({ title: document.title, text: '好书分享', url: window.location.href }); } catch (err) {}
+        } else {
+            openShareModal();
+        }
+    }
+
+    // === 换源逻辑 ===
     function triggerSourceModal() {
         document.getElementById('settingsModal').style.display = 'none';
         showModal('sourceModal');
@@ -994,7 +1054,7 @@ body.dark-mode .share-text-area textarea:focus {
             loading.style.display = 'none';
             if (json.status === 'success') {
                 list.innerHTML = json.data.map(src => `
-                    <div onclick="confirmSwitch('${src.url}')" style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:8px; cursor:pointer;">
+                    <div onclick="confirmSwitch('${src.url}')" style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:8px; cursor:pointer; transition:0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='#eee'">
                         <div style="font-weight:bold; color: #333;">${src.source}</div>
                         <div style="font-size:12px; color:#666;">${src.title}</div>
                     </div>`).join('');
@@ -1006,43 +1066,62 @@ body.dark-mode .share-text-area textarea:focus {
         window.location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
     }
 
-    // --- TTS 朗读 ---
-    let synth = window.speechSynthesis, utterance = null, isSpeaking = false;
-    function toggleTTS() {
-        if(isSpeaking) { synth.cancel(); isSpeaking = false; document.getElementById('ttsBtn').style.color='#666'; }
-        else {
-            const text = document.getElementById('chapterTitle').innerText + "。" + document.getElementById('articleBody').innerText;
-            utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'zh-CN'; utterance.onend = () => isSpeaking = false;
-            synth.speak(utterance); isSpeaking = true;
-            document.getElementById('ttsBtn').style.color='#ef4444';
-            showToast("🎧 正在朗读本章内容...");
-        }
-    }
+    // === 统计与热力图 ===
+    async function loadStats() {
+        const grid = document.getElementById('heatmapGrid');
+        grid.innerHTML = '<div style="text-align:center; width:100%; grid-column:span 30;">加载中...</div>';
+        try {
+            const res = await fetch('/api/analyze_stats');
+            const json = await res.json();
+            if (json.status === 'success') {
+                const summary = json.summary;
+                document.getElementById('statTotalTime').innerText = (summary.all.time / 60).toFixed(1);
+                document.getElementById('statTotalWords').innerText = (summary.all.words / 10000).toFixed(2);
+                document.getElementById('statToday').innerText = summary['24h'].time;
 
-    // --- 同步与预加载 ---
-    function autoSyncProgress() {
-        if(!dbKey) return;
-        fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
-        fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: currentUrl }) });
-    }
-    function checkRemote() {
-        if(!dbKey) return;
-        fetch('/api/get_value', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) })
-        .then(r => r.json()).then(d => {
-            if (d.status === 'success' && d.value && d.value !== currentUrl && decodeURIComponent(d.value) !== decodeURIComponent(currentUrl)) {
-                document.getElementById('syncLink').href = `/read?url=${encodeURIComponent(d.value)}&key=${dbKey}`;
-                document.getElementById('syncAlert').classList.add('active');
+                const heatmapMap = {};
+                summary.all.heatmap.forEach(h => heatmapMap[h.date] = h.count);
+
+                let html = '';
+                for (let i = 29; i >= 0; i--) {
+                    const d = new Date(); d.setDate(d.getDate() - i);
+                    const dateStr = d.toISOString().split('T')[0];
+                    const minutes = heatmapMap[dateStr] || 0;
+                    let lv = 0;
+                    if (minutes > 0) lv = 1;
+                    if (minutes > 15) lv = 2;
+                    if (minutes > 60) lv = 3;
+                    if (minutes > 120) lv = 4;
+                    html += `<div class="heat-cell heat-lv-${lv}" data-tip="${dateStr}: ${minutes}分钟"></div>`;
+                }
+                grid.innerHTML = html;
             }
-        });
+        } catch (e) { grid.innerHTML = '加载失败'; }
     }
     function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
     function reportWordCount() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ words: document.getElementById('articleBody').innerText.length, book_key: dbKey }) }); }
+
+    // === 其他 ===
     function handlePrefetch() {
         const next = document.getElementById('link-next');
         if(next && next.href) {
             const target = new URL(next.href).searchParams.get('url');
             if(target) setTimeout(() => fetch('/api/prefetch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ url: target }) }), 3000);
+        }
+    }
+    function toggleTTS() {
+        let synth = window.speechSynthesis;
+        if(window.isSpeaking) { 
+            synth.cancel(); window.isSpeaking = false; 
+            document.getElementById('ttsBtn').innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg> 开始朗读`;
+        } else {
+            const text = document.getElementById('chapterTitle').innerText + "。" + document.getElementById('articleBody').innerText;
+            const utt = new SpeechSynthesisUtterance(text);
+            utt.lang = 'zh-CN'; 
+            utt.onend = () => { window.isSpeaking = false; document.getElementById('ttsBtn').innerText = "开始朗读"; };
+            synth.speak(utt); window.isSpeaking = true;
+            document.getElementById('ttsBtn').innerHTML = `<span style="color:red">⏹ 停止</span>`;
+            showToast("🎧 正在朗读...");
         }
     }
 

@@ -3,7 +3,7 @@ import requests
 import os
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR
 import managers
-from spider_core import crawler_instance as crawler, searcher, epub_handler
+from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
 import re
 core_bp = Blueprint('core', __name__)
 DEFAULT_SERVER = 'https://auth.ztrztr.top'
@@ -16,7 +16,28 @@ CLIENT_ID = os.environ.get('CLIENT_ID') or DEFAULT_CLIENT_ID
 CLIENT_SECRET = os.environ.get('CLIENT_SECRET') or DEFAULT_CLIENT_SECRET
 AUTH_SERVER = os.environ.get('SERVER', 'https://auth.ztrztr.top')
 REDIRECT_URI = os.environ.get('CALLBACK', 'https://book.ztrztr.top/callback')
+def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
+    """
+    计算章节的真实顺序 ID (Priority: Cached TOC Index > Title Parsing > URL Regex)
+    """
+    # 1. 尝试从缓存的目录(TOC)中查找该 URL 的位置 (最准确，支持乱序网站)
+    # 我们先尝试找一下缓存里有没有这本书的目录
+    # 注意：这里需要一种机制找到对应的 TOC 缓存 key。
+    # 通常用户在阅读时，TOC 已经被缓存了。我们尝试通过 book_key 对应的 value (上一章) 或者当前 url 推导 TOC。
+    # 简化策略：我们尝试遍历 cache，或者直接信任标题解析。
+    
+    # 策略 A: 标题解析 (最快，最通用，不依赖 TOC 缓存)
+    # 使用我们之前修好的强大解析函数 (支持 "第十一章", "47. ")
+    title_id = parse_chapter_id(chapter_title)
+    if title_id > 0:
+        return title_id
 
+    # 策略 B: 如果标题解析失败 (比如 "尾声"), 尝试从 URL 瞎猜 (极其不准，仅兜底)
+    match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', chapter_url.split('?')[0])
+    if match:
+        return int(match.group(1))
+    
+    return -1
 @core_bp.route('/login')
 def login(): return redirect(f"{AUTH_SERVER}/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}")
 
@@ -35,7 +56,17 @@ def callback():
 
 @core_bp.route('/logout')
 def logout(): session.clear(); return redirect('/')
-
+from spider_core import parse_chapter_id
+# [新增] 解析页码的辅助函数
+def get_page_index(url):
+    """从 URL 解析页码 (例如 123_2.html -> 2, 123.html -> 1)"""
+    try:
+        # 匹配 _2.html 这种格式
+        match = re.search(r'_(\d+)\.', url)
+        if match:
+            return int(match.group(1))
+    except: pass
+    return 1 # 默认是第 1 页
 # routes/core_bp.py
 
 from flask import make_response # 记得引入这个
@@ -102,13 +133,22 @@ def read_mode():
     # === [核心修改] 设备识别分流 ===
     ua = request.headers.get('User-Agent', '').lower()
     is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
+    # [新增] 计算当前章节 ID (用于前端同步判断)
+    # 我们尝试从 data['title'] 解析，如果爬虫没返回 title，就从 URL 解析
+    current_chapter_id = -1
+    if data and data.get('title'):
+        current_chapter_id = parse_chapter_id(data['title'])
     
+    if current_chapter_id <= 0:
+        # 尝试从 URL 解析 ID
+        match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
+        if match: current_chapter_id = int(match.group(1))
     if is_mobile:
         # 手机端暂时还用这个，我们之后会专门重构它
-        return render_template('reader.html', article=data, current_url=u, db_key=k)
+        return render_template('reader.html', article=data, current_url=u, db_key=k, chapter_id=current_chapter_id)
     else:
         # 电脑端使用全新的“番茄风格”模板
-        return render_template('reader_pc.html', article=data, current_url=u, db_key=k)
+        return render_template('reader_pc.html', article=data, current_url=u, db_key=k, chapter_id=current_chapter_id)
 @core_bp.route('/api/history/list')
 @login_required
 def api_history_list():
@@ -169,60 +209,48 @@ def insert():
         
     return jsonify(res)
 
-
+import time
 @core_bp.route('/update', methods=['POST'])
 @login_required
 def update():
     key = request.json.get('key')
     value = request.json.get('value')
-    is_manual = request.json.get('manual', False) # 获取前端传来的标记
-    final_value = value
-    if is_manual:
-        final_value = crawler.resolve_start_url(value)
-    value = final_value
-    # 1. 保存当前值
-    result = managers.db.update(key, value)
-    
-    # 2. 如果是手动操作，记录历史版本
-    if is_manual and result.get('status') == 'success':
-        managers.db.add_version(key, value)
-    # 2. [新增] 顺手更新“追更状态”
-    try:
-        # 获取该书当前的更新信息
-        info = managers.update_manager.get_update(key)
-        
-        # 只有当这本书在追更列表里 (即有 info 信息) 且有数字 ID 时才计算
-        if info and info.get('latest_url'):
-            # 如果当前链接就是最新链接，直接清零
-            if value == info['latest_url']:
-                 managers.update_manager.update_progress(key, 0, "已追平")
-            
-            # 否则尝试通过 ID 计算
-            else:
-                # 尝试从 value (当前URL) 中提取数字 ID
-                # 匹配 /123.html 或 /123_2.html 中的 123
-                match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', value.split('?')[0])
-                if match:
-                    current_id = int(match.group(1))
-                    
-                    # 我们暂时没法从 info 里直接拿 latest_id (因为之前存的是 title/url/total)
-                    # 但是我们可以尝试再次解析 latest_url 的 ID
-                    latest_url = info['latest_url']
-                    l_match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', latest_url.split('?')[0])
-                    
-                    if l_match:
-                        latest_id = int(l_match.group(1))
-                        
-                        # 计算差距
-                        diff = latest_id - current_id
-                        if diff > 0:
-                            managers.update_manager.update_progress(key, diff, f"落后 {diff} 章")
-                        elif diff <= 0:
-                            managers.update_manager.update_progress(key, 0, "已追平")
-    except Exception as e:
-        print(f"[AutoUpdate] Failed to recalc progress: {e}")
+    # 前端必须传 title，否则后端没法算 ID
+    title = request.json.get('title', '') 
+    is_manual = request.json.get('manual', False)
 
-    return jsonify(result)
+    # 1. 保存 URL (常规操作)
+    final_value = value
+    if is_manual and hasattr(crawler, 'resolve_start_url'):
+        final_value = crawler.resolve_start_url(value)
+    
+    res = managers.db.update(key, final_value)
+
+    # 2. [核心] 计算并保存“真实进度 ID”
+    # 无论是否手动，只要更新了进度，就必须更新这个 meta
+    real_id = calculate_real_chapter_id(key, final_value, title)
+    
+    if real_id > 0:
+        try:
+            import json
+            # 读取旧 meta (为了保留其他字段)
+            old_meta_str = managers.db.get_val(f"{key}:meta")
+            meta = json.loads(old_meta_str) if old_meta_str else {}
+            
+            # 更新 ID 和时间
+            meta['chapter_id'] = real_id
+            meta['updated_at'] = int(time.time())
+            
+            managers.db.update(f"{key}:meta", json.dumps(meta))
+            # print(f"[Sync] 更新真实进度: {title} -> ID {real_id}")
+        except Exception as e:
+            print(f"[Sync] Meta save error: {e}")
+
+    # 3. 历史版本 (仅手动)
+    if is_manual and res.get('status') == 'success':
+        managers.db.add_version(key, final_value)
+    
+    return jsonify(res)
 @core_bp.route('/api/switch_source', methods=['POST'])
 @login_required
 def api_switch_source():
@@ -379,8 +407,26 @@ def rollback(): return jsonify(managers.db.rollback())
 @core_bp.route('/api/get_value', methods=['POST'])
 @login_required
 def get_val():
-    v = managers.db.get_val(request.json.get('key'))
-    return jsonify({"status": "success", "value": v}) if v else jsonify({"status": "error"})
+    key = request.json.get('key')
+    v = managers.db.get_val(key)
+    
+    if v:
+        # 直接读取 meta，不再进行任何爬虫或解析
+        meta_str = managers.db.get_val(f"{key}:meta")
+        meta = {}
+        if meta_str:
+            try: 
+                import json
+                meta = json.loads(meta_str) 
+            except: pass
+        
+        return jsonify({
+            "status": "success", 
+            "value": v,
+            "meta": meta # 这里面包含准确的 chapter_id
+        })
+        
+    return jsonify({"status": "error"})
 
 @core_bp.route('/api/last_read', methods=['GET', 'POST'])
 @login_required
