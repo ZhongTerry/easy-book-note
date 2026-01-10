@@ -135,63 +135,58 @@ class SearchHelper:
             return k[:15] if k else "temp"
         except: return "temp"
     # === [核心新增] Owllook 聚合搜索 (基于 HTML 解析) ===
+    # === Owllook 聚合搜索 (标准 Requests 版) ===
     def _do_owllook_search(self, keyword):
         print(f"[Search] 🦉 尝试 Owllook 聚合搜索: {keyword}")
         url = "https://www.owlook.com.cn/search"
         params = {'wd': keyword}
         
         try:
-            # 伪装成浏览器请求
-            resp = cffi_requests.get(
+            # 使用标准 requests，模拟普通浏览器头
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
+                'Connection': 'keep-alive'
+            }
+            
+            # verify=False 可以防止因为证书问题导致的连接中断
+            resp = requests.get(
                 url, 
                 params=params, 
-                impersonate=self.impersonate,
+                headers=headers,
                 timeout=15,
-                # [新增] 强制使用 HTTP/1.1，彻底根治 HTTP/2 协议错误
-                http_version=CurlHttpVersion.V1_1 
+                verify=False 
             )
             
-            soup = BeautifulSoup(resp.content, 'html.parser')
+            # 编码处理
+            resp.encoding = 'utf-8'
+            
+            soup = BeautifulSoup(resp.text, 'html.parser')
             results = []
             
-            # 提取所有结果项
+            # ... (下面的解析逻辑完全保持不变) ...
             items = soup.select('.result_item')
             
             for item in items:
                 try:
-                    # 1. 提取真实源链接 (最关键的一步)
-                    # 源码结构: <div class="netloc"> ... <a href="真实URL">查看源网址</a></div>
+                    # 1. 提取真实源链接
                     source_link_tag = item.select_one('.netloc a[href^="http"]')
                     if not source_link_tag: continue
                     
                     href = source_link_tag.get('href')
                     
-                    # 2. 提取标题和作者信息
-                    # 源码结构: <a>网站名--书名--作者</a>
+                    # 2. 提取标题
                     main_link = item.select_one('li a')
                     if not main_link: continue
                     
                     full_text = main_link.get_text(strip=True)
-                    
-                    # 解析 "网站--书名--作者" 格式
                     parts = full_text.split('--')
-                    title = ""
+                    title = parts[1] if len(parts) >= 2 else full_text
                     
-                    if len(parts) >= 2:
-                        # 通常中间的是书名
-                        title = parts[1]
-                    else:
-                        title = full_text # 格式不对就全拿
-                    
-                    # 3. 清洗数据
                     clean_title = self._clean_title(title)
                     
-                    # 过滤无效链接
-                    if not href: continue
-                    if self._is_junk(clean_title, href): continue
-                    
-                    # Owllook 已经帮我们筛选过一轮了，通常都是有效小说站
-                    # 但为了保险，还是过一下我们的白名单
+                    if not href or self._is_junk(clean_title, href): continue
                     if not self._is_valid_novel_site(href): continue
 
                     results.append({
@@ -201,9 +196,7 @@ class SearchHelper:
                         'source': 'Owllook 🦉'
                     })
                     
-                except Exception as e:
-                    continue
-
+                except Exception: continue
                 if len(results) >= 10: break
             
             return results
