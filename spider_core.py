@@ -142,20 +142,13 @@ class SearchHelper:
         
         try:
             # 伪装成浏览器请求
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-                'Connection': 'keep-alive'
-            }
-            
-            # verify=False 可以防止因为证书问题导致的连接中断
-            resp = requests.get(
+            resp = cffi_requests.get(
                 url, 
                 params=params, 
-                headers=headers,
+                impersonate=self.impersonate,
                 timeout=15,
-                verify=False 
+                # [新增] 强制使用 HTTP/1.1，彻底根治 HTTP/2 协议错误
+                http_version=CurlHttpVersion.V1_1 
             )
             
             soup = BeautifulSoup(resp.content, 'html.parser')
