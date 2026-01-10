@@ -375,7 +375,55 @@ body.dark-mode .nav-btn:hover {
     opacity: 0.3;
     pointer-events: none;
 }
+/* ... 原有样式保持不变 ... */
 
+/* === 新增：颜色设置区域样式 === */
+.color-setting-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 10px;
+    align-items: center;
+}
+
+.color-input-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 12px;
+    color: #666;
+}
+
+/* 美化颜色选择器 input */
+input[type="color"] {
+    -webkit-appearance: none;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    width: 100%;
+    height: 36px;
+    padding: 2px;
+    background: white;
+    cursor: pointer;
+}
+input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
+
+/* 重置按钮 */
+.btn-reset-color {
+    padding: 0 15px;
+    height: 36px;
+    margin-top: 18px; /* 对齐 input */
+    border: 1px solid #eee;
+    background: #fff;
+    color: #666;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: 0.2s;
+}
+.btn-reset-color:hover {
+    border-color: #ff4d4f;
+    color: #ff4d4f;
+}
     </style>
 </head>
 <body>
@@ -461,7 +509,20 @@ body.dark-mode .nav-btn:hover {
                 <span id="fontVal" class="slider-val">19</span>
             </div>
         </div>
-
+        <div class="setting-row">
+            <span class="setting-label">自定义背景</span>
+            <div class="color-setting-grid">
+                <div class="color-input-wrapper">
+                    <label>外部背景</label>
+                    <input type="color" id="bgOuterPicker" value="#e0e0e0" oninput="updateCustomColor('outer', this.value)">
+                </div>
+                <div class="color-input-wrapper">
+                    <label>阅读区背景</label>
+                    <input type="color" id="bgReaderPicker" value="#f2f2f2" oninput="updateCustomColor('reader', this.value)">
+                </div>
+                <button class="btn-reset-color" onclick="resetCustomColors()" title="恢复默认主题">重置</button>
+            </div>
+        </div>
         <div class="setting-row">
             <span class="setting-label">快捷功能</span>
             <div class="btn-grid">
@@ -510,12 +571,68 @@ body.dark-mode .nav-btn:hover {
 <script>
     const dbKey = "{{ db_key }}";
     const currentUrl = "{{ current_url }}";
+    function initCustomColors() {
+        // 读取 localStorage
+        const savedColors = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
+        
+        const root = document.documentElement;
+        const outerPicker = document.getElementById('bgOuterPicker');
+        const readerPicker = document.getElementById('bgReaderPicker');
 
+        // 如果有保存的颜色，应用到 CSS 变量并更新 Picker 显示
+        if (savedColors.outer) {
+            root.style.setProperty('--bg-outer', savedColors.outer);
+            if(outerPicker) outerPicker.value = savedColors.outer;
+        }
+        
+        if (savedColors.reader) {
+            root.style.setProperty('--bg-reader', savedColors.reader);
+            if(readerPicker) readerPicker.value = savedColors.reader;
+        }
+    }
+
+    // 2. 实时更新并保存
+    function updateCustomColor(type, color) {
+        const root = document.documentElement;
+        
+        if (type === 'outer') {
+            root.style.setProperty('--bg-outer', color);
+        } else if (type === 'reader') {
+            root.style.setProperty('--bg-reader', color);
+        }
+        
+        // 保存到 localStorage
+        const currentSaved = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
+        currentSaved[type] = color;
+        localStorage.setItem('pc_custom_colors', JSON.stringify(currentSaved));
+        
+        // [小优化] 如果用户手动改了颜色，建议把“夜间模式”的开关状态视觉上关掉（可选）
+        // 因为内联样式优先级高于 class，所以此时已经是用户自定义模式了
+    }
+
+    // 3. 重置回默认主题
+    function resetCustomColors() {
+        const root = document.documentElement;
+        
+        // 移除内联样式，让 CSS 类（默认或 dark-mode）重新生效
+        root.style.removeProperty('--bg-outer');
+        root.style.removeProperty('--bg-reader');
+        
+        // 清除存储
+        localStorage.removeItem('pc_custom_colors');
+        
+        // 恢复 Picker 的默认显示颜色 (仅视觉)
+        document.getElementById('bgOuterPicker').value = '#e0e0e0';
+        document.getElementById('bgReaderPicker').value = '#f2f2f2';
+        
+        showToast("已恢复默认配色");
+    }
     window.onload = function() {
         fetch('/api/me').then(r=>r.json()).then(u => {
             if(u.username) document.getElementById('userName').innerText = u.username;
             if(u.avatar) document.getElementById('userAvatar').src = u.avatar;
         });
+        initCustomColors();
         initPreferences();
         autoSyncProgress(); 
         setInterval(checkRemote, 5000);
