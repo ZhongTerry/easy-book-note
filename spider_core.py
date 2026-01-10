@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ebooklib import epub
 from werkzeug.utils import secure_filename
 from shared import BASE_DIR, LIB_DIR
+from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
 # ==========================================
 # 0. 辅助工具 (中文数字转阿拉伯数字 - 增强版)
@@ -111,7 +112,7 @@ class AdapterManager:
 plugin_mgr = AdapterManager()
 from functools import lru_cache
 import requests
-from curl_cffi import requests as CurlHttpVersion
+# from curl_cffi import requests as CurlHttpVersion
 # ==========================================
 # 2. 搜索助手
 # ==========================================
