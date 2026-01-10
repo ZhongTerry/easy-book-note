@@ -118,7 +118,7 @@ import requests
 # ==========================================
 class SearchHelper:
     def __init__(self):
-        self.impersonate = "chrome100"
+        self.impersonate = "chrome110"
         self.timeout = 10
         self.proxies = self._get_proxies()
     
