@@ -111,6 +111,7 @@ class AdapterManager:
 plugin_mgr = AdapterManager()
 from functools import lru_cache
 import requests
+from curl_cffi import requests as CurlHttpVersion
 # ==========================================
 # 2. 搜索助手
 # ==========================================
@@ -140,15 +141,13 @@ class SearchHelper:
         
         try:
             # 伪装成浏览器请求
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-            
-            # 直接用普通 requests
-            resp = requests.get(
+            resp = cffi_requests.get(
                 url, 
                 params=params, 
-                headers=headers,
+                impersonate=self.impersonate,
                 timeout=15,
-                verify=False # 忽略 SSL 验证，有时候能解决握手问题
+                # [新增] 强制使用 HTTP/1.1，彻底根治 HTTP/2 协议错误
+                http_version=CurlHttpVersion.V1_1 
             )
             
             soup = BeautifulSoup(resp.content, 'html.parser')
