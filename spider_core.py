@@ -138,7 +138,7 @@ class SearchHelper:
     # === Owllook 聚合搜索 (标准 Requests 版) ===
     def _do_owllook_search(self, keyword):
         print(f"[Search] 🦉 尝试 Owllook 聚合搜索: {keyword}")
-        url = "https://www.owlook.com.cn/search"
+        url = "https://www1.owlook.com.cn/search"
         params = {'wd': keyword}
         
         try:
