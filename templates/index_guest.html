@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart NoteDB - 纯净阅读</title>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --text: #1f2937;
+            --bg: #ffffff;
+            --bg-sub: #f9fafb;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --primary: #818cf8;
+                --text: #f3f4f6;
+                --bg: #111827;
+                --bg-sub: #1f2937;
+            }
+        }
+
+        body {
+            margin: 0; padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        .container {
+            max-width: 600px;
+            padding: 40px 20px;
+        }
+
+        .logo {
+            font-size: 64px;
+            margin-bottom: 20px;
+            display: block;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin: 0 0 20px;
+            line-height: 1.2;
+            background: linear-gradient(135deg, #4f46e5, #9333ea);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            font-size: 1.2rem;
+            color: #6b7280;
+            margin-bottom: 40px;
+            line-height: 1.6;
+        }
+
+        .features {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 50px;
+            flex-wrap: wrap;
+        }
+
+        .tag {
+            background: var(--bg-sub);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            border: 1px solid rgba(128,128,128,0.1);
+        }
+
+        .btn-login {
+            background-color: var(--primary);
+            color: white;
+            padding: 16px 48px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: transform 0.2s, opacity 0.2s;
+            display: inline-block;
+            box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.39);
+        }
+
+        .btn-login:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+
+        footer {
+            margin-top: 60px;
+            font-size: 12px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <span class="logo">⚡</span>
+        <h1>Smart NoteDB</h1>
+        <p class="subtitle">
+            你的私人沉浸式阅读中枢。<br>
+            无广告 · 全网搜书 · 多端无缝同步
+        </p>
+
+        <div class="features">
+            <span class="tag">☁️ 自动同步</span>
+            <span class="tag">🚫 纯净无广</span>
+            <span class="tag">📱 PWA应用</span>
+            <span class="tag">🔍 聚合搜索</span>
+        </div>
+
+        <a href="/login" class="btn-login">开启阅读之旅</a>
+
+        <footer>
+            &copy; 2024 PureRead Project. All rights reserved.
+        </footer>
+    </div>
+</body>
+</html> 

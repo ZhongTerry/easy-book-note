@@ -626,6 +626,16 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
     }
 }
     </style>
+        <script>
+            // === [核心修复] 智能关闭 Modal ===
+        // 只有当点击事件真正发生在遮罩层本身(overlay)时才关闭
+        // 解决了“在内部选中文字拖拽到外部松开导致关闭”的 Bug
+        function closeByOverlay(event, modalId) {
+            if (event.target === event.currentTarget) {
+                document.getElementById(modalId).style.display = 'none';
+            }
+        }
+        </script>
 </head>
 <body>
 
@@ -701,7 +711,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
     </div>
 </div> <!-- .main-container 结束 -->
     <!-- === 模态框: 搜索 (使用 PureUI Modal 结构) === -->
-    <div id="searchModal" class="p-modal">
+    <div id="searchModal" class="p-modal" onclick="closeByOverlay(event, 'settingsModal')">
         <div class="p-modal-content">
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
                 <h3 style="margin:0">全网搜书</h3>
@@ -718,7 +728,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
     </div>
 
     <!-- === 模态框: 洞察 (Tab页) === -->
-    <div id="insightModal" class="p-modal">
+    <div id="insightModal" class="p-modal" onclick="closeByOverlay(event, 'settingsModal')">
         <div class="p-modal-content" style="max-width: 600px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
                 <h3 style="margin:0">📊 阅读洞察</h3>

@@ -1,5 +1,5 @@
 import os
-from flask import session, jsonify, redirect, url_for, request
+from flask import session, jsonify, redirect, url_for, request, send_file
 from functools import wraps
 from urllib.parse import urlparse
 import socket
@@ -22,12 +22,32 @@ role_manager_instance = None
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # 检查用户是否在 Session 中
         if 'user' not in session:
-            # API 请求返回 401，页面请求跳转登录
-            if request.path.startswith('/api/') or request.path in ['/insert', '/update', '/remove', '/list', '/find', '/rollback']:
-                return jsonify({"status": "error", "message": "Unauthorized"}), 401
-            # 注意：这里的 endpoint 改为了 core.login (适配蓝图)
-            return redirect(url_for('core.login'))
+            # === [核心修改] ===
+            
+            # 1. 如果是 API 请求，返回 JSON 错误
+            # 这样前端 fetch 收到 401 可以静默处理，而不是收到一堆 HTML 报错
+            if request.path.startswith('/api/') or request.is_json:
+                return jsonify({
+                    "status": "error", 
+                    "msg": "Unauthorized: Please login first", 
+                    "code": 401
+                }), 401
+            
+            # 2. 如果是页面请求，直接返回“未登录首页”
+            # 注意：这里假设你的 index_guest.html 放在 templates 文件夹下
+            try:
+                # 假设 BASE_DIR 在 shared.py 同级或已导入
+                # 如果 shared.py 里没有 BASE_DIR，请手动定义一下:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                guest_page_path = os.path.join(base_dir, 'templates', 'index_guest.html')
+                return send_file(guest_page_path)
+            except Exception as e:
+                # 如果找不到文件，作为兜底才重定向
+                print(f"[Auth] Guest page not found: {e}")
+                return redirect(url_for('core.login'))
+        
         return f(*args, **kwargs)
     return decorated_function
 

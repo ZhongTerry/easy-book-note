@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 在 <head> 中添加 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <title>{{ article.title }} - Smart NoteDB</title>
     <style>
         :root {
@@ -424,7 +426,151 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
     border-color: #ff4d4f;
     color: #ff4d4f;
 }
+/* === 分享模态框样式 === */
+.share-body {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.share-text-area textarea {
+    width: 100%;
+    height: 100px;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 13px;
+    resize: none;
+    background: #f9f9f9;
+    color: #555;
+    box-sizing: border-box; /* 防止撑破容器 */
+    font-family: sans-serif;
+}
+
+.btn-copy {
+    width: 100%;
+    padding: 10px;
+    margin-top: 8px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: 0.2s;
+}
+.btn-copy:hover { opacity: 0.9; }
+
+.share-divider {
+    text-align: center;
+    position: relative;
+    color: #ccc;
+    font-size: 12px;
+    margin: 5px 0;
+}
+.share-divider::before, .share-divider::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background: #eee;
+}
+.share-divider::before { left: 0; }
+.share-divider::after { right: 0; }
+
+.qr-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: white;
+    padding: 10px;
+    border-radius: 8px;
+}
+
+#qrcode img {
+    margin: 0 auto;
+    display: block;
+    padding: 5px;
+    background: white; /* 确保二维码在黑暗模式下也有白底，否则扫不出来 */
+    border-radius: 4px;
+}
+
+.qr-tip {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #999;
+}
+
+/* 黑暗模式适配 */
+body.dark-mode .share-text-area textarea {
+    background: #2a2a2a;
+    border-color: #444;
+    color: #ccc;
+}
+/* === 1. 修复标题颜色 (支持夜间模式) === */
+.article-header h1 { 
+    font-size: 32px; 
+    font-weight: 700; 
+    /* [核心修改] 别写死颜色，使用变量 */
+    color: var(--text-main); 
+    margin: 0 0 15px 0; 
+}
+
+/* === 2. 分享框 Textarea 美化 === */
+.share-text-area textarea {
+    width: 100%;
+    height: 110px;
+    padding: 12px;
+    font-size: 14px;
+    line-height: 1.6;
+    border-radius: 12px; /* 更圆润 */
+    border: 1px solid #e5e7eb;
+    background: #f9fafb; /* 浅灰背景 */
+    color: #374151;
+    resize: none; /* 禁止拖动大小 */
+    outline: none;
+    font-family: inherit;
+    transition: all 0.2s;
+    box-sizing: border-box;
+}
+
+/* 聚焦时的高亮效果 */
+.share-text-area textarea:focus {
+    background: #fff;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+/* 黑暗模式适配 */
+body.dark-mode .share-text-area textarea {
+    background: #1f2937;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+body.dark-mode .share-text-area textarea:focus {
+    background: #111827;
+    border-color: var(--accent);
+}
+
+/* === 3. Modal 遮罩层优化（配合 JS 修复误触） === */
+/* 确保遮罩层覆盖全屏且层级正确 */
+.modal-overlay {
+    /* 原有样式保持不变... */
+    cursor: default; /* 避免鼠标在遮罩层上显示为手型，暗示点击关闭 */
+}
     </style>
+    <script>
+        // === [核心修复] 智能关闭 Modal ===
+    // 只有当点击事件真正发生在遮罩层本身(overlay)时才关闭
+    // 解决了“在内部选中文字拖拽到外部松开导致关闭”的 Bug
+    function closeByOverlay(event, modalId) {
+        if (event.target === event.currentTarget) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+    }
+    </script>
 </head>
 <body>
 
@@ -495,7 +641,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
 </aside>
 
 <!-- 设置 Modal -->
-<div id="settingsModal" class="modal-overlay" onclick="this.style.display='none'">
+<div id="settingsModal" class="modal-overlay" onclick="closeByOverlay(event, 'settingsModal')">
     <div class="modal-box" onclick="event.stopPropagation()">
         <div class="modal-header">
             <h3 class="modal-title">阅读设置</h3>
@@ -534,6 +680,11 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                     开始朗读
                 </button>
+                <!-- [新增] 分享按钮 -->
+                <button class="btn-action" onclick="nativeShare()" style="grid-column: span 2; justify-content: center; background-color: var(--accent); color: white; border:none;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                    分享本书
+                </button>
             </div>
         </div>
 
@@ -567,10 +718,104 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
 </div>
 
 <div id="toast"></div>
+<!-- 分享 Modal -->
+<div id="shareModal" class="modal-overlay" onclick="this.style.display='none'">
+    <div class="modal-box" onclick="event.stopPropagation()" style="max-width: 380px;">
+        <div class="modal-header">
+            <h3 class="modal-title">📤 分享本书</h3>
+            <button onclick="document.getElementById('shareModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+        </div>
+        
+        <div class="share-body">
+            <!-- 1. 文案预览区 -->
+            <div class="share-text-area">
+                <textarea id="shareTextArea" readonly></textarea>
+                <button class="btn-copy" onclick="copyShareText()">📋 复制分享文案</button>
+            </div>
 
+            <div class="share-divider"><span>OR</span></div>
+
+            <!-- 2. 二维码区 -->
+            <div class="qr-section">
+                <div id="qrcode"></div>
+                <p class="qr-tip">手机扫码接着看</p>
+            </div>
+        </div>
+    </div>
+</div>
 <script>
+    
     const dbKey = "{{ db_key }}";
     const currentUrl = "{{ current_url }}";
+    // --- 分享功能逻辑 ---
+    
+    function openShareModal() {
+        // 1. 关闭设置，打开分享
+        document.getElementById('settingsModal').style.display = 'none';
+        document.getElementById('shareModal').style.display = 'flex';
+        
+        // 2. 生成文案
+        const title = document.getElementById('chapterTitle').innerText;
+        // 尝试从 document.title 或者后端变量获取书名
+        // document.title 格式通常是 "章节名 - Smart NoteDB"
+        // 我们最好有一个全局变量存书名，如果没有，就用 document.title 截取
+        let bookName = "精彩小说";
+        // 简单的提取逻辑：假设标题不包含书名，我们用 "Smart NoteDB" 代替，或者你自己定义变量
+        
+        // 构造纯净链接 (不带 key 的显示链接，虽然技术上访问需要 key，但分享文案里为了美观可以隐藏参数，或者缩短)
+        // 但为了朋友能点开，必须带完整参数。我们只在“文案展示”上做文章。
+        const shareUrl = window.location.href;
+        
+        // 生成文案模板
+        const shareText = `📖 正在阅读\n${title}\n\n🔗 点击链接直接阅读：\n${shareUrl}`;
+        
+        const textArea = document.getElementById('shareTextArea');
+        textArea.value = shareText;
+        
+        // 3. 生成二维码
+        const qrContainer = document.getElementById('qrcode');
+        qrContainer.innerHTML = ""; // 清空旧的
+        
+        new QRCode(qrContainer, {
+            text: shareUrl,
+            width: 160,
+            height: 160,
+            colorDark : "#000000",
+            colorLight : "#ffffff",
+            correctLevel : QRCode.CorrectLevel.L // L级容错，生成的码点少，容易扫
+        });
+    }
+
+    function copyShareText() {
+        const textArea = document.getElementById('shareTextArea');
+        textArea.select();
+        document.execCommand("copy"); // 兼容性最好的复制方法
+        showToast("✅ 文案已复制到剪贴板");
+    }
+
+    // 绑定到原生分享 (手机端适配)
+    // 修改后的分享逻辑：PC端强制弹窗，手机端才唤起系统分享
+    async function nativeShare() {
+        // 1. 判断是否为移动设备 (简单的正则判断)
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+        // 2. 只有在移动端且支持原生分享时，才调用 navigator.share
+        if (isMobile && navigator.share) {
+            try {
+                await navigator.share({
+                    title: document.title,
+                    text: '我在 Smart NoteDB 发现了一本好书',
+                    url: window.location.href
+                });
+            } catch (err) {
+                // 用户取消分享，不做处理
+                console.log('分享取消');
+            }
+        } else {
+            // 3. 电脑端（或者不支持原生分享的手机），直接打开我们自己写的模态框
+            openShareModal();
+        }
+    }
     function initCustomColors() {
         // 读取 localStorage
         const savedColors = JSON.parse(localStorage.getItem('pc_custom_colors') || '{}');
