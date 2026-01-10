@@ -31,9 +31,9 @@ def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
     title_id = parse_chapter_id(chapter_title)
     if title_id > 0:
         return title_id
-
     # 策略 B: 如果标题解析失败 (比如 "尾声"), 尝试从 URL 瞎猜 (极其不准，仅兜底)
     match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', chapter_url.split('?')[0])
+    match = -1
     if match:
         return int(match.group(1))
     
