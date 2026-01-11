@@ -257,7 +257,58 @@ class IsolatedDB:
         db_path = os.path.join(USER_DATA_DIR, f"{username}.sqlite")
         conn = sqlite3.connect(db_path)
         return conn
+    # managers.py -> IsolatedDB 类中
 
+    def rename_key(self, old_key, new_key):
+        if not old_key or not new_key: return {"status": "error", "message": "Key cannot be empty"}
+        u = get_current_user()
+        
+        try:
+            with get_db() as conn:
+                # 1. 检查新 Key 是否已存在
+                exists = conn.execute("SELECT 1 FROM user_books WHERE username=? AND book_key=?", (u, new_key)).fetchone()
+                if exists:
+                    return {"status": "error", "message": f"目标 Key [{new_key}] 已存在"}
+
+                # 2. 更新主表 (user_books)
+                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
+                
+                # 3. 更新影子元数据 (key:meta)
+                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", 
+                           (f"{new_key}:meta", u, f"{old_key}:meta"))
+                
+                # 4. 更新历史版本表 (book_history)
+                conn.execute("UPDATE book_history SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
+                
+                conn.commit()
+
+            # 5. 更新 JSON 模块中的引用 (Tags 和 Updates)
+            # 处理标签
+            tags_data = tag_manager.load(u)
+            if old_key in tags_data:
+                tags_data[new_key] = tags_data.pop(old_key)
+                tag_manager.save(tags_data, u)
+            
+            # 处理追更状态
+            updates_data = update_manager.load(u)
+            if old_key in updates_data:
+                updates_data[new_key] = updates_data.pop(old_key)
+                update_manager.save(updates_data, u)
+
+            # 6. 处理书单 (Booklists)
+            bl_data = booklist_manager.load(u)
+            changed = False
+            for lid in bl_data:
+                for b in bl_data[lid].get('books', []):
+                    if b['key'] == old_key:
+                        b['key'] = new_key
+                        changed = True
+            if changed:
+                booklist_manager.save(bl_data, u)
+
+            return {"status": "success", "message": f"已将 [{old_key}] 重命名为 [{new_key}]"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
     def _ensure_history_table(self):
         """确保历史记录表存在"""
         try:

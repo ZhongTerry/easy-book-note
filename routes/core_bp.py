@@ -248,6 +248,20 @@ def update():
         managers.db.add_version(key, final_value)
     
     return jsonify(res)
+# routes/core_bp.py
+
+@core_bp.route('/api/rename_key', methods=['POST'])
+@login_required
+def api_rename_key():
+    old_key = request.json.get('old_key')
+    new_key = request.json.get('new_key')
+    
+    if not old_key or not new_key:
+        return jsonify({"status": "error", "message": "参数不足"})
+    
+    # 调用刚才在 managers 里写的逻辑
+    res = managers.db.rename_key(old_key, new_key)
+    return jsonify(res)
 @core_bp.route('/api/switch_source', methods=['POST'])
 @login_required
 def api_switch_source():
