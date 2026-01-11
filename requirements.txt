@@ -1,0 +1,28 @@
+# --- Web 核心框架 ---
+Flask>=3.0.0
+flask-cors>=4.0.0
+python-dotenv>=1.0.0
+Werkzeug>=3.0.0
+
+# --- 爬虫与网络 (对抗级) ---
+# curl_cffi 是本项目绕过 Cloudflare 和 WAF 的核心，建议版本 >= 0.6.2
+curl_cffi>=0.6.2
+beautifulsoup4>=4.12.0
+lxml>=5.1.0
+requests>=2.31.0
+urllib3>=2.0.0
+
+# --- 数据处理 ---
+# pypinyin 用于生成书籍的拼音 Key
+pypinyin>=0.50.0
+# EbookLib 用于解析上传的 EPUB 电子书
+EbookLib>=0.18
+# Pillow 用于图标生成脚本和图像缩放
+Pillow>=10.2.0
+
+# --- 系统监控 (Admin Dashboard) ---
+# psutil 用于在管理员面板显示 CPU 和内存负载
+psutil>=5.9.8
+
+# --- 数据库 ---
+# sqlite3 是 Python 内置的，无需写在 requirements 中
