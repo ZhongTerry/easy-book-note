@@ -106,15 +106,30 @@ def index():
 def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
     force = request.args.get('force')
-    if not u.startswith('epub:') and not is_safe_url(u): return "Illegal URL", 403
     
-    # 获取数据逻辑 (保持不变)
+    # 1. 拦截非法 URL，但放行 epub: 协议
+    if not u.startswith('epub:') and not is_safe_url(u): 
+        return "Illegal URL", 403
+    
     data = None
+    
+    # 2. EPUB 专用提取通道
     if u.startswith('epub:'):
-        p = u.split(':')
-        if p[2] == 'toc': return redirect(url_for('core.toc_page', url=u, key=k))
-        data = epub_handler.get_chapter_content(p[1], int(p[2]))
+        try:
+            p = u.split(':')
+            filename = p[1]
+            chapter_idx = p[2]
+            
+            # 如果请求的是 TOC，跳转到目录页
+            if chapter_idx == 'toc':
+                return redirect(url_for('core.toc_page', url=u, key=k))
+            
+            # 提取内容
+            data = epub_handler.get_chapter_content(filename, int(chapter_idx))
+        except Exception as e:
+            return f"EPUB 解析错误: {e}", 500
     else:
+        # 3. 网页版爬虫通道 (保持不变)
         data = managers.offline_manager.get_chapter(k, u) if k and not force else None
         if not data and not force: data = managers.cache.get(u)
         if not data:
@@ -160,7 +175,18 @@ def toc_page():
     # 接收 force 参数，如果是 'true' 则跳过缓存
     force = request.args.get('force') == 'true'
     is_api = request.args.get('api')
-
+    if u.startswith('epub:'):
+        # 协议格式：epub:文件名:索引 (例如 epub:test.epub:toc)
+        parts = u.split(':')
+        filename = parts[1]
+        data = epub_handler.get_toc(filename)
+        
+        if not data:
+            return "EPUB 目录解析失败", 404
+            
+        if is_api:
+            return jsonify(data)
+        return render_template('toc.html', toc=data, toc_url=u, db_key=k)
     data = None if force else managers.cache.get(u)
     
     if not data:

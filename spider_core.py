@@ -1454,6 +1454,8 @@ class NovelCrawler:
         """
         [新增] 智能入口解析：如果给的是目录，自动转为第一章
         """
+        if url.startswith('epub:'):
+            return url
         print(f"[SmartURL] Analyzing: {url}")
         
         # 1. 特征预判：如果 URL 以 .html 结尾且包含数字，大概率是章节，直接返回
@@ -1644,6 +1646,8 @@ class NovelCrawler:
         fast_mode=True: 不重试，超时短，专用于换源检测
         """
         # 参数设置
+        if toc_url.startswith('epub:'):
+            return None
         timeout = 5 if fast_mode else 15
         retry = 1 if fast_mode else 3
 
