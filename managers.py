@@ -67,6 +67,8 @@ class BaseJsonManager:
 # 2. 角色管理 (System Config)
 # ==========================================
 class RoleManager:
+    def load(self):
+        return self._load_config()
     def _load_config(self):
         try:
             with get_db() as conn:

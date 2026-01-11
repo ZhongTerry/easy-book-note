@@ -33,6 +33,8 @@ def api_admin_dashboard():
         }
     })
 
+# routes/admin_bp.py
+
 @admin_bp.route('/api/admin/users', methods=['GET', 'POST'])
 @admin_required
 def api_admin_users():
@@ -42,12 +44,31 @@ def api_admin_users():
         return jsonify({"status": "success"})
     
     users = []
-    roles_data = role_manager.load()
-    for f in os.listdir(USER_DATA_DIR):
-        if f.endswith('.sqlite'):
-            uname = f.replace('.sqlite', '')
-            role = "admin" if uname in roles_data["admins"] else ("pro" if uname in roles_data["pros"] else "user")
-            users.append({"username": uname, "role": role})
+    # 1. 修复 load() 调用 (前提是你已经按上面第1步修改了 managers.py)
+    roles_data = role_manager.load() 
+    
+    # 2. 【重要修复】从 SQL 数据库中获取所有注册过的用户名，而不是扫描磁盘
+    try:
+        from managers import get_db
+        with get_db() as conn:
+            # 从 user_books 表中获取所有不重复的用户名
+            cursor = conn.execute("SELECT DISTINCT username FROM user_books")
+            usernames = [row[0] for row in cursor.fetchall()]
+            
+            for uname in usernames:
+                if uname == 'default_user': continue # 过滤掉默认占位符
+                
+                role = "user"
+                if uname in roles_data.get("admins", []):
+                    role = "admin"
+                elif uname in roles_data.get("pros", []):
+                    role = "pro"
+                
+                users.append({"username": uname, "role": role})
+    except Exception as e:
+        print(f"Admin API Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
     return jsonify({"status": "success", "users": users})
 
 @admin_bp.route('/api/admin/clear_cache', methods=['POST'])
