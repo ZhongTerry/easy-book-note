@@ -760,6 +760,7 @@ body.dark-mode .share-text-area textarea:focus {
     }
     // 判断是否应该同步
     function shouldSync(remoteUrl, remoteMeta) {
+        if (currentUrl.startsWith('epub:')) return false;
         // 1. URL 相同，直接跳过
         if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) return false;
 

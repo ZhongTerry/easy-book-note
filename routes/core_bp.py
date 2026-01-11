@@ -21,6 +21,8 @@ def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
     只通过标题识别真实序号。
     如果识别不到，返回 -1，不再尝试从 URL 瞎猜。
     """
+    if chapter_url.startswith('epub:'):
+        return -1
     # 策略 A: 标题解析 (使用我们刚刚修好的增强版函数)
     title_id = parse_chapter_id(chapter_title)
     if title_id > 0:
@@ -116,18 +118,30 @@ def read_mode():
     # 2. EPUB 专用提取通道
     if u.startswith('epub:'):
         try:
-            p = u.split(':')
-            filename = p[1]
-            chapter_idx = p[2]
+            parts = u.split(':')
+            # 格式兼容: 
+            # 旧: epub:filename:index (index是数字)
+            # 新: epub:filename:identifier:page (identifier可能是字符串)
             
-            # 如果请求的是 TOC，跳转到目录页
-            if chapter_idx == 'toc':
+            filename = parts[1]
+            
+            # 如果是目录请求
+            if len(parts) >= 3 and parts[2] == 'toc':
                 return redirect(url_for('core.toc_page', url=u, key=k))
             
-            # 提取内容
-            data = epub_handler.get_chapter_content(filename, int(chapter_idx))
+            # 解析标识符和页码
+            if len(parts) >= 4:
+                identifier = parts[2]
+                page_index = int(parts[3])
+            else:
+                # 兼容旧链接，默认第0页
+                identifier = parts[2]
+                page_index = 0
+            
+            data = epub_handler.get_chapter_content(filename, identifier, page_index)
+            
         except Exception as e:
-            return f"EPUB 解析错误: {e}", 500
+            return f"EPUB 解析崩溃: {e}", 500
     else:
         # 3. 网页版爬虫通道 (保持不变)
         data = managers.offline_manager.get_chapter(k, u) if k and not force else None
