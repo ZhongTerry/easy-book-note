@@ -713,11 +713,15 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
         
         <div style="display: flex; gap: 10px; align-items: center;">
+            <button id="desktopSettingsBtn" class="p-btn p-btn-sm" style="display:none; background:#4f46e5; color:white;" onclick="openDesktopSettings()">
+                🖥️ 客户端设置
+            </button>
             <!-- 新增：管理面板入口 (默认隐藏) -->
             <a href="/admin" id="adminEntryBtn" class="p-btn p-btn-sm" style="display:none; background:#374151; color:white; text-decoration:none;">🔧 管理后台</a>
             
             <a href="/logout" class="p-btn p-btn-sm p-btn-danger" style="text-decoration: none;">🚪 登出</a>
         </div>
+        
     </div>
 
     <div class="container">
@@ -944,6 +948,36 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         <div style="text-align:right; margin-top:20px;">
             <!-- 核心：必须使用 PureUI.modal.close -->
             <button class="p-btn p-btn-primary" onclick="PureUI.modal.close('changelogModal')">我知道了</button>
+        </div>
+    </div>
+</div>
+<!-- 桌面设置 Modal -->
+<!-- 桌面设置 Modal -->
+<div id="desktopSettingsModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 400px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+            <h3 style="margin:0">🖥️ 桌面客户端设置</h3>
+        </div>
+        
+        <div class="setting-row" style="margin-bottom: 20px;">
+            <label class="p-label">老板键 (显示/隐藏窗口)</label>
+            <input type="text" id="bossKeyInput" class="p-input" placeholder="点击此处按下按键组合" readonly 
+                   style="background: #f9fafb; cursor: pointer; text-align: center; font-weight: bold; color: #4f46e5;">
+        </div>
+
+        <div class="setting-row" style="margin-bottom: 10px;">
+            <label class="p-label">停止朗读快捷键</label>
+            <input type="text" id="ttsKeyInput" class="p-input" placeholder="点击此处按下按键组合" readonly 
+                   style="background: #f9fafb; cursor: pointer; text-align: center; font-weight: bold; color: #4f46e5;">
+        </div>
+
+        <p style="font-size:12px; color:#888; line-height: 1.4;">
+            💡 <b>使用说明：</b>点击输入框后，直接在键盘上按下你想要的组合键（如 Ctrl+Shift+Z），系统会自动录入。
+        </p>
+
+        <div style="text-align:right; margin-top:20px; gap:10px; display:flex; justify-content:flex-end;">
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('desktopSettingsModal')">取消</button>
+            <button class="p-btn p-btn-sm p-btn-primary" onclick="saveDesktopSettings()">保存并生效</button>
         </div>
     </div>
 </div>
@@ -1765,7 +1799,79 @@ window.addEventListener('pageshow', function(event) {
 
 // 2. 渲染更新状态 (小红点)
 // 在 index.html 的 script 标签中
+// 在书架页增加一个入口按钮，仅在桌面模式显示
+// --- 桌面端交互逻辑 ---
 
+// 1. 初始化检查：如果是桌面端，显示设置按钮
+if (window.electronAPI && window.electronAPI.isDesktop) {
+    document.getElementById('desktopSettingsBtn').style.display = 'inline-flex';
+}
+
+// 2. 打开设置弹窗并加载当前配置
+async function openDesktopSettings() {
+    if (!window.electronAPI) return;
+    
+    // 从 Electron 获取当前快捷键
+    const current = await window.electronAPI.getShortcuts();
+    document.getElementById('bossKeyInput').value = current.bossKey;
+    document.getElementById('ttsKeyInput').value = current.stopTtsKey;
+    
+    PureUI.modal.open('desktopSettingsModal');
+}
+
+// 3. 自动录入快捷键的逻辑
+function bindKeyRecorder(inputId) {
+    const el = document.getElementById(inputId);
+    el.addEventListener('keydown', (e) => {
+        e.preventDefault(); // 阻止默认行为（如刷新、搜索）
+        e.stopPropagation();
+
+        const modifiers = [];
+        if (e.ctrlKey) modifiers.push('Ctrl');
+        if (e.shiftKey) modifiers.push('Shift');
+        if (e.altKey) modifiers.push('Alt');
+        if (e.metaKey) modifiers.push('Super'); // Win/Command 键
+
+        // 捕捉主要按键
+        const key = e.key.toUpperCase();
+        
+        // 过滤掉单纯的修饰键本身
+        if (['CONTROL', 'SHIFT', 'ALT', 'META'].includes(key)) return;
+
+        // 规范化 Key 名称 (Electron 友好格式)
+        let finalKey = key;
+        if (key === ' ') finalKey = 'Space';
+        if (key === 'ARROWUP') finalKey = 'Up';
+        if (key === 'ARROWDOWN') finalKey = 'Down';
+        if (key === 'ARROWLEFT') finalKey = 'Left';
+        if (key === 'ARROWRIGHT') finalKey = 'Right';
+
+        // 组合成字符串
+        if (modifiers.length > 0) {
+            el.value = modifiers.join('+') + '+' + finalKey;
+        } else {
+            el.value = finalKey;
+        }
+    });
+}
+
+// 为两个输入框绑定录入器
+bindKeyRecorder('bossKeyInput');
+bindKeyRecorder('ttsKeyInput');
+
+// 4. 保存设置到 Electron
+function saveDesktopSettings() {
+    const newSettings = {
+        bossKey: document.getElementById('bossKeyInput').value,
+        stopTtsKey: document.getElementById('ttsKeyInput').value
+    };
+
+    if (window.electronAPI) {
+        window.electronAPI.updateShortcuts(newSettings);
+        showMsg("✅ 客户端配置已更新并生效", "success");
+        PureUI.modal.close('desktopSettingsModal');
+    }
+}
 function renderUpdates() {
     Object.keys(updatesCache).forEach(key => {
         const info = updatesCache[key];

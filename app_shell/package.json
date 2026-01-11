@@ -31,6 +31,8 @@
     },
     "files": [
       "**/*",
+      "main.js",
+      "preload.js",
       "!node_modules/*"
     ],
     "extraResources": [
