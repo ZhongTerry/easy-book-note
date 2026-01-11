@@ -1814,12 +1814,14 @@ class NovelCrawler:
 # ... (EpubHandler 保持不变) ...
 # spider_core.py
 
+# === spider_core.py 中的 EpubHandler 类 ===
+
 class EpubHandler:
     def __init__(self):
         self.lib_dir = LIB_DIR
         if not os.path.exists(self.lib_dir): os.makedirs(self.lib_dir)
-        # 分页阈值：每页大约 3000 字
-        self.CHUNK_SIZE = 3000 
+        # 分页阈值：每页大约 3000 字 (过大容易卡顿，过小翻页太累)
+        self.CHUNK_SIZE = 1500 
 
     def save_file(self, file_obj):
         filename = secure_filename(file_obj.filename)
@@ -1829,26 +1831,26 @@ class EpubHandler:
         return filename
 
     def _flatten_toc(self, toc, flat_list=None):
-        """递归展平 TOC 结构"""
+        """
+        递归展平 TOC 结构，提取所有章节的 {title, href}
+        """
         if flat_list is None: flat_list = []
         for item in toc:
             if isinstance(item, (list, tuple)):
-                # 这是一个章节节点
+                # 这是一个章节节点 (Section, [Children])
                 section = item[0]
                 children = item[1] if len(item) > 1 else []
                 
-                # 获取 href (ebooklib 的对象比较复杂，需要提取 href)
                 href = section.href if hasattr(section, 'href') else ''
-                title = section.title if hasattr(section, 'title') else '无标题'
+                title = section.title if hasattr(section, 'title') else ''
                 
-                if href:
+                if href and title:
                     flat_list.append({'title': title, 'href': href})
                 
-                # 递归处理子章节
                 if children:
                     self._flatten_toc(children, flat_list)
-            elif hasattr(item, 'href'):
-                # 简单节点
+            elif hasattr(item, 'href') and hasattr(item, 'title'):
+                # 简单节点 (Link)
                 flat_list.append({'title': item.title, 'href': item.href})
         return flat_list
 
@@ -1859,27 +1861,27 @@ class EpubHandler:
             book = epub.read_epub(filepath)
             title = book.get_metadata('DC', 'title')[0][0] if book.get_metadata('DC', 'title') else filename
             
-            # 1. 尝试解析逻辑目录 (NCX/TOC)
             raw_toc = book.toc
             chapters = []
             
             if raw_toc:
-                # 使用递归展平的目录
                 flat_toc = self._flatten_toc(raw_toc)
-                # 映射到我们的 URL 格式: epub:filename:href:page_index
-                # 注意：这里我们用 href 作为标识符，而不是 spine index，因为 spine index 不直观
-                for i, item in enumerate(flat_toc):
+                # 映射到 URL 格式
+                for item in flat_toc:
+                    # 忽略 href 中的锚点部分 (chapter1.html#section1 -> chapter1.html)
+                    clean_href = item['href'].split('#')[0]
                     chapters.append({
                         'title': item['title'], 
-                        # 使用 href 作为定位符
-                        'url': f"epub:{filename}:{item['href']}:0" 
+                        # 格式: epub:文件名:href:页码
+                        'url': f"epub:{filename}:{clean_href}:0" 
                     })
             else:
-                # 兜底：如果没有 TOC，还是用 Spine
+                # 兜底：没有目录就用物理文件列表
                 for i, item in enumerate(book.spine):
+                    item_id = item[0]
                     chapters.append({
                         'title': f"第 {i+1} 节", 
-                        'url': f"epub:{filename}:{item[0]}:0" # item[0] 是 item_id
+                        'url': f"epub:{filename}:{item_id}:0" 
                     })
 
             return {'title': title, 'chapters': chapters}
@@ -1889,118 +1891,125 @@ class EpubHandler:
 
     def get_chapter_content(self, filename, item_identifier, page_index=0):
         """
-        :param item_identifier: 可以是 href (如 chapter1.html) 或 item_id
-        :param page_index: 分页索引，0 开始
+        item_identifier: 可能是 href (chapter1.html) 也可能是 item_id
         """
         filepath = os.path.join(self.lib_dir, filename)
         try:
             book = epub.read_epub(filepath)
             
-            # 1. 寻找对应的 Item
+            # --- 1. 优先从 TOC 元数据反查标题 (最准确) ---
+            current_title = None
+            if book.toc:
+                flat_toc = self._flatten_toc(book.toc)
+                for item in flat_toc:
+                    # 对比 href (忽略锚点差异)
+                    if item['href'].split('#')[0] == item_identifier.split('#')[0]:
+                        current_title = item['title']
+                        break
+            
+            # --- 2. 定位内容 Item ---
             target_item = None
-            # 先尝试通过 href 找
+            # 尝试按 href 找
             for item in book.get_items():
                 if item.get_name() == item_identifier:
                     target_item = item
                     break
-            # 如果没找到，尝试通过 ID 找
+            # 尝试按 ID 找
             if not target_item:
                 target_item = book.get_item_with_id(item_identifier)
             
             if not target_item:
-                return {'title': '错误', 'content': ['未找到该章节内容']}
+                return {'title': '错误', 'content': ['章节文件丢失']}
 
-            # 2. 解析内容
+            # --- 3. 解析 HTML 内容 ---
             soup = BeautifulSoup(target_item.get_content(), 'html.parser')
             
-            # 尝试获取章节标题
-            title_tag = soup.find(['h1', 'h2'])
-            current_title = title_tag.get_text(strip=True) if title_tag else "未知章节"
+            # 如果 TOC 没查到标题，尝试从 HTML h1/h2 抓取兜底
+            if not current_title:
+                title_tag = soup.find(['h1', 'h2', 'title'])
+                if title_tag:
+                    current_title = title_tag.get_text(strip=True)
+                else:
+                    current_title = "未知章节"
+
+            # 提取正文 (过滤掉空行)
+            raw_lines = [p.get_text(strip=True) for p in soup.find_all(['p', 'div', 'span']) if p.get_text(strip=True)]
             
-            # 提取正文并清洗
-            raw_lines = [p.get_text(strip=True) for p in soup.find_all(['p', 'div']) if p.get_text(strip=True)]
-            
-            # 3. [核心] 执行长章节分页逻辑
-            # 将所有行合并成大文本，再重新切分，或者直接按行数切分
-            # 这里采用“按字符数聚合后切分”的策略，体验更好
-            full_text = "\n".join(raw_lines)
-            total_len = len(full_text)
-            
-            # 如果内容非常短，不分页
-            if total_len <= self.CHUNK_SIZE:
-                chunks = [raw_lines]
+            # --- 4. 长章节分页算法 ---
+            chunks = []
+            if not raw_lines:
+                chunks = [["(本章无文字内容)"]]
             else:
-                # 简单粗暴分页：按行累加，超过阈值就切
-                chunks = []
                 current_chunk = []
-                current_count = 0
+                current_length = 0
+                
                 for line in raw_lines:
                     current_chunk.append(line)
-                    current_count += len(line)
-                    if current_count >= self.CHUNK_SIZE:
+                    current_length += len(line)
+                    
+                    # 当累积字数超过阈值，切一页
+                    if current_length >= self.CHUNK_SIZE:
                         chunks.append(current_chunk)
                         current_chunk = []
-                        current_count = 0
-                if current_chunk: chunks.append(current_chunk)
+                        current_length = 0
+                
+                if current_chunk:
+                    chunks.append(current_chunk)
 
-            # 4. 校验页码
+            # 校验页码范围
             if page_index >= len(chunks): page_index = len(chunks) - 1
             if page_index < 0: page_index = 0
             
-            final_content = chunks[page_index]
-            
-            # 5. 构建上一页/下一页链接
-            # 逻辑：
-            # - 如果还有下一页 (sub-page)，Next 指向 page_index + 1
-            # - 如果没有下一页，Next 指向 下一个文件的第 0 页 (需要计算 TOC 顺序)
-            
-            # 这里简化处理：我们只处理内部翻页。跨章翻页需要知道 TOC 的顺序。
-            # 为了实现跨章，我们需要重新获取一次 TOC 列表来定位
-            
+            # --- 5. 构建翻页链接 (支持内部翻页 + 跨章翻页) ---
             prev_url = None
             next_url = None
             
-            # 内部翻页
+            # A. 内部翻页 (页码加减)
             if page_index > 0:
                 prev_url = f"epub:{filename}:{item_identifier}:{page_index-1}"
             if page_index < len(chunks) - 1:
                 next_url = f"epub:{filename}:{item_identifier}:{page_index+1}"
             
-            # 跨文件翻页 (如果内部没翻页了)
-            if not prev_url or not next_url:
-                toc_data = self.get_toc(filename) # 这步可能略耗时，但为了准确性必须做
-                if toc_data:
-                    chapters = toc_data['chapters']
-                    # 找到当前章节在列表中的索引
-                    # 构造当前的 URL 前缀进行匹配
-                    current_base = f"epub:{filename}:{item_identifier}"
+            # B. 跨章翻页 (如果内部没页了)
+            if (not prev_url or not next_url) and book.toc:
+                # 为了跨章，我们需要知道当前 href 在 TOC 中的位置
+                flat_toc = self._flatten_toc(book.toc)
+                curr_idx = -1
+                clean_id = item_identifier.split('#')[0]
+                
+                for i, item in enumerate(flat_toc):
+                    if item['href'].split('#')[0] == clean_id:
+                        curr_idx = i
+                        break
+                
+                if curr_idx != -1:
+                    # 上一章 (如果有)
+                    if not prev_url and curr_idx > 0:
+                        prev_href = flat_toc[curr_idx - 1]['href'].split('#')[0]
+                        # 这是一个简化的假设：跳到上一章的第0页。
+                        # (虽然体验上应该跳到上一章的"最后一页"，但那样需要预加载上一章计算页数，性能开销太大)
+                        prev_url = f"epub:{filename}:{prev_href}:0"
                     
-                    curr_idx = -1
-                    for i, chap in enumerate(chapters):
-                        if chap['url'].startswith(current_base):
-                            curr_idx = i
-                            break
-                    
-                    if curr_idx != -1:
-                        # 跨章上一页
-                        if not prev_url and curr_idx > 0:
-                            # 上一章的链接 (默认跳到第0页，如果想跳到最后一页比较麻烦，暂定第0页)
-                            prev_url = chapters[curr_idx - 1]['url']
-                        
-                        # 跨章下一页
-                        if not next_url and curr_idx < len(chapters) - 1:
-                            next_url = chapters[curr_idx + 1]['url']
+                    # 下一章 (如果有)
+                    if not next_url and curr_idx < len(flat_toc) - 1:
+                        next_href = flat_toc[curr_idx + 1]['href'].split('#')[0]
+                        next_url = f"epub:{filename}:{next_href}:0"
+
+            # 标题带上页码提示
+            display_title = current_title
+            if len(chunks) > 1:
+                display_title = f"{current_title} ({page_index+1}/{len(chunks)})"
 
             return {
-                'title': f"{current_title} ({page_index+1}/{len(chunks)})" if len(chunks)>1 else current_title,
-                'content': final_content,
+                'title': display_title,
+                'content': chunks[page_index],
                 'prev': prev_url,
                 'next': next_url,
                 'toc_url': f"epub:{filename}:toc"
             }
 
         except Exception as e: 
-            return {'title': 'Error', 'content': [f"EPUB Error: {str(e)}"]}
+            return {'title': '解析错误', 'content': [f"错误详情: {str(e)}"]}
 # 实例化对象
 crawler_instance = NovelCrawler()
 searcher = SearchHelper()
