@@ -3,11 +3,106 @@ import os
 import psutil # 记得 pip install psutil
 import platform
 from shared import CACHE_DIR, USER_DATA_DIR, admin_required
-from managers import role_manager
+from managers import role_manager, get_db
+from datetime import datetime, timedelta
+import json
 
 # 创建蓝图
 admin_bp = Blueprint('admin', __name__)
+# routes/admin_bp.py
 
+@admin_bp.route('/api/admin/system_summary')
+@admin_required
+def api_admin_system_summary():
+    try:
+        with get_db() as conn:
+            # 1. 统计总用户数
+            user_count = conn.execute("SELECT COUNT(DISTINCT username) FROM user_books").fetchone()[0]
+            
+            # 2. 统计总藏书量（排除 meta 和系统键）
+            book_count = conn.execute("SELECT COUNT(*) FROM user_books WHERE book_key NOT LIKE '@%' AND book_key NOT LIKE '%:meta'").fetchone()[0]
+            
+            # 3. 统计全站活跃数据
+            rows = conn.execute("SELECT json_content FROM user_modules WHERE module_type='stats'").fetchall()
+            total_time = 0
+            total_words = 0
+            for row in rows:
+                stats = json.loads(row[0])
+                for d in stats.get('daily_stats', {}).values():
+                    total_time += d.get('time', 0)
+                    total_words += d.get('words', 0)
+            
+            return jsonify({
+                "status": "success",
+                "users": user_count,
+                "books": book_count,
+                "total_time_hr": round(total_time / 60, 1),
+                "total_words_wan": round(total_words / 10000, 2)
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+@admin_bp.route('/api/admin/activity_stats')
+@admin_required
+def api_admin_activity_stats():
+    try:
+        with get_db() as conn:
+            # 获取所有用户的 stats 模块
+            rows = conn.execute("SELECT json_content FROM user_modules WHERE module_type='stats'").fetchall()
+            
+            # 聚合每天的总阅读时长
+            aggregate = {}
+            for row in rows:
+                stats = json.loads(row[0])
+                daily = stats.get('daily_stats', {})
+                for date_str, data in daily.items():
+                    aggregate[date_str] = aggregate.get(date_str, 0) + data.get('time', 0)
+            
+            # 转换为 Chart.js 格式（最近 30 天）
+            today = datetime.now()
+            labels = []
+            values = []
+            for i in range(29, -1, -1):
+                d = (today - timedelta(days=i)).strftime('%Y-%m-%d')
+                labels.append(d[5:]) # 只取 MM-DD
+                values.append(round(aggregate.get(d, 0) / 60, 1)) # 转为小时
+            
+            return jsonify({"status": "success", "labels": labels, "values": values})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- 2. 获取单个用户详细数据 ---
+@admin_bp.route('/api/admin/user_detail/<username>')
+@admin_required
+def api_admin_user_detail(username):
+    try:
+        with get_db() as conn:
+            # A. 获取统计信息
+            stats_row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type='stats'", (username,)).fetchone()
+            stats = json.loads(stats_row[0]) if stats_row else {"daily_stats": {}}
+            
+            # B. 获取历史记录 (取前 5)
+            hist_row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type='history'", (username,)).fetchone()
+            history = json.loads(hist_row[0]).get('records', [])[:5] if hist_row else []
+            
+            # C. 获取藏书总数
+            book_count = conn.execute("SELECT COUNT(*) FROM user_books WHERE username=? AND book_key NOT LIKE '@%'", (username,)).fetchone()[0]
+            
+            # 计算总时长和总字数
+            total_time = sum(d.get('time', 0) for d in stats.get('daily_stats', {}).values())
+            total_words = sum(d.get('words', 0) for d in stats.get('daily_stats', {}).values())
+
+            return jsonify({
+                "status": "success",
+                "data": {
+                    "username": username,
+                    "total_books": book_count,
+                    "total_time_min": total_time,
+                    "total_words": total_words,
+                    "history": history
+                }
+            })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 @admin_bp.route('/api/admin/dashboard')
 @admin_required
 def api_admin_dashboard():

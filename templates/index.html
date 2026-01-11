@@ -35,30 +35,72 @@
     <style>
         /* === 布局修正 (颜色交给 pure2.1.css 管理) === */
         /* --- 按钮行移动端优化 --- */
+/* === 📱 手机端列表卡片化重构 (修复重叠) === */
 @media (max-width: 600px) {
-    .btn-row {
-        display: grid !important; /* 强制切换为网格布局 */
-        grid-template-columns: repeat(3, 1fr); /* 核心：每行平分显示 3 个按钮 */
-        gap: 8px !important;
-        margin-top: 15px !important;
+    /* 1. 彻底移除表格默认样式 */
+    table, tbody, tr, td {
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box;
     }
 
-    .btn-row .p-btn {
-        width: 100%;
-        margin: 0;
-        padding: 12px 5px !important; /* 增加高度，方便手指点击 */
-        font-size: 13px !important;
-        flex: none !important; /* 禁用之前的 flex 属性 */
-        display: flex;
-        flex-direction: column; /* 图标和文字上下排列（可选，不换行则注释掉） */
-        gap: 4px;
+    /* 2. 让每一行(tr)变成一个独立的卡片 */
+    table tr {
+        background: #ffffff;
+        margin-bottom: 20px !important; /* 关键：增加行与行之间的物理间距 */
+        padding: 15px !important;
+        border-radius: 12px;
+        border: 1px solid #f0f0f0;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); /* 增加一点阴影，让卡片有层次感 */
+        position: relative;
     }
 
-    /* 让“删除”按钮单独占满最后一行，防止误触且视觉更平衡 */
-    .p-btn-danger {
-        grid-column: span 3; 
-        margin-top: 5px;
+    /* 3. 第一列：书名和标签区域 */
+    table td:nth-child(1) {
+        padding: 0 0 12px 0 !important; /* 给标题下方留白，不让它贴着按钮 */
+        border-bottom: 1px dashed #eee !important; /* 加一条虚线分割书名和按钮 */
+        text-align: left !important;
     }
+
+    .key-final {
+        font-size: 17px !important; /* 手机端书名稍微大一点 */
+        color: #111827;
+        margin-bottom: 6px;
+        white-space: normal; /* 允许书名换行，防止超长导致重叠 */
+        line-height: 1.4;
+    }
+
+    /* 4. 第二列：按钮操作区 */
+    table td:nth-child(2) {
+        padding: 15px 0 0 0 !important; /* 顶部留白 */
+        margin-top: 0 !important; 
+    }
+
+    /* 5. 按钮九宫格/四宫格布局优化 */
+    .action-group {
+        display: grid !important;
+        grid-template-columns: repeat(4, 1fr); /* 保持 4 列 */
+        gap: 10px !important; /* 按钮之间的间距 */
+        width: 100% !important;
+    }
+
+    /* 手机端按钮细节：取消圆角，改用大面积触摸区 */
+    .action-group .p-btn {
+        height: 42px !important; /* 手机端按钮高度增加到 42px，方便手指点按 */
+        border-radius: 8px !important;
+        background-color: #f9fafb !important;
+        font-size: 18px !important; /* 图标大一点 */
+    }
+
+    /* 阅读按钮特殊强调 */
+    .action-group .p-btn-primary {
+        grid-column: span 2; /* 让“阅读”占两格，更醒目 */
+        background-color: #4f46e5 !important;
+        color: white !important;
+    }
+
+    /* 隐藏分割线 */
+    .v-line { display: none !important; }
 }
         /* 顶部用户栏 */
         #userBar {
