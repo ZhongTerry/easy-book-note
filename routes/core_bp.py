@@ -18,24 +18,17 @@ AUTH_SERVER = os.environ.get('SERVER', 'https://auth.ztrztr.top')
 REDIRECT_URI = os.environ.get('CALLBACK', 'https://book.ztrztr.top/callback')
 def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
     """
-    计算章节的真实顺序 ID (Priority: Cached TOC Index > Title Parsing > URL Regex)
+    只通过标题识别真实序号。
+    如果识别不到，返回 -1，不再尝试从 URL 瞎猜。
     """
-    # 1. 尝试从缓存的目录(TOC)中查找该 URL 的位置 (最准确，支持乱序网站)
-    # 我们先尝试找一下缓存里有没有这本书的目录
-    # 注意：这里需要一种机制找到对应的 TOC 缓存 key。
-    # 通常用户在阅读时，TOC 已经被缓存了。我们尝试通过 book_key 对应的 value (上一章) 或者当前 url 推导 TOC。
-    # 简化策略：我们尝试遍历 cache，或者直接信任标题解析。
-    
-    # 策略 A: 标题解析 (最快，最通用，不依赖 TOC 缓存)
-    # 使用我们之前修好的强大解析函数 (支持 "第十一章", "47. ")
+    # 策略 A: 标题解析 (使用我们刚刚修好的增强版函数)
     title_id = parse_chapter_id(chapter_title)
     if title_id > 0:
         return title_id
-    # 策略 B: 如果标题解析失败 (比如 "尾声"), 尝试从 URL 瞎猜 (极其不准，仅兜底)
-    match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', chapter_url.split('?')[0])
-    match = -1
-    if match:
-        return int(match.group(1))
+    
+    # 策略 B: 严格模式下，我们不再从 URL 正则提取 ID，
+    # 因为 URL ID 往往是网站数据库的 ID (如 5882.html)，而不是第几章。
+    # 如果你确定某些网站 URL 就是章节号，可以保留，但目前为了防误报，建议关闭。
     
     return -1
 @core_bp.route('/login')
@@ -98,12 +91,13 @@ def index():
     
     # === [新代码] 读取文件并当做模板渲染 ===
     try:
-        index_path = os.path.join(BASE_DIR, 'index.html')
-        with open(index_path, 'r', encoding='utf-8') as f:
-            html_content = f.read()
+        # index_path = os.path.join(BASE_DIR, 'index.html')
+        # with open(index_path, 'r', encoding='utf-8') as f:
+        #     html_content = f.read()
         
         # 这里的 render_template_string 会自动接收 context_processor 注入的 app_version
-        return render_template_string(html_content)
+        return render_template("index.html", 
+        api_url="")
     except Exception as e:
         return f"Error loading index: {str(e)}", 500
 
@@ -215,36 +209,39 @@ import time
 def update():
     key = request.json.get('key')
     value = request.json.get('value')
-    # 前端必须传 title，否则后端没法算 ID
     title = request.json.get('title', '') 
     is_manual = request.json.get('manual', False)
 
-    # 1. 保存 URL (常规操作)
+    # 1. 保存 URL (这是基础 KV 记录)
     final_value = value
     if is_manual and hasattr(crawler, 'resolve_start_url'):
         final_value = crawler.resolve_start_url(value)
     
     res = managers.db.update(key, final_value)
 
-    # 2. [核心] 计算并保存“真实进度 ID”
-    # 无论是否手动，只要更新了进度，就必须更新这个 meta
+    # 2. 【核心修改点】计算并保存序号
     real_id = calculate_real_chapter_id(key, final_value, title)
     
+    # 只有当 real_id 是有效正整数时才更新 meta
+    # 如果返回 -1 (未识别)，这里直接跳过，数据库里旧的 meta 会保留
     if real_id > 0:
         try:
             import json
-            # 读取旧 meta (为了保留其他字段)
+            # 获取旧 meta
             old_meta_str = managers.db.get_val(f"{key}:meta")
             meta = json.loads(old_meta_str) if old_meta_str else {}
             
-            # 更新 ID 和时间
+            # 更新序号和时间戳
             meta['chapter_id'] = real_id
             meta['updated_at'] = int(time.time())
             
             managers.db.update(f"{key}:meta", json.dumps(meta))
-            # print(f"[Sync] 更新真实进度: {title} -> ID {real_id}")
+            # print(f"[Sync] 识别成功：{title} -> ID {real_id}")
         except Exception as e:
             print(f"[Sync] Meta save error: {e}")
+    else:
+        # 如果没识别到，打印一个日志方便调试，但不写库
+        print(f"[Sync] ⚠️ 章节识别失败，跳过 Meta 记录: {title}")
 
     # 3. 历史版本 (仅手动)
     if is_manual and res.get('status') == 'success':

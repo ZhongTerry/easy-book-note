@@ -3,7 +3,10 @@ const ASSETS = [
   '/',
   '/purecss/pure2.1.css',
   '/purecss/pure2.1.js',
-  'https://cdn.jsdelivr.net/npm/chart.js'
+  'https://cdn.jsdelivr.net/npm/chart.js',
+  '/static/icons/favicon.ico',
+  '/static/icons/icon-192.png',
+  '/static/icons/icon-512.png',
 ];
 
 // 安装时缓存核心资源

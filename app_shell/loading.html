@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Smart NoteDB</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f2f2f2; /* 默认浅灰 */
+            font-family: sans-serif;
+            flex-direction: column;
+            user-select: none;
+        }
+
+        .loader-container {
+            text-align: center;
+        }
+
+        /* 紫色呼吸圆圈 */
+        .spinner {
+            width: 50px;
+            height: 50px;
+            background-color: #4f46e5;
+            border-radius: 100%;
+            margin: 0 auto 20px auto;
+            animation: scaleout 1.0s infinite ease-in-out;
+        }
+
+        .text {
+            color: #666;
+            font-size: 14px;
+            font-weight: 500;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes scaleout {
+            0% { transform: scale(0); }
+            100% {
+                transform: scale(1.0);
+                opacity: 0;
+            }
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+
+        /* 黑暗模式适配（如果系统是暗色） */
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #141414; }
+            .text { color: #888; }
+        }
+    </style>
+</head>
+<body>
+    <div class="loader-container">
+        <div class="spinner"></div>
+        <div class="text">正在启动阅读引擎...</div>
+    </div>
+</body>
+</html>

@@ -8,12 +8,20 @@
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="manifest" href="/manifest.json">
+    <!-- 标准 Favicon -->
+<link rel="icon" href="/static/icons/favicon.ico" type="image/x-icon">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/icon-32.png">
+
+<!-- iOS Apple Touch Icon -->
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+
+<!-- 确保引入了 manifest -->
+<link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#4f46e5">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="NoteDB">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+
 
 <!-- 注册 Service Worker -->
 <script>
@@ -941,7 +949,11 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 </div>
     <script>
         const APP_VERSION = "{{ app_version }}"; 
-        const API_URL = window.location.origin;
+        var tmp = "{{ api_url }}"
+        var API_URL = window.location.origin;
+        // var API_URL = "{{ api_url }}"
+        // if (tmp.length() > 0) API_URL = tmp;
+        // alert(tmp);
         let currentView = 'list';
         let currentData = {};
         let globalTags = {}; 
@@ -950,7 +962,25 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         let chartInstance = null;
         let allBooklists = {};
         let pendingBook = { key: '', title: '' };
+        document.addEventListener('keydown', (e) => {
+    // 1. Ctrl + F 快速搜书 (覆盖浏览器默认搜索)
+    if (e.ctrlKey && e.key === 'f') {
+        e.preventDefault();
+        openSearchModal();
+    }
+    
+    // 2. Ctrl + S 快速保存当前输入
+    if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        doAction('insert');
+    }
 
+    // 3. / 键快速聚焦到 Key 输入框 (类似 GitHub)
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT') {
+        e.preventDefault();
+        document.getElementById('key').focus();
+    }
+});
 // 打开“加入书单”选择框
 async function openAddToListModal(key, title) {
     pendingBook = { key, title };

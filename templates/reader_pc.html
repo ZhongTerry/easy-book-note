@@ -778,6 +778,24 @@ body.dark-mode .share-text-area textarea:focus {
         // 3. 兜底：如果没 ID，只能瞎猜 (URL 不同就提示)
         return true; 
     }
+    document.addEventListener('keydown', (e) => {
+    // 1. M 键快速打开/关闭目录 (Menu)
+    if (e.key.toLowerCase() === 'm' && document.activeElement.tagName !== 'INPUT') {
+        const toc = document.getElementById('tocOverlay');
+        toc.style.display === 'none' ? showModal('tocOverlay') : toc.style.display = 'none';
+    }
+
+    // 2. T 键开启/停止 TTS 朗读 (Talk)
+    if (e.key.toLowerCase() === 't' && document.activeElement.tagName !== 'INPUT') {
+        toggleTTS();
+    }
+
+    // 3. 数字键 1, 2, 3, 4 切换背景主题
+    if (!e.ctrlKey && ['1','2','3','4'].includes(e.key)) {
+       const themes = ['light', 'sepia', 'green', 'dark'];
+       // 这里可以调用你之前的 setTheme 或 toggleDarkMode 逻辑
+    }
+});
     // === [工具] URL 强力归一化 (解决同步误报核心) ===
     function normalizeUrl(url) {
         if (!url) return "";

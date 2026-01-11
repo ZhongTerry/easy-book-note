@@ -1,0 +1,47 @@
+{
+  "name": "smart-notedb",
+  "version": "1.1.2",
+  "main": "main.js",
+  "author": "ztrztr",
+  "description": "Smart NoteDB Reading Client",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "build": {
+    "appId": "com.ztrztr.notedb",
+    "productName": "SmartNoteDB",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "../static/icons/app-icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "installerIcon": "../static/icons/app-icon.ico",
+      "uninstallerIcon": "../static/icons/app-icon.ico",
+      "uninstallDisplayName": "卸载 Smart NoteDB"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../static",
+        "to": "static"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}

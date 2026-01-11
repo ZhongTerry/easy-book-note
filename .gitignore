@@ -1,13 +1,57 @@
-/cache
-/backups
+# === 1. 敏感信息与本地配置 ===
 .env
+auth_key.json
+user_token.json
+*.log
 
-# 忽略所有用户数据（数据库、统计 JSON、书单 JSON）
+# === 2. 用户数据与数据库 (核心保护) ===
 user_data/
+backups/
+# 忽略 SQLite 的临时日志文件 (写前日志/共享内存)
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 
-# 此外，建议也忽略以下文件夹，保持仓库干净
-cache/
-library/*.epub
-downloads/*.txt
+# === 3. 缓存与运行临时文件 ===
+/cache/
 __pycache__/
-.env
+*.py[cod]
+*$py.class
+.pytest_cache/
+.buffer
+/library/*.epub
+/downloads/*.txt
+
+# === 4. Python 虚拟环境 ===
+venv/
+.venv/
+env/
+ENV/
+
+# === 5. Electron / Node.js 相关 (app_shell 目录) ===
+app_shell/node_modules/
+app_shell/dist/
+app_shell/build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# === 6. 打包产物 (PyInstaller & Electron Builder) ===
+# 忽略打包生成的中间文件夹
+dist/
+build/
+# 忽略 PyInstaller 生成的描述文件
+*.spec
+
+# === 7. 系统与 IDE 临时文件 ===
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === 8. 图标脚本生成的临时备份 (可选) ===
+# 如果你不希望把原始的大图或转换过程中的 png 传上去，可以取消注释
+# static/icons/*.png
+# !static/icons/icon-512x512.png  # 排除：保留一张最大的原图
