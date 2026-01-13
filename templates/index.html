@@ -36,72 +36,6 @@
         /* === 布局修正 (颜色交给 pure2.1.css 管理) === */
         /* --- 按钮行移动端优化 --- */
 /* === 📱 手机端列表卡片化重构 (修复重叠) === */
-@media (max-width: 600px) {
-    /* 1. 彻底移除表格默认样式 */
-    table, tbody, tr, td {
-        display: block !important;
-        width: 100% !important;
-        box-sizing: border-box;
-    }
-
-    /* 2. 让每一行(tr)变成一个独立的卡片 */
-    table tr {
-        background: #ffffff;
-        margin-bottom: 20px !important; /* 关键：增加行与行之间的物理间距 */
-        padding: 15px !important;
-        border-radius: 12px;
-        border: 1px solid #f0f0f0;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); /* 增加一点阴影，让卡片有层次感 */
-        position: relative;
-    }
-
-    /* 3. 第一列：书名和标签区域 */
-    table td:nth-child(1) {
-        padding: 0 0 12px 0 !important; /* 给标题下方留白，不让它贴着按钮 */
-        border-bottom: 1px dashed #eee !important; /* 加一条虚线分割书名和按钮 */
-        text-align: left !important;
-    }
-
-    .key-final {
-        font-size: 17px !important; /* 手机端书名稍微大一点 */
-        color: #111827;
-        margin-bottom: 6px;
-        white-space: normal; /* 允许书名换行，防止超长导致重叠 */
-        line-height: 1.4;
-    }
-
-    /* 4. 第二列：按钮操作区 */
-    table td:nth-child(2) {
-        padding: 15px 0 0 0 !important; /* 顶部留白 */
-        margin-top: 0 !important; 
-    }
-
-    /* 5. 按钮九宫格/四宫格布局优化 */
-    .action-group {
-        display: grid !important;
-        grid-template-columns: repeat(4, 1fr); /* 保持 4 列 */
-        gap: 10px !important; /* 按钮之间的间距 */
-        width: 100% !important;
-    }
-
-    /* 手机端按钮细节：取消圆角，改用大面积触摸区 */
-    .action-group .p-btn {
-        height: 42px !important; /* 手机端按钮高度增加到 42px，方便手指点按 */
-        border-radius: 8px !important;
-        background-color: #f9fafb !important;
-        font-size: 18px !important; /* 图标大一点 */
-    }
-
-    /* 阅读按钮特殊强调 */
-    .action-group .p-btn-primary {
-        grid-column: span 2; /* 让“阅读”占两格，更醒目 */
-        background-color: #4f46e5 !important;
-        color: white !important;
-    }
-
-    /* 隐藏分割线 */
-    .v-line { display: none !important; }
-}
         /* 顶部用户栏 */
         #userBar {
             background: rgba(255,255,255,0.9); /* 保持半透明白 */
@@ -205,33 +139,6 @@
 }
 
 /* 3. 核心：移动端自动隐藏按钮文字 */
-@media (max-width: 600px) {
-    /* 隐藏按钮里的文字，只留图标 */
-    .action-group .btn-text {
-        display: none;
-    }
-    
-    /* 缩小按钮内边距，让一排图标能放下 */
-    .action-group .p-btn {
-        padding: 6px 8px !important;
-        min-width: auto;
-    }
-    
-    /* 针对阅读按钮的特殊微调 */
-    .action-group .p-btn-primary {
-        font-size: 16px; /* 让图标大一点好点按 */
-        border-radius: 8px;
-    }
-
-    /* 缩小表格文字，给操作栏腾空间 */
-    .key-final {
-        font-size: 14px !important;
-        max-width: 120px; /* 限制标题宽度，防止挤压 */
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-}
 
 /* 强制对齐：确保链接 A 标签和 Button 标签高度一致 */
 .action-group a.p-btn, 
@@ -278,106 +185,57 @@
 
 /* === 2. 手机端强制优化 (宽度 <= 600px) === */
 /* === 📱 手机端强制重构 (修复重叠与乱序) === */
-@media (max-width: 600px) {
-    /* 1. 强制表格行变为块级卡片 */
-    table, tbody, tr, td {
-        display: block !important;
-        width: 100% !important;
-        box-sizing: border-box;
-    }
+/* === 统一按钮样式 === */
+.action-group {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    align-items: center;
+}
 
-    /* 2. 给每一本书的容器（行）加底边距 */
-    table tr {
-        margin-bottom: 15px;
-        border-bottom: 1px solid #eee;
-        padding-bottom: 10px;
-        position: relative; /* 确保内部元素定位准确 */
-    }
+/* 阅读按钮基础样式 */
+.read-btn {
+    display: flex; 
+    align-items: center; 
+    gap: 4px;
+    transition: all 0.2s;
+}
 
-    /* 3. 第一行：书名标题 */
-    table td:nth-child(1) {
-        padding: 0 5px 5px 5px !important;
-        border: none !important;
-        text-align: left !important;
-    }
+/* 小图标按钮 (更新、书单、更多) */
+.icon-btn {
+    padding: 0 !important;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+}
 
-    /* 标题文字样式优化 */
-    .key-final {
-        font-size: 16px !important;
-        font-weight: 700 !important;
-        color: #1f2937;
-        margin-bottom: 4px;
-        display: block;
-        width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-    
-    /* 标签稍微缩小一点，放在标题下面 */
-    table td:nth-child(1) .p-tag {
-        font-size: 10px !important;
-        transform: scale(0.9);
-        transform-origin: left center;
-        margin-top: 2px;
-    }
+/* 更多菜单项样式 */
+.action-item {
+    padding: 15px 20px;
+    border-bottom: 1px solid #f5f5f5;
+    cursor: pointer;
+    font-size: 15px;
+    color: #333;
+    transition: background 0.1s;
+}
+.action-item:hover { background: #f9fafb; }
+.action-item:active { background: #f0f0f0; }
+.action-item.danger { color: #ef4444; font-weight: bold; border-bottom: none; }
 
-    /* 4. 第二行：按钮操作区 */
-    table td:nth-child(2) {
-        padding: 0 !important;
-        border: none !important;
-        margin-top: 5px; /* 关键：给标题留出距离，防止重叠 */
-    }
-
-    /* 核心：九宫格布局 */
-    .action-group {
-        display: grid !important;
-        /* 强制 4 列，自动撑满宽度 */
-        grid-template-columns: repeat(4, 1fr); 
-        gap: 8px !important; /* 按钮之间的间隙 */
-        width: 100% !important;
-        justify-content: stretch;
-    }
-
-    /* 隐藏分割线（网格不需要线） */
-    .action-group .v-line {
-        display: none !important;
-    }
-
-    /* 按钮统一成大方块 */
-    .action-group .p-btn {
-        width: 100% !important;
-        height: 38px !important; /* 统一高度，方便手指点击 */
-        margin: 0 !important;
-        padding: 0 !important;
-        display: flex !important;
-        align-items: center;
-        justify-content: center;
-        border-radius: 8px !important;
-        font-size: 16px !important; /* 图标放大 */
-        background-color: #f3f4f6; /* 浅灰背景，像键盘按键 */
-        border: 1px solid #e5e7eb;
-    }
-
-    /* 5. 特殊按钮微调 */
-    /* 红色更新数字 */
-    .action-group .p-btn span {
-        font-size: 12px !important;
-        font-weight: bold;
-    }
-    
-    /* 阅读按钮高亮 */
-    .action-group .p-btn-primary {
-        background-color: var(--p-primary) !important;
-        color: white !important;
-        grid-column: span 2; /* 可选：让阅读按钮占 2 格，更显眼 */
-    }
-
-    /* 隐藏文字，只留图标 (除了更新数字) */
-    .action-group .btn-text {
-        display: none !important;
+/* === 💻 PC端特有样式 (宽度 > 600px) === */
+@media (min-width: 601px) {
+    /* 更多菜单：居中弹窗 */
+    .more-menu-content {
+        width: 300px;
+        border-radius: 12px;
     }
 }
+
+/* === 📱 手机端适配 (宽度 <= 600px) === */
+
 /* --- 更新日志相关样式 --- */
 .changelog-link-wrap {
     text-align: center;
@@ -728,6 +586,116 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 @media (prefers-color-scheme: dark), body.dark-mode {
     .heat-lv-0 { background-color: #2d333b; } /* 暗色底 */
 }
+/* === 统一按钮样式 === */
+.action-group {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+/* 阅读按钮基础样式 */
+.read-btn {
+    display: flex; 
+    align-items: center; 
+    gap: 4px;
+    transition: all 0.2s;
+}
+
+/* 小图标按钮 (更新、书单、更多) */
+.icon-btn {
+    padding: 0 !important;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+}
+
+/* 更多菜单项样式 */
+.action-item {
+    padding: 15px 20px;
+    border-bottom: 1px solid #f5f5f5;
+    cursor: pointer;
+    font-size: 15px;
+    color: #333;
+    transition: background 0.1s;
+}
+.action-item:hover { background: #f9fafb; }
+.action-item:active { background: #f0f0f0; }
+.action-item.danger { color: #ef4444; font-weight: bold; border-bottom: none; }
+
+/* === 💻 PC端特有样式 (宽度 > 600px) === */
+@media (min-width: 601px) {
+    /* 更多菜单：居中弹窗 */
+    .more-menu-content {
+        width: 300px;
+        border-radius: 12px;
+    }
+}
+
+/* === 📱 手机端适配 (宽度 <= 600px) === */
+/* === 📱 手机端 UI 优化 (Flex 布局修复) === */
+@media (max-width: 600px) {
+    /* 1. 按钮容器：改为弹性布局 */
+    .action-group {
+        display: flex !important;
+        gap: 8px !important; /* 按钮之间的间距 */
+        width: 100% !important;
+        justify-content: flex-end; /* 靠右对齐 (如果没有阅读按钮时) */
+    }
+
+    /* 2. 通用图标按钮 (方形) */
+    .action-group .p-btn {
+        width: 42px !important;      /* 固定宽度 */
+        height: 42px !important;     /* 固定高度 */
+        padding: 0 !important;       /* 移除内边距，确保居中 */
+        flex: none !important;       /* 禁止拉伸 */
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px !important;
+        background-color: #f3f4f6;   /* 浅灰背景 */
+        border: 1px solid #e5e7eb;
+        color: #374151;
+    }
+
+    /* 3. 阅读按钮 (C位，自动拉伸) */
+    .action-group .p-btn-primary {
+        flex: 1 !important;          /* 占据剩余空间 */
+        width: auto !important;
+        background-color: #4f46e5 !important;
+        color: white !important;
+        border: none !important;
+        
+        /* === 核心布局修复 === */
+        display: flex !important;
+        align-items: center !important;     /* 垂直居中 */
+        justify-content: center !important; /* 水平居中 */
+        gap: 6px !important;                /* 图标和文字的间距 */
+        height: 42px !important;            /* 固定高度，和其他按钮一致 */
+        padding: 0 8px !important;          /* 防止文字贴边 */
+        overflow: hidden !important;        /* 防止溢出 */
+    }
+    
+    /* 修复文字样式 */
+    .action-group .p-btn-primary .btn-text {
+        font-size: 15px !important;    /* 稍微调小一点，太大会撑开 */
+        font-weight: bold !important;
+        line-height: 1 !important;     /* 消除行高带来的垂直偏移 */
+        white-space: nowrap !important; /* 禁止换行 */
+        display: inline-block !important;
+        margin-top: 1px;               /* 视觉微调，让文字视觉居中 */
+    }
+
+    /* 修复图标样式 */
+    .action-group .p-btn-primary span:first-child {
+        font-size: 18px !important;
+        line-height: 1 !important;
+        display: flex !important;      /* 消除 baseline 对齐问题 */
+    }
+}
     </style>
         <script>
             // === [核心修复] 智能关闭 Modal ===
@@ -1023,6 +991,19 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
     </div>
 </div>
+<!-- 更多操作菜单 (响应式 Modal) -->
+<div id="moreMenuModal" class="p-modal more-menu-overlay">
+    <div class="p-modal-content more-menu-content">
+        <div style="padding: 15px; border-bottom: 1px solid #eee; font-weight: bold; text-align: center; color: #333; display:flex; justify-content:space-between; align-items:center;">
+            <span id="moreMenuTitle">书籍操作</span>
+            <span style="cursor:pointer; font-size:20px; color:#999;" onclick="PureUI.modal.close('moreMenuModal')">×</span>
+        </div>
+        
+        <div class="menu-list" id="moreMenuItems">
+            <!-- JS 生成列表 -->
+        </div>
+    </div>
+</div>
     <script>
         const APP_VERSION = "{{ app_version }}"; 
         var tmp = "{{ api_url }}"
@@ -1038,6 +1019,41 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         let chartInstance = null;
         let allBooklists = {};
         let pendingBook = { key: '', title: '' };
+        function openMoreMenu(key, value, title, isEpub, isLink) {
+    document.getElementById('moreMenuTitle').innerText = title;
+    const container = document.getElementById('moreMenuItems');
+    
+    let html = '';
+    const closeCmd = "PureUI.modal.close('moreMenuModal');";
+
+    // 生成菜单项 (图标 + 文字)
+    const items = [
+        { icon: '🏷️', text: '编辑标签', click: `${closeCmd} openTagModal('${key}')` },
+        { icon: '✏️', text: '重命名', click: `${closeCmd} renameKey('${key}')` },
+        { icon: '🕒', text: '历史回退', click: `${closeCmd} openVersionModal('${key}')` },
+        { icon: '📥', text: '离线下载', click: `${closeCmd} downloadBook('${key}', '${value}', '${title}')` }
+    ];
+
+    if (isLink) {
+        items.push({ icon: '🔗', text: '复制源链接', click: `${closeCmd} PureUI.copy('${value}')` });
+    }
+
+    // 渲染普通项
+    html += items.map(i => `
+        <div class="action-item" onclick="${i.click}">
+            <span style="width:24px; display:inline-block;">${i.icon}</span> ${i.text}
+        </div>
+    `).join('');
+
+    // 渲染删除项 (红色)
+    html += `
+        <div class="action-item danger" onclick="document.getElementById('key').value='${key}'; ${closeCmd} confirmDelete()">
+            <span style="width:24px; display:inline-block;">🗑️</span> 删除书籍
+        </div>`;
+
+    container.innerHTML = html;
+    PureUI.modal.open('moreMenuModal');
+}
         document.addEventListener('keydown', (e) => {
     // 1. Ctrl + F 快速搜书 (覆盖浏览器默认搜索)
     if (e.ctrlKey && e.key === 'f') {
@@ -1566,31 +1582,39 @@ function renderTable(data) {
         // 在 renderTable 函数内部修改 actionGroup 的生成逻辑：
         
 
+// index.html -> renderTable 函数内
+
+// ... (前文代码不变) ...
+
+// === [核心修复] 统一按钮组生成逻辑 ===
 let actionGroup = `
     <div class="action-group">
-        <!-- 链接按钮：手机下隐藏“链接”二字 -->
-        ${isEpub ? 
-            `<span class="p-btn p-btn-sm" style="border:none; background:transparent; color:var(--p-success); padding:0;">📦<span class="btn-text">本地</span></span>` : 
-            (isLink ? `<a href="${v}" target="_blank" class="p-btn p-btn-sm" style="border:none; background:transparent; color:#9ca3af; text-decoration:none; padding:0;">🔗<span class="btn-text">链接</span></a>` : '')
-        }
-        
-        <span class="v-line"></span>
-<button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="openVersionModal('${k}')" title="历史版本回退">🕒</button>
-        <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="downloadBook('${k}', '${v}', '${displayName}')" title="离线全本(Pro)">📥</button>
-        <button class="p-btn p-btn-sm update-btn" id="upd-${k}" style="padding:4px 8px;" onclick="checkUpdate('${k}', '${v}')" title="检查更新">🔄</button>
-        <!--<button class="p-btn p-btn-sm" onclick="PureUI.copy('${v}')" title="复制">📋</button> -->
-        <button class="p-btn p-btn-sm" onclick="openAddToListModal('${k}', '${displayName}')" title="书单">🔖</button>
-        <button class="p-btn p-btn-sm" onclick="openTagModal('${k}')" title="标签">🏷️</button>
-        <button class="p-btn p-btn-sm" style="padding:4px 8px;" onclick="renameKey('${k}')" title="重命名 Key">✏️</button>
-        
+        <!-- 1. 阅读按钮 (如果有链接，它会自动占据左侧最大空间) -->
         ${isLink || isEpub ? 
-            `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary" style="text-decoration:none;" target="_blank">
-                📖<span class="btn-text">阅读</span>
-            </a>` 
-            : ''
+            `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary read-btn">
+                <span style="font-size:18px;">📖</span>
+                <span class="btn-text">阅读</span>
+            </a>` : ''
         }
+        
+        <!-- 2. 更新按钮 -->
+        <button class="p-btn p-btn-sm icon-btn" id="upd-${k}" onclick="checkUpdate('${k}', '${v}')" title="检查更新">
+            <span>🔄</span>
+        </button>
+        
+        <!-- 3. 书单按钮 -->
+        <button class="p-btn p-btn-sm icon-btn" onclick="openAddToListModal('${k}', '${displayName}')" title="加入书单">
+            <span>🔖</span>
+        </button>
+        
+        <!-- 4. 更多菜单 (三点图标) -->
+        <button class="p-btn p-btn-sm icon-btn" onclick="openMoreMenu('${k}', '${v}', '${displayName}', ${isEpub}, ${isLink})" title="更多操作">
+            <span style="font-weight:bold; margin-top:-4px;">...</span>
+        </button>
     </div>
 `;
+
+// ... (后文代码不变) ...
 
         // 4. 组装行 (现在右侧 td 只有一行 action-group)
         html += `<tr>
