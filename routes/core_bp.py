@@ -109,24 +109,22 @@ def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
     force = request.args.get('force')
     
-    # 1. 安全检查 (放行 epub 协议)
+    # 1. 安全检查
     if not u.startswith('epub:') and not is_safe_url(u): 
         return "Illegal URL", 403
     
     data = None
     
-    # 2. 获取数据 (EPUB 或 网页)
+    # 2. 获取数据 (放在 try 块中只负责获取)
     try:
         if u.startswith('epub:'):
-            # EPUB 处理逻辑
+            # EPUB 逻辑
             parts = u.split(':')
             filename = parts[1]
             
-            # 如果是目录请求，跳转到 TOC
             if len(parts) >= 3 and parts[2] == 'toc':
                 return redirect(url_for('core.toc_page', url=u, key=k))
             
-            # 解析标识符和页码
             if len(parts) >= 4:
                 identifier = parts[2]
                 page_index = int(parts[3])
@@ -136,49 +134,63 @@ def read_mode():
             
             data = epub_handler.get_chapter_content(filename, identifier, page_index)
         else:
-            # 网页爬虫逻辑
+            # 网页逻辑
             data = managers.offline_manager.get_chapter(k, u) if k and not force else None
             if not data and not force: data = managers.cache.get(u)
             if not data:
                 data = crawler.run(u)
                 if data: managers.cache.set(u, data)
+
     except Exception as e:
-        return f"解析错误: {e}", 500
+        # 捕获爬虫内部的错误
+        print(f"[Read Error] {e}")
+        return f"解析发生错误: {str(e)}", 500
 
+    # 3. [核心修复] 必须先判断 data 是否存在
     if not data:
-        return "无法获取内容，请检查链接或稍后重试", 404
+        return render_template_string("""
+            <div style="text-align:center; padding:50px;">
+                <h3>无法获取章节内容</h3>
+                <p>可能是源站连接超时，或该章节需要付费/登录。</p>
+                <a href="javascript:history.back()">返回</a>
+            </div>
+        """), 404
 
-    # 3. 记录历史 & 计算章节 ID
-    if k and data.get('title'):
-        managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
+    # 4. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
+    try:
+        # 记录历史
+        if k and data.get('title'):
+            managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
 
-    current_chapter_id = -1
-    if data.get('title'):
-        current_chapter_id = parse_chapter_id(data['title'])
-    
-    # 如果标题解析失败，尝试从 URL 提取 (仅针对网页)
-    if current_chapter_id <= 0 and not u.startswith('epub:'):
-        match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
-        if match: current_chapter_id = int(match.group(1))
+        # 计算 ID
+        current_chapter_id = -1
+        if data.get('title'):
+            current_chapter_id = parse_chapter_id(data['title'])
+        
+        # 网页版 URL 兜底 ID
+        if current_chapter_id <= 0 and not u.startswith('epub:'):
+            match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
+            if match: current_chapter_id = int(match.group(1))
 
-    # 4. === [核心修改] 设备分流逻辑 ===
-    ua = request.headers.get('User-Agent', '').lower()
-    is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
-    
-    # 统一的模板上下文变量
-    context = {
-        'article': data,
-        'current_url': u,
-        'db_key': k,
-        'chapter_id': current_chapter_id
-    }
+        # 5. 渲染页面
+        ua = request.headers.get('User-Agent', '').lower()
+        is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
+        
+        context = {
+            'article': data,
+            'current_url': u,
+            'db_key': k,
+            'chapter_id': current_chapter_id
+        }
 
-    if is_mobile:
-        # 手机端 -> 渲染 reader_m.html (一定要确保这个文件在 templates 里)
-        return render_template('reader_m.html', **context)
-    else:
-        # 电脑端 -> 渲染 reader_pc.html
-        return render_template('reader_pc.html', **context)
+        if is_mobile:
+            return render_template('reader_m.html', **context)
+        else:
+            return render_template('reader_pc.html', **context)
+            
+    except Exception as e:
+        print(f"[Render Error] {e}")
+        return f"渲染错误: {str(e)}", 500
 @core_bp.route('/api/history/list')
 @login_required
 def api_history_list():

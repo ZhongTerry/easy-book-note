@@ -1,205 +1,114 @@
+# adapters/fanqie_adapter.py
 import re
 import json
-import os
 import time
-import logging
-import traceback
-from urllib.parse import urljoin
-from shared import USER_DATA_DIR, BASE_DIR
-
-# ================= 配置日志 =================
-# 自动创建 debug 文件夹
-DEBUG_DIR = os.path.join(BASE_DIR, "debug")
-if not os.path.exists(DEBUG_DIR):
-    os.makedirs(DEBUG_DIR)
-
-LOG_FILE = os.path.join(DEBUG_DIR, "fanqie.log")
-
-# 配置专属 logger
-logger = logging.getLogger("FanqieDebug")
-logger.setLevel(logging.DEBUG)
-# 避免重复添加 handler
-if not logger.handlers:
-    fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - [%(levelname)s] - %(message)s')
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
-# ===========================================
+from bs4 import BeautifulSoup
 
 class FanqieAdapter:
     """
-    番茄小说 API 适配器 (带深度调试日志版)
+    番茄小说适配器 (API 模式)
     """
 
     def can_handle(self, url):
-        return "fanqienovel.com" in url
+        return "fanqienovel.com" in url or "fqnovel.com" in url
 
-    def _log(self, msg, level="info"):
-        """写日志辅助函数"""
-        if level == "info": logger.info(msg)
-        elif level == "error": logger.error(msg)
-        elif level == "debug": logger.debug(msg)
-        # 同时打印到控制台方便查看
-        print(f"[FanqieDebug] {msg}")
-
-    def _load_cookies(self):
-        cookie_path = os.path.join(USER_DATA_DIR, "fanqie_cookie.txt")
-        if os.path.exists(cookie_path):
-            try:
-                with open(cookie_path, 'r', encoding='utf-8') as f:
-                    c = f.read().strip()
-                    if c:
-                        self._log(f"成功加载 Cookie (长度: {len(c)})")
-                        return c
-                    else:
-                        self._log("Cookie 文件存在但为空", "error")
-            except Exception as e:
-                self._log(f"读取 Cookie 文件出错: {e}", "error")
-        else:
-            self._log("未找到 Cookie 文件 (user_data/fanqie_cookie.txt)", "error")
+    def _get_book_id(self, url):
+        # 从 URL 提取 Book ID
+        # 例如: https://fanqienovel.com/page/123456789
+        match = re.search(r'page/(\d+)', url)
+        if match: return match.group(1)
         return None
 
-    def _get_api_headers(self):
-        headers = {
-            "Referer": "https://fanqienovel.com/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Origin": "https://fanqienovel.com",
-            # 这些头模拟真实浏览器行为，防止被轻易识别
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "empty",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-        }
-        cookie = self._load_cookies()
-        if cookie:
-            headers["Cookie"] = cookie
-        else:
-            self._log("警告: 请求将不带 Cookie 发送，极大概率失败", "error")
-        return headers
+    def _get_item_id(self, url):
+        # 从 URL 提取 Item ID (章节ID)
+        # 例如: https://fanqienovel.com/reader/123456...
+        match = re.search(r'reader/(\d+)', url)
+        if match: return match.group(1)
+        return None
 
     def get_toc(self, crawler, toc_url):
-        self._log(f"=== 开始解析目录: {toc_url} ===")
-        # ... (目录解析逻辑相对简单，为了节省篇幅，这里略过，重点在 run 方法) ...
-        # 如果你也需要调试目录，请仿照 run 方法的写法加上日志
-        # 这里暂时返回 None 让通用爬虫接管，或者你可以保留之前的目录解析代码
-        self._log("目录解析暂未启用详细调试，建议直接测试章节阅读")
-        return None
-
-    def run(self, crawler, url):
-        self._log(f"\n{'='*20} 新的抓取任务 {'='*20}")
-        self._log(f"目标 URL: {url}")
-
-        # 1. 提取 Item ID
-        item_id = ""
-        match = re.search(r'reader/(\d+)', url)
-        if match:
-            item_id = match.group(1)
-        
-        if not item_id:
-            self._log("❌ URL 解析失败，无法提取 Item ID", "error")
+        book_id = self._get_book_id(toc_url)
+        if not book_id:
             return None
 
-        # 2. 构造 API
-        api_url = f"https://fanqienovel.com/api/reader/full?itemId={item_id}"
-        self._log(f"构造 API: {api_url}")
-
-        meta = {
-            'title': "",
-            'content': [],
-            'next': None,
-            'prev': None,
-            'toc_url': None
-        }
-
+        # 构造 API URL
+        api_url = f"https://fanqienovel.com/api/reader/directory/detail?bookId={book_id}"
+        
+        # 必须模拟真实浏览器头
+        # 这里的 User-Agent 最好用手机端的，或者保持你 curl_cffi 的默认配置
         try:
-            from curl_cffi import requests as cffi_requests
+            # 使用 crawler 的智能 fetch，它自带 curl_cffi
+            # 注意：这里我们期望返回 JSON，但 crawler._fetch_page_smart 返回的是 text
+            # 我们手动解析 text 为 json
+            response_text = crawler._fetch_page_smart(api_url)
+            if not response_text: return None
+
+            data = json.loads(response_text)
             
-            headers = self._get_api_headers()
-            self._log("正在发送请求...")
+            # 解析 JSON 结构
+            # 结构通常是: data -> allItemIds (或者 chapterList)
+            # 番茄接口经常变，这里假设是标准结构，如果失败需要打印 data 调试
+            if data.get('code') != 0:
+                print(f"[Fanqie] API Error: {data.get('message')}")
+                return None
+
+            chapter_list = data['data']['chapterList']
+            chapters = []
             
-            # 发送请求
-            resp = cffi_requests.get(
-                api_url, 
-                impersonate=crawler.impersonate, 
-                timeout=crawler.timeout, 
-                headers=headers,
-                proxies=crawler.proxies
-            )
+            for item in chapter_list:
+                chapters.append({
+                    'title': item['title'],
+                    # 构造这一章的阅读链接，方便下面 run 方法识别
+                    'url': f"https://fanqienovel.com/reader/{item['itemId']}" 
+                })
 
-            self._log(f"请求完成. HTTP状态码: {resp.status_code}")
-            
-            # === [关键调试信息] 保存响应内容 ===
-            # 将原始响应写入日志，这是分析问题的金钥匙
-            log_content = resp.text
-            if len(log_content) > 2000:
-                log_content = log_content[:2000] + "\n...[内容过长截断]..."
-            self._log(f"响应内容预览:\n{log_content}")
-            # ================================
+            # 书名通常在 data['data']['bookInfo']['originalName']
+            book_name = data.get('data', {}).get('bookInfo', {}).get('originalName', '番茄小说')
 
-            if resp.status_code != 200:
-                self._log(f"❌ API 请求失败，非 200 状态码", "error")
-                return self._return_error_msg("网络请求被拒绝 (HTTP != 200)")
-
-            try:
-                data = resp.json()
-            except:
-                self._log("❌ 响应不是合法的 JSON，可能是 HTML 报错页面或滑块", "error")
-                return self._return_error_msg("响应格式错误 (非 JSON)")
-
-            # 检查业务状态码
-            # 番茄通常 code=0 表示成功
-            code = data.get('code')
-            if code != 0:
-                msg = data.get('message') or data.get('msg') or "未知错误"
-                self._log(f"❌ API 业务报错: code={code}, msg={msg}", "error")
-                return self._return_error_msg(f"番茄拒绝访问: {msg} (Code: {code})")
-
-            # 3. 解析数据
-            chapter_data = data.get('data', {}).get('chapterData', {})
-            meta['title'] = chapter_data.get('title', '未知章节')
-            self._log(f"获取到标题: {meta['title']}")
-
-            content_html = chapter_data.get('content', '')
-            if content_html:
-                self._log(f"获取到正文 HTML (长度: {len(content_html)})")
-                # 清洗 HTML
-                content_text = re.sub(r'<br\s*/?>', '\n', content_html)
-                content_text = re.sub(r'<p>', '\n', content_text)
-                content_text = re.sub(r'<.*?>', '', content_text)
-                import html as html_parser
-                content_text = html_parser.unescape(content_text)
-                meta['content'] = crawler._clean_text_lines(content_text)
-                self._log(f"正文清洗完成，共 {len(meta['content'])} 行")
-            else:
-                self._log("⚠️ 警告: chapterData.content 为空!", "error")
-
-            # 导航
-            next_id = chapter_data.get('nextItemId')
-            if next_id and str(next_id) != "0":
-                meta['next'] = f"https://fanqienovel.com/reader/{next_id}"
+            return {'title': book_name, 'chapters': chapters}
 
         except Exception as e:
-            err_track = traceback.format_exc()
-            self._log(f"❌ 发生严重异常:\n{err_track}", "error")
-            return self._return_error_msg(f"插件内部错误: {str(e)}")
+            print(f"[Fanqie] TOC Error: {e}")
+            return None
 
-        # 最终检查
-        if not meta['content']:
-             return self._return_error_msg("内容解析为空 (可能是 VIP 限制)")
+    def run(self, crawler, url):
+        item_id = self._get_item_id(url)
+        if not item_id: return None
 
-        return meta
+        # 构造正文 API
+        api_url = f"https://fanqienovel.com/api/reader/full?itemId={item_id}"
 
-    def _return_error_msg(self, reason):
-        return {
-            'title': "错误报告",
-            'content': [
-                "【番茄插件调试报告】",
-                f"错误原因: {reason}",
-                "----------------",
-                "请查看服务器 debug/fanqie.log 获取详细 JSON 响应。",
-                "如果是 'Auth Failed' 或 'Need Login'，请更新 Cookie。",
-                "如果是 'Risk Control'，说明 IP 被风控。"
-            ],
-            'next': None, 'prev': None, 'toc_url': None
-        }
+        try:
+            response_text = crawler._fetch_page_smart(api_url)
+            if not response_text: return None
+            
+            data = json.loads(response_text)
+            print("data", response_text)
+            if data.get('code') != 0:
+                return None
+            
+            curr_data = data['data']['chapterData']
+            title = curr_data['title']
+            content_html = curr_data['content'] # 这里是 HTML 格式的内容
+            
+            # 清洗内容：番茄返回的是 <p>...</p> 的字符串，需要转为纯文本 list
+            soup = BeautifulSoup(content_html, 'html.parser')
+            lines = [p.get_text(strip=True) for p in soup.find_all('p') if p.get_text(strip=True)]
+            
+            # 获取上一章/下一章 ID 用于链式抓取
+            # 番茄 API 通常在 preChapterId 和 nextChapterId 字段
+            # 如果没有直接返回 URL，我们需要自己拼接
+            # 注意：这里简化处理，如果没有 nextChapterId 可能需要去目录查
+            # 但通常 API 爬取单章就够了，翻页逻辑交给前端或 crawler 的通用逻辑
+            print("lines", lines)
+            return {
+                'title': title,
+                'content': lines,
+                'book_name': "番茄小说", # 暂时没法从单章接口拿书名，除非再调一次目录接口
+                'next': None, # 既然是 API 模式，通常不依赖爬虫的自动翻页，或者需要解析 json 里的 nextId
+                'prev': None
+            }
+
+        except Exception as e:
+            print(f"[Fanqie] Content Error: {e}")
+            return None

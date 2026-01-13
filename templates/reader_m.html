@@ -124,12 +124,13 @@
         /* === 5. 侧滑目录 === */
         .drawer-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 2999 !important; 
             background: rgba(0,0,0,0.5); z-index: 2999;
             opacity: 0; pointer-events: none; transition: 0.3s;
         }
         .drawer {
             position: fixed; top: 0; left: 0; width: 85%; max-width: 320px; height: 100%;
-            background: var(--bg); z-index: 3000;
+            background: var(--bg); z-index: 3000 !important;
             transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.19, 1, 0.22, 1);
             display: flex; flex-direction: column;
             box-shadow: 5px 0 25px rgba(0,0,0,0.1);
@@ -202,6 +203,23 @@
             font-size: 14px; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 5000;
         }
         #toast.show { opacity: 1; bottom: 120px; }
+        /* === [修复] 换源弹窗专用遮罩 === */
+#sourceOverlay {
+    /* 基础状态：隐藏 */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    /* 必须比目录(3000)更高吗？换源通常层级更高，这里保持你原有的层级 */
+    z-index: 3499; 
+    background: rgba(0,0,0,0.5);
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+}
+
+/* 激活状态：显示 (通过 class 控制，而不是 JS style) */
+#sourceOverlay.active {
+    opacity: 1;
+    pointer-events: auto;
+}
     </style>
 </head>
 <body class="theme-white">
@@ -317,7 +335,7 @@
     </div>
 
     <!-- 换源弹窗 -->
-    <div class="drawer-overlay" id="sourceOverlay" style="z-index:3499;" onclick="closeSourceModal()"></div>
+    <div class="drawer-overlay" id="sourceOverlay" onclick="closeSourceModal()"></div>
     <div class="source-modal" id="sourceModal">
         <div class="drawer-header">切换书源 <span onclick="closeSourceModal()" style="float:right;">×</span></div>
         <div class="drawer-list" id="sourceList">
@@ -503,12 +521,13 @@
     // === 6. 功能模块 (目录、换源、TTS) ===
     // 目录
     // 5. 侧滑目录 (修复版：移除多余的样式操作)
+    // === 5. 侧滑目录 (终极修复版) ===
     let tocLoaded = false;
     
     async function toggleDrawer() {
         const body = document.body;
         
-        // 核心修复：只切换 class，不要手动去改 style.opacity
+        // 核心：只操作 class，绝对不要手动改 style
         if (body.classList.contains('drawer-active')) {
             // 关闭
             body.classList.remove('drawer-active');
@@ -516,41 +535,49 @@
             // 打开
             body.classList.add('drawer-active');
             
-            // 关闭主菜单（如果开着的话）
+            // 如果主菜单开着，关掉它，防止遮挡
             if(isMenuOpen) toggleMenu(); 
             
-            // 首次打开加载数据 (保持不变)
+            // 首次加载数据
             if(!tocLoaded && tocUrl) {
                 try {
+                    // 显示加载中...
+                    const list = document.getElementById('tocList');
+                    
                     const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true`);
                     const data = await res.json();
+                    
                     if(data.chapters) {
-                        const list = document.getElementById('tocList');
                         list.innerHTML = data.chapters.map(c => {
+                            // 简单高亮当前章节
                             const isCurrent = c.url === currentUrl; 
                             const activeClass = isCurrent ? 'active' : '';
                             return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
                         }).join('');
                         tocLoaded = true;
                         
+                        // 自动滚动到当前章节
                         setTimeout(() => {
                             const active = list.querySelector('.active');
                             if(active) active.scrollIntoView({block: 'center'});
                         }, 100);
                     }
                 } catch(e) {
-                    document.getElementById('tocList').innerText = "加载失败";
+                    document.getElementById('tocList').innerText = "加载失败，请重试";
                 }
             }
         }
     }
 
     // 换源
+    // === 换源逻辑 (修复版) ===
+    
     function openSourceModal() {
-        document.getElementById('sourceOverlay').style.opacity = '1';
-        document.getElementById('sourceOverlay').style.pointerEvents = 'auto';
+        // 1. 纯 Class 操作：添加 .active
+        document.getElementById('sourceOverlay').classList.add('active');
         document.getElementById('sourceModal').classList.add('active');
         
+        // 2. 发起请求 (保持不变)
         fetch('/api/source/list', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ key: dbKey, url: currentUrl, title: document.getElementById('chapter-title').innerText })
@@ -566,9 +593,11 @@
             } else { list.innerHTML = `<div style="text-align:center;padding:20px;">${json.msg}</div>`; }
         });
     }
+
     function closeSourceModal() {
-        document.getElementById('sourceOverlay').style.opacity = '0';
-        document.getElementById('sourceOverlay').style.pointerEvents = 'none';
+        // 1. 纯 Class 操作：移除 .active
+        // 绝对不要去动 style.opacity，那样会留下永久的内联样式！
+        document.getElementById('sourceOverlay').classList.remove('active');
         document.getElementById('sourceModal').classList.remove('active');
     }
     async function confirmSwitch(newUrl) {
