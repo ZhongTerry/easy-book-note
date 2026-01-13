@@ -502,29 +502,44 @@
 
     // === 6. 功能模块 (目录、换源、TTS) ===
     // 目录
+    // 5. 侧滑目录 (修复版：移除多余的样式操作)
     let tocLoaded = false;
+    
     async function toggleDrawer() {
         const body = document.body;
+        
+        // 核心修复：只切换 class，不要手动去改 style.opacity
         if (body.classList.contains('drawer-active')) {
+            // 关闭
             body.classList.remove('drawer-active');
-            document.getElementById('drawerOverlay').style.opacity = '0';
-            setTimeout(()=>document.getElementById('drawerOverlay').style.pointerEvents='none',300);
         } else {
+            // 打开
             body.classList.add('drawer-active');
-            document.getElementById('drawerOverlay').style.opacity = '1';
-            document.getElementById('drawerOverlay').style.pointerEvents = 'auto';
-            if(isMenuOpen) toggleMenu();
             
+            // 关闭主菜单（如果开着的话）
+            if(isMenuOpen) toggleMenu(); 
+            
+            // 首次打开加载数据 (保持不变)
             if(!tocLoaded && tocUrl) {
-                const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true`);
-                const data = await res.json();
-                if(data.chapters) {
-                    const list = document.getElementById('tocList');
-                    list.innerHTML = data.chapters.map(c => 
-                        `<div class="drawer-item ${c.url===currentUrl?'active':''}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`
-                    ).join('');
-                    tocLoaded = true;
-                    setTimeout(() => list.querySelector('.active')?.scrollIntoView({block:'center'}), 100);
+                try {
+                    const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true`);
+                    const data = await res.json();
+                    if(data.chapters) {
+                        const list = document.getElementById('tocList');
+                        list.innerHTML = data.chapters.map(c => {
+                            const isCurrent = c.url === currentUrl; 
+                            const activeClass = isCurrent ? 'active' : '';
+                            return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
+                        }).join('');
+                        tocLoaded = true;
+                        
+                        setTimeout(() => {
+                            const active = list.querySelector('.active');
+                            if(active) active.scrollIntoView({block: 'center'});
+                        }, 100);
+                    }
+                } catch(e) {
+                    document.getElementById('tocList').innerText = "加载失败";
                 }
             }
         }
