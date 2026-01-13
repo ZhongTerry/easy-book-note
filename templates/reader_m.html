@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>{{ article.title }}</title>
+    <meta name="theme-color" content="#ffffff" id="metaThemeColor">
+    
+    <!-- 引入 Remix Icon -->
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+
+    <style>
+        /* === 1. 变量定义 === */
+        :root {
+            --bg: #ffffff;
+            --text: #333333;
+            --text-sec: #999999;
+            --accent: #1e88e5;
+            --menu-bg: rgba(255, 255, 255, 0.98);
+            --border: #f0f0f0;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            --font-size: 19px;
+            --line-height: 1.8;
+            --safe-top: env(safe-area-inset-top);
+            --safe-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* 主题配色 */
+        body.theme-sepia { --bg: #f6f1e1; --text: #4a4238; --text-sec: #948c82; --menu-bg: #fdfbf3; --border: #e8e6d9; --accent: #8d6e63; }
+        body.theme-dark { --bg: #121212; --text: #a0a0a0; --text-sec: #555555; --menu-bg: #1e1e1e; --border: #2a2a2a; --accent: #5c6bc0; }
+        body.font-serif { --font-family: "Songti SC", "Noto Serif SC", serif; }
+
+        /* === 2. 全局重置 === */
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+        
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: var(--font-family);
+            transition: background 0.3s, color 0.3s;
+        }
+
+        /* === 3. 阅读容器 === */
+        #read-viewport {
+            width: 100%; height: 100%;
+            overflow-y: scroll;
+            -webkit-overflow-scrolling: touch;
+            padding: calc(20px + var(--safe-top)) 20px calc(30px + var(--safe-bottom));
+            scroll-behavior: smooth;
+        }
+        #read-viewport::-webkit-scrollbar { display: none; }
+
+        article { max-width: 800px; margin: 0 auto; }
+        article h1 { font-size: 1.4em; margin: 40px 0; font-weight: 700; line-height: 1.3; }
+        article p {
+            font-size: var(--font-size);
+            line-height: var(--line-height);
+            margin-bottom: 1em;
+            text-align: justify;
+            text-indent: 2em;
+        }
+
+        .mini-footer {
+            margin-top: 40px; font-size: 12px; color: var(--text-sec);
+            display: flex; justify-content: space-between; align-items: center; opacity: 0.8;
+        }
+
+        /* === 4. 菜单栏 === */
+        .menu-bar {
+            position: fixed; left: 0; width: 100%;
+            background: var(--menu-bg);
+            backdrop-filter: blur(10px);
+            z-index: 100;
+            transition: transform 0.25s cubic-bezier(0.165, 0.84, 0.44, 1);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .top-menu {
+            top: 0; height: calc(50px + var(--safe-top));
+            padding-top: var(--safe-top);
+            display: flex; align-items: center; justify-content: space-between;
+            padding-left: 10px; padding-right: 10px;
+            transform: translateY(-100%);
+        }
+
+        .bottom-menu {
+            bottom: 0;
+            padding-bottom: var(--safe-bottom);
+            transform: translateY(100%);
+            border-top: 1px solid var(--border); border-bottom: none;
+            display: flex; flex-direction: column;
+        }
+
+        body.menu-active .top-menu { transform: translateY(0); }
+        body.menu-active .bottom-menu { transform: translateY(0); }
+
+        /* 功能按钮 */
+        .func-grid { display: flex; height: 60px; justify-content: space-around; align-items: center; }
+        .func-item {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-size: 10px; color: var(--text); gap: 4px; flex: 1; height: 100%;
+        }
+        .func-item i { font-size: 22px; display: flex; align-items: center; height: 24px; }
+
+        /* 进度条优化 */
+        .progress-bar-wrap {
+            padding: 10px 20px; display: flex; align-items: center; gap: 15px;
+            border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-sec);
+        }
+        input[type=range] { flex: 1; -webkit-appearance: none; background: transparent; height: 20px; }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; background: var(--border); border-radius: 2px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; 
+            height: 20px; width: 20px; 
+            border-radius: 50%; background: var(--accent);
+            margin-top: -8px; 
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            border: 2px solid #fff;
+        }
+
+        /* === 5. 侧滑目录 === */
+        .drawer-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 2999;
+            opacity: 0; pointer-events: none; transition: 0.3s;
+        }
+        .drawer {
+            position: fixed; top: 0; left: 0; width: 85%; max-width: 320px; height: 100%;
+            background: var(--bg); z-index: 3000;
+            transform: translateX(-100%); transition: transform 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+            display: flex; flex-direction: column;
+            box-shadow: 5px 0 25px rgba(0,0,0,0.1);
+        }
+        body.drawer-active .drawer-overlay { opacity: 1; pointer-events: auto; }
+        body.drawer-active .drawer { transform: translateX(0); }
+
+        .drawer-header {
+            padding: 20px; font-weight: bold; border-bottom: 1px solid var(--border);
+            padding-top: calc(20px + var(--safe-top)); font-size: 18px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .drawer-list { flex: 1; overflow-y: auto; }
+        .drawer-item {
+            padding: 15px 20px; border-bottom: 1px solid var(--border); font-size: 14px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .drawer-item.active { color: var(--accent); font-weight: bold; background: rgba(0,0,0,0.02); }
+
+        /* === 6. 设置面板 === */
+        .settings-box {
+            background: var(--menu-bg); padding: 20px;
+            display: none; flex-direction: column; gap: 20px; border-bottom: 1px solid var(--border);
+        }
+        .settings-box.show { display: flex; }
+        .opt-row { display: flex; justify-content: space-between; align-items: center; }
+        .font-btn-group { display: flex; border: 1px solid var(--border); border-radius: 20px; overflow: hidden; }
+        .font-btn { padding: 8px 25px; background: transparent; border: none; font-size: 16px; }
+        .font-btn:active { background: rgba(0,0,0,0.05); }
+        .theme-circle { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; }
+        .theme-circle.active::after { content: ""; width: 12px; height: 12px; background: var(--accent); border-radius: 50%; }
+        
+        .page-nav-area { margin-top: 40px; display: flex; gap: 15px; }
+        .page-btn {
+            flex: 1; text-align: center; padding: 12px 0; border-radius: 8px;
+            background: #f5f5f5; color: var(--text); text-decoration: none; font-size: 14px;
+        }
+        .page-btn.next { background: var(--accent); color: #fff; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+
+        /* === [新增] 同步提示条 === */
+        .sync-alert { 
+            position: fixed; top: -60px; left: 0; width: 100%; 
+            background: var(--accent); color: white; z-index: 4000;
+            display: flex; justify-content: space-between; align-items: center;
+            padding: calc(10px + var(--safe-top)) 20px 10px;
+            transition: top 0.3s; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            font-size: 14px;
+        }
+        .sync-alert.active { top: 0; }
+        .sync-btn {
+            background: white; color: var(--accent); border: none;
+            padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold;
+            margin-left: 10px; cursor: pointer; text-decoration: none;
+        }
+
+        /* [新增] 换源弹窗 */
+        .source-modal {
+            position: fixed; bottom: 0; left: 0; width: 100%; height: 70%;
+            background: var(--bg); z-index: 3500; border-radius: 20px 20px 0 0;
+            transform: translateY(100%); transition: transform 0.3s;
+            display: flex; flex-direction: column; box-shadow: 0 -5px 30px rgba(0,0,0,0.2);
+        }
+        .source-modal.active { transform: translateY(0); }
+        .source-item { padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; }
+        
+        /* 简单 Toast */
+        #toast {
+            position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 50px;
+            font-size: 14px; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 5000;
+        }
+        #toast.show { opacity: 1; bottom: 120px; }
+    </style>
+</head>
+<body class="theme-white">
+
+    <!-- 同步提示条 -->
+    <div id="syncAlert" class="sync-alert">
+        <span>📢 发现新进度</span>
+        <div>
+            <a id="syncLink" href="#" class="sync-btn">跳转</a>
+            <span onclick="closeSyncAlert()" style="margin-left:10px; font-size:20px;">×</span>
+        </div>
+    </div>
+
+    <!-- 正文容器 -->
+    <div id="read-viewport">
+        <article id="content-body">
+            <h1 id="chapter-title">{{ article.title }}</h1>
+            <div id="article-text">
+                {% for line in article.content %}
+                <p>{{ line }}</p>
+                {% endfor %}
+            </div>
+            
+            <div class="page-nav-area">
+                {% if article.prev %}
+                <a href="/read?url={{ article.prev }}&key={{ db_key }}" class="page-btn">上一章</a>
+                {% endif %}
+                {% if article.next %}
+                <a href="/read?url={{ article.next }}&key={{ db_key }}" class="page-btn next">下一章</a>
+                {% endif %}
+            </div>
+
+            <div class="mini-footer">
+                <span id="read-progress">0%</span>
+                <span id="sys-time">12:00</span>
+            </div>
+        </article>
+    </div>
+
+    <!-- 顶部菜单 -->
+    <div class="menu-bar top-menu">
+        <i class="ri-arrow-left-line" style="font-size:24px; padding:10px;" onclick="location.href='/'"></i>
+        <div style="font-size:14px; font-weight:600; max-width: 50%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">{{ db_key }}</div>
+        
+        <div style="display:flex; gap:5px;">
+            <i class="ri-refresh-line" style="font-size:22px; padding:10px;" onclick="forceRefresh()"></i>
+            <i class="ri-share-forward-line" style="font-size:22px; padding:10px;" onclick="nativeShare()"></i>
+        </div>
+    </div>
+
+    <!-- 底部菜单 -->
+    <div class="menu-bar bottom-menu">
+        <!-- 设置面板 -->
+        <div class="settings-box" id="settingsBox">
+            <div class="opt-row">
+                <span>字号</span>
+                <div class="font-btn-group">
+                    <button class="font-btn" onclick="changeFont(-1)">A-</button>
+                    <button class="font-btn" onclick="changeFont(1)">A+</button>
+                </div>
+            </div>
+            <div class="opt-row">
+                <span>背景</span>
+                <div style="display:flex; gap:15px;">
+                    <div class="theme-circle" style="background:#fff" onclick="setTheme('white')"></div>
+                    <div class="theme-circle" style="background:#f6f1e1" onclick="setTheme('sepia')"></div>
+                    <div class="theme-circle" style="background:#121212; border-color:#333" onclick="setTheme('dark')"></div>
+                </div>
+            </div>
+            <div class="opt-row">
+                <span>功能</span>
+                <div style="display:flex; gap:10px; font-size:12px;">
+                    <button class="p-btn p-btn-sm" onclick="toggleTTS()" id="ttsBtn">🎧 朗读</button>
+                    <button class="p-btn p-btn-sm" onclick="openSourceModal()">⇄ 换源</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="progress-bar-wrap">
+            <span style="font-size:14px;" onclick="if('{{article.prev}}') location.href='/read?url={{article.prev}}&key={{db_key}}'">❮</span>
+            <input type="range" id="progressSlider" min="0" max="100" value="0" oninput="seekProgress(this.value)">
+            <span style="font-size:14px;" onclick="if('{{article.next}}') location.href='/read?url={{article.next}}&key={{db_key}}'">❯</span>
+        </div>
+
+        <!-- 功能按钮 -->
+        <div class="func-grid">
+            <div class="func-item" onclick="toggleDrawer()">
+                <i class="ri-list-check"></i>
+                <span>目录</span>
+            </div>
+            <div class="func-item" onclick="toggleSettings()">
+                <i class="ri-settings-4-line"></i>
+                <span>设置</span>
+            </div>
+            <div class="func-item" onclick="toggleDarkMode()">
+                <i class="ri-moon-line"></i>
+                <span>夜间</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 侧滑目录 -->
+    <div class="drawer-overlay" id="drawerOverlay" onclick="toggleDrawer()"></div>
+    <div class="drawer">
+        <div class="drawer-header">
+            <span>目录</span>
+            <span style="font-size:12px; color:var(--text-sec); font-weight:normal;">{{ db_key }}</span>
+        </div>
+        <div class="drawer-list" id="tocList">
+            <div style="text-align:center; padding:20px; color:#999;">加载中...</div>
+        </div>
+    </div>
+
+    <!-- 换源弹窗 -->
+    <div class="drawer-overlay" id="sourceOverlay" style="z-index:3499;" onclick="closeSourceModal()"></div>
+    <div class="source-modal" id="sourceModal">
+        <div class="drawer-header">切换书源 <span onclick="closeSourceModal()" style="float:right;">×</span></div>
+        <div class="drawer-list" id="sourceList">
+            <div style="text-align:center; padding:20px; color:#999;">搜索中...</div>
+        </div>
+    </div>
+
+    <div id="toast"></div>
+
+<script>
+    // 注入后端变量
+    const dbKey = "{{ db_key }}";
+    const currentUrl = "{{ current_url }}";
+    const tocUrl = "{{ article.toc_url }}";
+    const localChapterId = parseInt("{{ chapter_id }}") || -1;
+
+    // === 核心状态 ===
+    const viewport = document.getElementById('read-viewport');
+    let isMenuOpen = false;
+    let isSeeking = false;
+    let menuOpenScrollY = 0;
+    
+    // 初始化配置
+    let config = { fontSize: 19, theme: 'white', fontFamily: 'sans' };
+
+    window.onload = () => {
+        // 恢复配置
+        const saved = localStorage.getItem('reader_v2_cfg');
+        if(saved) config = {...config, ...JSON.parse(saved)};
+        applyConfig();
+        
+        updateTime();
+        setInterval(updateTime, 60000);
+        
+        // 启动同步检查
+        checkRemoteAndInit();
+        
+        // 心跳上报
+        setInterval(sendHeartbeat, 60000);
+        reportWordCount();
+        
+        // 预加载下一章
+        const nextUrl = "{{ article.next }}";
+        if(nextUrl) setTimeout(() => fetch('/api/prefetch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:nextUrl})}), 3000);
+    };
+
+    // === 1. 智能点击监听 ===
+    viewport.addEventListener('click', (e) => {
+        if (['A', 'BUTTON', 'INPUT'].includes(e.target.tagName)) return;
+
+        const width = window.innerWidth;
+        const x = e.clientX;
+        const isCenter = x > width * 0.3 && x < width * 0.7;
+
+        if (isCenter) {
+            toggleMenu();
+        } else {
+            if (isMenuOpen && !isSeeking) {
+                const currentY = viewport.scrollTop;
+                if (Math.abs(currentY - menuOpenScrollY) < 50) toggleMenu();
+            }
+        }
+    });
+
+    // === 2. 菜单交互 ===
+    function toggleMenu() {
+        isMenuOpen = !isMenuOpen;
+        if(isMenuOpen) {
+            menuOpenScrollY = viewport.scrollTop;
+            document.body.classList.add('menu-active');
+        } else {
+            document.body.classList.remove('menu-active');
+            document.getElementById('settingsBox').classList.remove('show');
+        }
+    }
+
+    // === 3. 滚动监听 ===
+    viewport.addEventListener('scroll', () => {
+        const total = viewport.scrollHeight - viewport.clientHeight;
+        const pct = Math.round((viewport.scrollTop / total) * 100) || 0;
+        document.getElementById('read-progress').innerText = pct + '%';
+
+        if (!isSeeking) document.getElementById('progressSlider').value = pct;
+
+        if (isMenuOpen && !isSeeking) {
+            if (Math.abs(viewport.scrollTop - menuOpenScrollY) > 50) toggleMenu();
+        }
+    });
+
+    // 滑块绑定
+    const slider = document.getElementById('progressSlider');
+    const startSeek = () => { isSeeking = true; };
+    const endSeek = () => { isSeeking = false; menuOpenScrollY = viewport.scrollTop; };
+    slider.addEventListener('touchstart', startSeek);
+    slider.addEventListener('touchend', endSeek);
+    
+    function seekProgress(val) {
+        const total = viewport.scrollHeight - viewport.clientHeight;
+        viewport.scrollTo({ top: total * (val / 100), behavior: 'auto' });
+    }
+
+    // === 4. 设置与主题 ===
+    function toggleSettings() { document.getElementById('settingsBox').classList.toggle('show'); }
+    function changeFont(delta) { config.fontSize += delta; applyConfig(); }
+    function setTheme(t) { config.theme = t; applyConfig(); }
+    function toggleDarkMode() { config.theme = config.theme === 'dark' ? 'white' : 'dark'; applyConfig(); }
+    
+    function applyConfig() {
+        document.documentElement.style.setProperty('--font-size', config.fontSize + 'px');
+        document.body.className = ''; 
+        document.body.classList.add(`theme-${config.theme}`);
+        if(isMenuOpen) document.body.classList.add('menu-active');
+        const metaColors = {'white': '#ffffff', 'sepia': '#f6f1e1', 'dark': '#121212'};
+        document.getElementById('metaThemeColor').content = metaColors[config.theme];
+        localStorage.setItem('reader_v2_cfg', JSON.stringify(config));
+    }
+
+    // === 5. 同步逻辑 (PC端复刻) ===
+    function normalizeUrl(url) {
+        if (!url) return "";
+        let res = url;
+        try { while (decodeURIComponent(res) !== res) res = decodeURIComponent(res); } catch (e) {}
+        if (res.endsWith('/')) res = res.slice(0, -1);
+        return res.trim();
+    }
+
+    function shouldSync(remoteUrl, remoteMeta) {
+        if (currentUrl.startsWith('epub:')) return false;
+        if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) return false;
+        if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
+            return remoteMeta.chapter_id > localChapterId;
+        }
+        return true;
+    }
+
+    async function checkRemoteAndInit() {
+        if(!dbKey) return;
+        try {
+            const res = await fetch('/api/get_value', { 
+                method: 'POST', headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({ key: dbKey }) 
+            });
+            const d = await res.json();
+            
+            if (d.status === 'success' && d.value && shouldSync(d.value, d.meta)) {
+                showSyncAlert(d.value);
+            } else {
+                autoSyncProgress();
+            }
+        } catch (e) {}
+        setInterval(checkRemoteLoop, 5000);
+    }
+
+    function checkRemoteLoop() {
+        fetch('/api/get_value', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) })
+        .then(r => r.json()).then(d => {
+            if (d.status === 'success' && d.value && shouldSync(d.value, d.meta)) {
+                showSyncAlert(d.value);
+            } else {
+                document.getElementById('syncAlert').classList.remove('active');
+            }
+        });
+    }
+
+    function autoSyncProgress() {
+        if(!dbKey) return;
+        fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
+        fetch('/update', { 
+            method: 'POST', headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({ key: dbKey, value: currentUrl, title: document.getElementById('chapter-title').innerText }) 
+        });
+    }
+
+    function showSyncAlert(targetUrl) {
+        document.getElementById('syncLink').href = `/read?url=${encodeURIComponent(targetUrl)}&key=${dbKey}`;
+        document.getElementById('syncAlert').classList.add('active');
+    }
+    function closeSyncAlert() {
+        document.getElementById('syncAlert').classList.remove('active');
+        autoSyncProgress();
+    }
+
+    // === 6. 功能模块 (目录、换源、TTS) ===
+    // 目录
+    let tocLoaded = false;
+    async function toggleDrawer() {
+        const body = document.body;
+        if (body.classList.contains('drawer-active')) {
+            body.classList.remove('drawer-active');
+            document.getElementById('drawerOverlay').style.opacity = '0';
+            setTimeout(()=>document.getElementById('drawerOverlay').style.pointerEvents='none',300);
+        } else {
+            body.classList.add('drawer-active');
+            document.getElementById('drawerOverlay').style.opacity = '1';
+            document.getElementById('drawerOverlay').style.pointerEvents = 'auto';
+            if(isMenuOpen) toggleMenu();
+            
+            if(!tocLoaded && tocUrl) {
+                const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true`);
+                const data = await res.json();
+                if(data.chapters) {
+                    const list = document.getElementById('tocList');
+                    list.innerHTML = data.chapters.map(c => 
+                        `<div class="drawer-item ${c.url===currentUrl?'active':''}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`
+                    ).join('');
+                    tocLoaded = true;
+                    setTimeout(() => list.querySelector('.active')?.scrollIntoView({block:'center'}), 100);
+                }
+            }
+        }
+    }
+
+    // 换源
+    function openSourceModal() {
+        document.getElementById('sourceOverlay').style.opacity = '1';
+        document.getElementById('sourceOverlay').style.pointerEvents = 'auto';
+        document.getElementById('sourceModal').classList.add('active');
+        
+        fetch('/api/source/list', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ key: dbKey, url: currentUrl, title: document.getElementById('chapter-title').innerText })
+        }).then(r=>r.json()).then(json => {
+            const list = document.getElementById('sourceList');
+            if(json.status==='success') {
+                list.innerHTML = json.data.map(src => 
+                    `<div class="source-item" onclick="confirmSwitch('${src.url}')">
+                        <div><b>${src.source}</b><br><small>${src.title}</small></div>
+                        <span style="color:var(--accent)">切换</span>
+                    </div>`
+                ).join('');
+            } else { list.innerHTML = `<div style="text-align:center;padding:20px;">${json.msg}</div>`; }
+        });
+    }
+    function closeSourceModal() {
+        document.getElementById('sourceOverlay').style.opacity = '0';
+        document.getElementById('sourceOverlay').style.pointerEvents = 'none';
+        document.getElementById('sourceModal').classList.remove('active');
+    }
+    async function confirmSwitch(newUrl) {
+        await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: newUrl }) });
+        location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+    }
+
+    // TTS
+    let isSpeaking = false;
+    function toggleTTS() {
+        const btn = document.getElementById('ttsBtn');
+        if(isSpeaking) {
+            window.speechSynthesis.cancel();
+            isSpeaking = false;
+            btn.innerText = "🎧 朗读";
+        } else {
+            const text = document.getElementById('chapter-title').innerText + "。" + document.getElementById('article-text').innerText;
+            const utt = new SpeechSynthesisUtterance(text);
+            utt.lang = 'zh-CN';
+            utt.onend = () => { isSpeaking = false; btn.innerText = "🎧 朗读"; };
+            window.speechSynthesis.speak(utt);
+            isSpeaking = true;
+            btn.innerText = "⏹ 停止";
+            showToast("正在后台朗读...");
+        }
+    }
+
+    // 辅助
+    function forceRefresh() { location.href += (location.href.includes('?')?'&':'?') + 'force=true'; }
+    function nativeShare() { if(navigator.share) navigator.share({title:document.title, url:location.href}); else showToast("已复制链接"); }
+    function showToast(m) { const t=document.getElementById('toast'); t.innerText=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
+    function updateTime() { const d=new Date(); document.getElementById('sys-time').innerText = `${d.getHours().toString().padStart(2,0)}:${d.getMinutes().toString().padStart(2,0)}`; }
+    function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
+    function reportWordCount() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ words: document.getElementById('article-text').innerText.length, book_key: dbKey }) }); }
+
+</script>
+</body>
+</html>

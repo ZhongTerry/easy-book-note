@@ -6,7 +6,7 @@ from dotenv import load_dotenv # 1. 引入这个库
 # 否则 routes/core_bp.py 初始化时读不到环境变量
 load_dotenv() 
 import sqlite3
-from flask import Flask
+from flask import Flask, render_template
 from datetime import timedelta
 import threading
 import time
@@ -40,7 +40,10 @@ def schedule_cache_cleanup():
 
 threading.Thread(target=schedule_cache_cleanup, daemon=True).start()
 # === 在 dbserver.py ===
-
+@app.route('/reader_m')
+def reader_m():
+    """处理/reader_m路由，返回reader_m.html模板页面"""
+    return render_template('reader_m.html')
 def schedule_auto_check():
     """
     后台线程：每 4 小时检查一次 'to_read' 书单的更新

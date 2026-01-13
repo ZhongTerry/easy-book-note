@@ -109,23 +109,20 @@ def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
     force = request.args.get('force')
     
-    # 1. 拦截非法 URL，但放行 epub: 协议
+    # 1. 安全检查 (放行 epub 协议)
     if not u.startswith('epub:') and not is_safe_url(u): 
         return "Illegal URL", 403
     
     data = None
     
-    # 2. EPUB 专用提取通道
-    if u.startswith('epub:'):
-        try:
+    # 2. 获取数据 (EPUB 或 网页)
+    try:
+        if u.startswith('epub:'):
+            # EPUB 处理逻辑
             parts = u.split(':')
-            # 格式兼容: 
-            # 旧: epub:filename:index (index是数字)
-            # 新: epub:filename:identifier:page (identifier可能是字符串)
-            
             filename = parts[1]
             
-            # 如果是目录请求
+            # 如果是目录请求，跳转到 TOC
             if len(parts) >= 3 and parts[2] == 'toc':
                 return redirect(url_for('core.toc_page', url=u, key=k))
             
@@ -134,44 +131,54 @@ def read_mode():
                 identifier = parts[2]
                 page_index = int(parts[3])
             else:
-                # 兼容旧链接，默认第0页
                 identifier = parts[2]
                 page_index = 0
             
             data = epub_handler.get_chapter_content(filename, identifier, page_index)
-            
-        except Exception as e:
-            return f"EPUB 解析崩溃: {e}", 500
-    else:
-        # 3. 网页版爬虫通道 (保持不变)
-        data = managers.offline_manager.get_chapter(k, u) if k and not force else None
-        if not data and not force: data = managers.cache.get(u)
-        if not data:
-            data = crawler.run(u)
-            if data: managers.cache.set(u, data)
+        else:
+            # 网页爬虫逻辑
+            data = managers.offline_manager.get_chapter(k, u) if k and not force else None
+            if not data and not force: data = managers.cache.get(u)
+            if not data:
+                data = crawler.run(u)
+                if data: managers.cache.set(u, data)
+    except Exception as e:
+        return f"解析错误: {e}", 500
 
-    if data and k and data.get('title'):
+    if not data:
+        return "无法获取内容，请检查链接或稍后重试", 404
+
+    # 3. 记录历史 & 计算章节 ID
+    if k and data.get('title'):
         managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
 
-    # === [核心修改] 设备识别分流 ===
-    ua = request.headers.get('User-Agent', '').lower()
-    is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
-    # [新增] 计算当前章节 ID (用于前端同步判断)
-    # 我们尝试从 data['title'] 解析，如果爬虫没返回 title，就从 URL 解析
     current_chapter_id = -1
-    if data and data.get('title'):
+    if data.get('title'):
         current_chapter_id = parse_chapter_id(data['title'])
     
-    if current_chapter_id <= 0:
-        # 尝试从 URL 解析 ID
+    # 如果标题解析失败，尝试从 URL 提取 (仅针对网页)
+    if current_chapter_id <= 0 and not u.startswith('epub:'):
         match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
         if match: current_chapter_id = int(match.group(1))
+
+    # 4. === [核心修改] 设备分流逻辑 ===
+    ua = request.headers.get('User-Agent', '').lower()
+    is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
+    
+    # 统一的模板上下文变量
+    context = {
+        'article': data,
+        'current_url': u,
+        'db_key': k,
+        'chapter_id': current_chapter_id
+    }
+
     if is_mobile:
-        # 手机端暂时还用这个，我们之后会专门重构它
-        return render_template('reader.html', article=data, current_url=u, db_key=k, chapter_id=current_chapter_id)
+        # 手机端 -> 渲染 reader_m.html (一定要确保这个文件在 templates 里)
+        return render_template('reader_m.html', **context)
     else:
-        # 电脑端使用全新的“番茄风格”模板
-        return render_template('reader_pc.html', article=data, current_url=u, db_key=k, chapter_id=current_chapter_id)
+        # 电脑端 -> 渲染 reader_pc.html
+        return render_template('reader_pc.html', **context)
 @core_bp.route('/api/history/list')
 @login_required
 def api_history_list():
