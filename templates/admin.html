@@ -7,38 +7,105 @@
     <script src="/purecss/pure2.1.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        .p-container { max-width: 1100px; margin: 20px auto; }
+        .p-container { max-width: 1200px; margin: 20px auto; }
         .stats-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        .grid-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 30px; }
+        .grid-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        
         .user-detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
         .history-tag { font-size: 11px; background: #eef2ff; color: #4f46e5; padding: 2px 6px; border-radius: 4px; }
+        
+        /* 集群状态小圆点 */
+        .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+        .status-online { background-color: #10b981; box-shadow: 0 0 5px #10b981; }
+        .status-warning { background-color: #f59e0b; }
+        .status-offline { background-color: #ef4444; }
+
+        /* 进度条 */
+        .load-bar-bg { height: 6px; background: #f3f4f6; border-radius: 3px; overflow: hidden; margin-top: 5px; }
+        .load-bar-fill { height: 100%; background: #4f46e5; transition: width 0.3s; }
     </style>
 </head>
 <body style="background: #f9fafb;">
 
 <div class="p-container">
+    <!-- 顶栏 -->
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px;">
-        <h1>🔧 管理员控制台</h1>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <h1 style="margin: 0;">🔧 管理员控制台</h1>
+            <span class="p-tag p-tag-blue" id="clusterStatusTag">集群监控中...</span>
+        </div>
         <a href="/" class="p-btn p-btn-outline" style="text-decoration: none; border-radius: 20px; padding: 6px 15px; font-size: 13px;">
             🏠 返回书架
         </a>
     </div>
 
-    <div class="grid-2">
-        <!-- 全系统活跃度折线图 -->
-        <div class="stats-card">
-            <h3>📈 全站阅读时长趋势 (最近30天/小时)</h3>
-            <canvas id="activityChart" height="120"></canvas>
-        </div>
-
-        <!-- 快速统计 -->
+    <!-- 第一排：核心数据 -->
+    <div class="grid-3">
+        <!-- 1. 全站数据 -->
         <div class="stats-card" id="systemSummary">
             <h3>📊 核心指标</h3>
-            <div id="summaryContent">加载中...</div>
+            <div id="summaryContent" style="font-size:13px; color:#666;">加载中...</div>
+        </div>
+        
+        <!-- 2. 集群概览 -->
+        <div class="stats-card">
+            <h3>🌍 全球爬虫网络</h3>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:15px;">
+                <div style="text-align:center">
+                    <div style="font-size:24px; font-weight:bold; color:#10b981" id="onlineNodes">-</div>
+                    <div style="font-size:12px; color:#666">在线节点</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:24px; font-weight:bold; color:#4f46e5" id="totalTasks">-</div>
+                    <div style="font-size:12px; color:#666">并发任务</div>
+                </div>
+                <div style="text-align:center">
+                    <div style="font-size:24px; font-weight:bold; color:#f59e0b" id="avgCpu">-</div>
+                    <div style="font-size:12px; color:#666">平均负载%</div>
+                </div>
+            </div>
+            <div style="margin-top:15px; font-size:12px; color:#888;" id="regionInfo">
+                区域分布: CN(0) | GLOBAL(0)
+            </div>
+        </div>
+
+        <!-- 3. 缓存控制 -->
+        <div class="stats-card" style="display:flex; flex-direction:column; justify-content:center; align-items:center; gap:15px;">
+            <button class="p-btn p-btn-danger" onclick="clearAllCache()" style="width:80%">🗑️ 清空所有缓存</button>
+            <div style="font-size:12px; color:#999; text-align:center;">
+                当爬虫数据出现乱码或更新不及时时使用。<br>
+                当前缓存大小: <span id="cacheSize">-</span> MB
+            </div>
         </div>
     </div>
 
-    <!-- 用户列表 -->
+    <!-- 第二排：图表 -->
+    <div class="stats-card" style="margin-bottom: 20px;">
+        <h3>📈 全站阅读时长趋势 (最近30天)</h3>
+        <canvas id="activityChart" height="80"></canvas>
+    </div>
+
+    <!-- 第三排：集群节点列表 -->
+    <div class="p-card">
+        <h3>🖥️ 集群节点详情 (实时刷新)</h3>
+        <table class="p-table">
+            <thead>
+                <tr>
+                    <th width="20%">节点名称 / IP</th>
+                    <th width="15%">状态 / 延迟</th>
+                    <th width="15%">区域</th>
+                    <th width="30%">任务并发 (Load)</th>
+                    <th width="20%">资源占用 (CPU/Mem)</th>
+                </tr>
+            </thead>
+            <tbody id="clusterTable">
+                <tr><td colspan="5" style="text-align:center; color:#999;">正在连接主控节点...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 第四排：用户列表 -->
     <div class="p-card">
         <h3>👥 用户管理</h3>
         <table class="p-table">
@@ -58,9 +125,7 @@
 <div id="userDetailModal" class="p-modal">
     <div class="p-modal-content" style="max-width: 500px;">
         <h3 id="detailTitle">用户详情</h3>
-        <div id="detailContent">
-            <!-- JS 填充内容 -->
-        </div>
+        <div id="detailContent"></div>
         <div style="text-align:right; margin-top:20px;">
             <button class="p-btn p-btn-primary" onclick="PureUI.modal.close('userDetailModal')">关闭</button>
         </div>
@@ -68,39 +133,99 @@
 </div>
 
 <script>
-    // admin.html 里的 script 部分
+    // --- 1. 全站核心指标 ---
+    async function loadSystemSummary() {
+        try {
+            const res = await fetch('/api/admin/system_summary');
+            const d = await res.json();
+            if (d.status === 'success') {
+                document.getElementById('summaryContent').innerHTML = `
+                    <div class="user-detail-row"><span>总用户:</span> <b>${d.users}</b></div>
+                    <div class="user-detail-row"><span>总书籍:</span> <b>${d.books}</b></div>
+                    <div class="user-detail-row"><span>总时长:</span> <b>${d.total_time_hr}h</b></div>
+                    <div class="user-detail-row"><span>总字数:</span> <b>${d.total_words_wan}w</b></div>
+                `;
+            }
+        } catch (e) {}
+    }
+    
+    async function loadDashboardStats() {
+        try {
+            const res = await fetch('/api/admin/dashboard');
+            const d = await res.json();
+            if(d.status === 'success') {
+                document.getElementById('cacheSize').innerText = d.stats.cache_size_mb;
+            }
+        } catch(e) {}
+    }
 
-// 新增：加载全站核心指标
-async function loadSystemSummary() {
-    try {
-        const res = await fetch('/api/admin/system_summary');
-        const d = await res.json();
-        
-        if (d.status === 'success') {
-            document.getElementById('summaryContent').innerHTML = `
-                <div class="user-detail-row"><span>全站总用户:</span> <b>${d.users} 人</b></div>
-                <div class="user-detail-row"><span>全站总藏书:</span> <b>${d.books} 本</b></div>
-                <div class="user-detail-row"><span>累计阅读时长:</span> <b>${d.total_time_hr} 小时</b></div>
-                <div class="user-detail-row"><span>累计阅读字数:</span> <b>${d.total_words_wan} 万字</b></div>
-                <div class="user-detail-row" style="border:none; margin-top:10px;">
-                    <button class="p-btn p-btn-sm p-btn-danger" style="width:100%" onclick="clearAllCache()">🗑️ 清理系统缓存</button>
-                </div>
-            `;
+    // --- 2. 集群监控 (核心) ---
+    async function loadClusterStatus() {
+        try {
+            const res = await fetch('/api/admin/cluster_status');
+            const json = await res.json();
+            
+            if (json.status !== 'success') return;
+            
+            const s = json.summary;
+            
+            // 更新顶部概览
+            document.getElementById('onlineNodes').innerText = s.online_nodes + '/' + s.total_nodes;
+            document.getElementById('totalTasks').innerText = s.total_tasks;
+            document.getElementById('avgCpu').innerText = s.avg_cpu + '%';
+            document.getElementById('regionInfo').innerText = `分布: CN(${s.regions.CN}) | GLOBAL(${s.regions.GLOBAL})`;
+            
+            document.getElementById('clusterStatusTag').className = s.online_nodes > 0 ? 'p-tag p-tag-green' : 'p-tag p-tag-red';
+            document.getElementById('clusterStatusTag').innerText = s.online_nodes > 0 ? '集群运行中' : '无可用节点';
+
+            // 更新表格
+            const rows = json.nodes.map(n => {
+                let statusClass = 'status-offline';
+                let statusText = '离线';
+                if (n.status === 'online') { statusClass = 'status-online'; statusText = '在线'; }
+                if (n.status === 'warning') { statusClass = 'status-warning'; statusText = '延迟'; }
+                
+                let loadColor = '#4f46e5';
+                if (n.load_pct > 80) loadColor = '#ef4444';
+
+                return `
+                <tr>
+                    <td>
+                        <div style="font-weight:bold;">${n.name}</div>
+                        <div style="font-size:11px; color:#999;">${n.ip}</div>
+                    </td>
+                    <td>
+                        <div style="display:flex; align-items:center;">
+                            <span class="status-dot ${statusClass}"></span>
+                            <span>${statusText}</span>
+                            <span style="font-size:11px; color:#999; margin-left:5px;">(${n.lag})</span>
+                        </div>
+                    </td>
+                    <td><span class="p-tag">${n.region}</span></td>
+                    <td>
+                        <div style="display:flex; justify-content:space-between; font-size:11px;">
+                            <span>${n.load} 任务</span>
+                            <span>${n.load_pct}%</span>
+                        </div>
+                        <div class="load-bar-bg">
+                            <div class="load-bar-fill" style="width:${n.load_pct}%; background:${loadColor}"></div>
+                        </div>
+                    </td>
+                    <td style="font-size:12px;">
+                        CPU: <b>${n.cpu}%</b> <span style="color:#ddd">|</span> Mem: <b>${n.mem}%</b>
+                    </td>
+                </tr>
+                `;
+            }).join('');
+            
+            document.getElementById('clusterTable').innerHTML = rows || '<tr><td colspan="5" style="text-align:center; padding:20px;">暂无节点接入，正在等待 Worker 启动...</td></tr>';
+            
+        } catch (e) {
+            console.error("Cluster Load Error:", e);
         }
-    } catch (e) {
-        document.getElementById('summaryContent').innerText = "加载失败";
     }
-}
 
-// 顺便补一个清理缓存的逻辑
-async function clearAllCache() {
-    if(confirm("确定要清空所有爬虫缓存吗？这会导致下次阅读加载变慢。")) {
-        const res = await fetch('/api/admin/clear_cache', {method: 'POST'});
-        const d = await res.json();
-        alert(d.msg || "已清空");
-    }
-}
-    // 1. 初始化折线图
+    // --- 3. 图表 ---
     async function initChart() {
         const res = await fetch('/api/admin/activity_stats');
         const data = await res.json();
@@ -120,61 +245,58 @@ async function clearAllCache() {
             },
             options: {
                 plugins: { legend: { display: false } },
-                scales: { y: { beginAtZero: true } }
+                scales: { y: { beginAtZero: true } },
+                maintainAspectRatio: false
             }
         });
     }
 
-    // 2. 加载用户列表
+    // --- 4. 用户列表 & 详情 ---
     async function loadUsers() {
         const res = await fetch('/api/admin/users');
         const data = await res.json();
         const t = document.getElementById('userTable');
-        
         t.innerHTML = data.users.map(u => `
             <tr>
                 <td><b>${u.username}</b></td>
                 <td><span class="p-tag">${u.role}</span></td>
-                <td>
-                    <button class="p-btn p-btn-sm" onclick="viewUserDetail('${u.username}')">🔍 数据详情</button>
-                    <button class="p-btn p-btn-sm p-btn-outline" onclick="setRole('${u.username}', 'pro')">设为Pro</button>
-                </td>
+                <td><button class="p-btn p-btn-sm" onclick="viewUserDetail('${u.username}')">🔍 详情</button></td>
             </tr>
         `).join('');
     }
 
-    // 3. 查看用户详情
     async function viewUserDetail(username) {
         const res = await fetch(`/api/admin/user_detail/${username}`);
         const json = await res.json();
         const d = json.data;
-        
         document.getElementById('detailTitle').innerText = `📊 用户: ${d.username}`;
-        
-        let historyHtml = d.history.map(h => `
-            <div class="user-detail-row">
-                <span style="font-size:13px; color:#333;">${h.book_name}</span>
-                <span class="history-tag">${h.title.slice(0,15)}...</span>
-            </div>
-        `).join('');
-
+        let historyHtml = d.history.map(h => `<div class="user-detail-row"><span style="font-size:13px;">${h.book_name}</span><span class="history-tag">${h.title.slice(0,10)}...</span></div>`).join('');
         document.getElementById('detailContent').innerHTML = `
-            <div class="user-detail-row"><span>藏书总量:</span> <b>${d.total_books} 本</b></div>
-            <div class="user-detail-row"><span>累计时长:</span> <b>${(d.total_time_min/60).toFixed(1)} 小时</b></div>
-            <div class="user-detail-row"><span>累计阅读:</span> <b>${(d.total_words/10000).toFixed(2)} 万字</b></div>
-            <h4 style="margin: 20px 0 10px 0;">⏳ 最近阅读 (Top 5)</h4>
-            ${historyHtml || '<p style="color:#999">暂无历史记录</p>'}
-        `;
-        
+            <div class="user-detail-row"><span>藏书:</span> <b>${d.total_books}</b></div>
+            <div class="user-detail-row"><span>时长:</span> <b>${(d.total_time_min/60).toFixed(1)}h</b></div>
+            <div class="user-detail-row"><span>字数:</span> <b>${(d.total_words/10000).toFixed(2)}w</b></div>
+            <h4 style="margin:15px 0 5px;">⏳ 最近阅读</h4>${historyHtml}`;
         PureUI.modal.open('userDetailModal');
     }
 
+    async function clearAllCache() {
+        if(confirm("确定清空？")) {
+            await fetch('/api/admin/clear_cache', {method: 'POST'});
+            alert("已清空");
+            loadDashboardStats(); // 刷新缓存大小显示
+        }
+    }
+
     // 初始化
-    // 修改后的初始化
     window.onload = () => {
-        initChart();          // 加载折线图
-        loadUsers();          // 加载用户列表
-        loadSystemSummary();  // 加载核心指标 <-- 补上这一行
+        initChart();
+        loadUsers();
+        loadSystemSummary();
+        loadDashboardStats();
+        
+        // 立即加载一次集群状态，然后每 3 秒刷新
+        loadClusterStatus();
+        setInterval(loadClusterStatus, 3000);
     };
 </script>
 </body>
