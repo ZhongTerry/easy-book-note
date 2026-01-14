@@ -8,7 +8,9 @@ import logging
 import sys
 from unittest.mock import MagicMock
 from flask import Flask, request, jsonify
-
+from dotenv import load_dotenv
+# 强制加载同目录下的 config.env 文件
+load_dotenv('config.env') 
 # === [黑魔法：环境模拟] ===
 # Worker 节点没有数据库，但 spider_core 可能引用 managers。
 # 这里 Mock 掉 managers 模块，防止导入 spider_core 时报错。

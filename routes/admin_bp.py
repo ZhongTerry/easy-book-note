@@ -17,6 +17,11 @@ def handle_heartbeat():
     auth_header = request.headers.get('Authorization')
     # 默认 Token，生产环境请在 .env 设置
     system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    print("----------------------------------------")
+    # 使用 repr() 可以把看不见的空格、换行符显示出来
+    print(f"🔍 [Debug] 收到 Header: {repr(auth_header)}")
+    print(f"🔍 [Debug] 系统 期望值: {repr(f'Bearer {system_token}')}")
+    print("----------------------------------------")
     
     if auth_header != f"Bearer {system_token}":
         return jsonify({"status": "error", "msg": "Forbidden"}), 403
