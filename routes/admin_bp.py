@@ -3,7 +3,7 @@ import os
 import psutil # 记得 pip install psutil
 import platform
 from shared import CACHE_DIR, USER_DATA_DIR, admin_required
-from managers import role_manager, get_db
+from managers import role_manager, get_db, cluster_manager
 from datetime import datetime, timedelta
 import json
 
@@ -29,13 +29,13 @@ def handle_heartbeat():
     else:
         real_ip = request.remote_addr
         
-    managers.cluster_manager.update_heartbeat(data, real_ip)
+    cluster_manager.update_heartbeat(data, real_ip)
     return jsonify({"status": "success"})
 
 @admin_bp.route('/api/admin/cluster_status')
 @admin_required
 def get_cluster_status():
-    nodes = managers.cluster_manager.get_active_nodes()
+    nodes = cluster_manager.get_active_nodes()
     # 计算总负载
     total_processing = sum(n['status']['current_tasks'] for n in nodes)
     return jsonify({
