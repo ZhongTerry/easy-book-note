@@ -271,14 +271,14 @@ def insert():
     
     # [核心修改] 智能纠错
     # 只有在手动输入时才尝试纠错，自动同步时不纠错(节省性能)
-    final_value = raw_value
-    if is_manual:
+    # final_value = raw_value
+    # if is_manual:
         # 调用爬虫的智能解析
-        final_value = crawler.resolve_start_url(raw_value)
+        # final_value = crawler.resolve_start_url(raw_value)
     
     # 保存纠错后的值
+    final_value = raw_value
     res = managers.db.insert(key, final_value)
-    
     if is_manual and res.get('status') == 'success':
         managers.db.add_version(key, final_value)
         
