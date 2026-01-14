@@ -74,7 +74,7 @@ def _remote_request(endpoint, payload):
     print(f"[Cluster] ⚠️ 任务 {task_id} 等待超时 (无 Worker 接单)")
     return None
 def parse_chapter_id(text):
-    if not text: return -1
+    if not text: re turn -1
     text = text.strip()
     
     # 1. 优先匹配纯数字 (例如: "49. 章节名" 或 "第49章")
@@ -1699,8 +1699,21 @@ class NovelCrawler:
         """
         fast_mode=True: 不重试，超时短，专用于换源检测
         """
+        from managers import cache
+        
+        if not toc_url.startswith('epub:'):
+            cached_toc = cache.get(toc_url)
+            if cached_toc:
+                print(f"[Crawler] ✅ 命中本地目录缓存: {toc_url}")
+                return cached_toc
+
+        # 1. 尝试远程集群
         remote_data = _remote_request('toc', {'url': toc_url})
-        if remote_data: return remote_data
+        
+        if remote_data:
+            print(f"[Crawler] 📥 远程目录获取成功，写入本地缓存")
+            cache.set(toc_url, remote_data)
+            return remote_data
         # 参数设置
         if toc_url.startswith('epub:'):
             return None
@@ -1787,8 +1800,30 @@ class NovelCrawler:
         }
 
     def run(self, url):
+                # 0. [新增] 优先检查本地缓存
+        # 必须在函数内部导入，防止循环引用
+        from managers import cache
+        
+        # 除非是 epub 协议 (epub 不走普通缓存逻辑，走 handler)
+        if not url.startswith('epub:'):
+            cached_data = cache.get(url)
+            if cached_data:
+                print(f"[Crawler] ✅ 命中本地缓存: {url}")
+                return cached_data
+
+        # 1. 尝试远程集群爬取 (Pull/Push 模式通用)
+        # _remote_request 内部已经封装了检查 Token 的逻辑
         remote_data = _remote_request('run', {'url': url})
-        if remote_data: return remote_data
+        
+        if remote_data:
+            print(f"[Crawler] 📥 远程抓取成功，写入本地缓存")
+            # [关键] 拿到远程数据后，立刻存入本地缓存！
+            # 这样下次就不用再烦劳集群了
+            cache.set(url, remote_data)
+            return remote_data
+        
+        # 2. 降级回本地爬取 (原有逻辑)
+        print(f"[Run] 🐢 远程不可用或未配置，开始本地爬取: {url}")
         print(f"\n[Run] 🚀 开始处理 URL: {url}")
         
         # 1. 尝试匹配插件

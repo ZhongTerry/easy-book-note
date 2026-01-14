@@ -220,7 +220,29 @@ def toc_page():
         if is_api:
             return jsonify(data)
         return render_template('toc.html', toc=data, toc_url=u, db_key=k)
-    data = None if force else managers.cache.get(u)
+    data = None
+    
+    # 网页逻辑
+    # 如果 force 为 true，先不读缓存，也别让 crawler 读缓存
+    # 但由于我们在 crawler.run 里强制加了读缓存逻辑，这里需要一点技巧：
+    
+    # 方案 A: 相信 crawler.run 的缓存机制 (推荐)
+    # 我们需要让 crawler.run 知道我们要强制刷新。
+    # 但这需要改动 crawler.run 的签名。
+    
+    # 方案 B (当前代码现状):
+    # 既然我们在 crawler.run 里加了缓存检查，那么 routes 里的 managers.cache.get(u) 就可以删掉了？
+    # 不完全是。为了兼容性，我们保留 routes 里的逻辑。
+    
+    # [关键]：如果你想让“强制刷新”生效，你需要在 crawler.run 之前手动清理一下缓存
+    if force:
+        try:
+            # 删掉缓存文件，这样 crawler.run 内部 check cache 就会 miss，从而去远程爬
+            from managers import cache
+            cache_file = cache._get_filename(u)
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+        except: pass
     
     if not data:
         data = crawler.get_toc(u)
