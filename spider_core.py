@@ -74,7 +74,7 @@ def _remote_request(endpoint, payload):
     print(f"[Cluster] ⚠️ 任务 {task_id} 等待超时 (无 Worker 接单)")
     return None
 def parse_chapter_id(text):
-    if not text: re turn -1
+    if not text: return -1
     text = text.strip()
     
     # 1. 优先匹配纯数字 (例如: "49. 章节名" 或 "第49章")
