@@ -79,6 +79,7 @@ NODE_CONFIG = {
 
 
 def do_work(task):
+    global CURRENT_TASKS 
     endpoint = task['endpoint']
     payload = task['payload']
     url = payload.get('url')
