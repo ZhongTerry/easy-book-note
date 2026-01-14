@@ -39,7 +39,25 @@ def fetch_task():
                 return jsonify({"status": "success", "task": json.loads(task_json)})
     except Exception as e:
         print(f"Redis Error: {e}")
+    try:
+        req_data = request.json or {}
+        node_uuid = req_data.get('uuid')
         
+        if node_uuid and managers.cluster_manager.use_redis:
+            # 延长该节点的 Redis Key 过期时间 (续命)
+            key = f"crawler:node:{node_uuid}"
+            if managers.cluster_manager.r.exists(key):
+                managers.cluster_manager.r.expire(key, 60) # 续命 60 秒
+                # 还可以顺手更新一下 last_seen
+                raw_data = managers.cluster_manager.r.get(key)
+                if raw_data:
+                    node_data = json.loads(raw_data)
+                    node_data['last_seen'] = time.time()
+                    managers.cluster_manager.r.setex(key, 60, json.dumps(node_data))
+        print("node_uuid", node_uuid)
+    except Exception as e:
+        # 不要在取任务时因为心跳逻辑崩了而阻断任务
+        print(f"Keep-alive error: {e}")
     return jsonify({"status": "empty"}) # 没任务，让 Worker 歇会儿
 
 @admin_bp.route('/api/cluster/submit_result', methods=['POST'])
@@ -168,25 +186,7 @@ def get_cluster_status():
 
     # 按名称排序
     nodes.sort(key=lambda x: x['name'])
-    try:
-        req_data = request.json or {}
-        node_uuid = req_data.get('uuid')
-        
-        if node_uuid and managers.cluster_manager.use_redis:
-            # 延长该节点的 Redis Key 过期时间 (续命)
-            key = f"crawler:node:{node_uuid}"
-            if managers.cluster_manager.r.exists(key):
-                managers.cluster_manager.r.expire(key, 60) # 续命 60 秒
-                # 还可以顺手更新一下 last_seen
-                raw_data = managers.cluster_manager.r.get(key)
-                if raw_data:
-                    node_data = json.loads(raw_data)
-                    node_data['last_seen'] = time.time()
-                    managers.cluster_manager.r.setex(key, 60, json.dumps(node_data))
-        print("node_uuid", node_uuid)
-    except Exception as e:
-        # 不要在取任务时因为心跳逻辑崩了而阻断任务
-        print(f"Keep-alive error: {e}")
+
     return jsonify({
         "status": "success",
         "timestamp": now,
