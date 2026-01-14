@@ -3,6 +3,7 @@
 auth_key.json
 user_token.json
 *.log
+config.env
 
 # === 2. 用户数据与数据库 (核心保护) ===
 user_data/
