@@ -68,6 +68,7 @@ def fetch_task():
                 
                 new_node_data = {
                     "uuid": node_uuid,
+                    "name": node_uuid,
                     "config": {
                         "name": f"Unknown-{node_uuid[:4]}", # 暂时不知道名字
                         "region": "GLOBAL",
