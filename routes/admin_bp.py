@@ -89,12 +89,17 @@ def handle_heartbeat():
 
 # routes/admin_bp.py
 
+# === [修复] 补全缺失的集群状态接口 ===
 @admin_bp.route('/api/admin/cluster_status')
 @admin_required
 def get_cluster_status():
     """
     [重构版] 获取集群详细状态面板
     """
+    # 必须确保 managers 模块已导入
+    import time
+    
+    # 获取节点数据
     raw_nodes = managers.cluster_manager.get_active_nodes()
     
     nodes = []
@@ -154,14 +159,14 @@ def get_cluster_status():
             "load_pct": round((tasks / max_tasks) * 100, 1) if max_tasks > 0 else 0,
             "cpu": sys_stat.get('cpu', 0),
             "mem": sys_stat.get('memory', 0),
-            "version": "v1.0" # 预留字段
+            "version": "v1.0"
         })
     
     # 计算平均 CPU
     if summary["total_nodes"] > 0:
         summary["avg_cpu"] = round(cpu_sum / summary["total_nodes"], 1)
 
-    # 按名称排序，方便查看
+    # 按名称排序
     nodes.sort(key=lambda x: x['name'])
 
     return jsonify({
