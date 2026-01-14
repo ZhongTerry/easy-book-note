@@ -533,23 +533,29 @@ class ClusterManager:
         else:
             self.nodes[uuid] = node_data
 
+    # managers.py -> ClusterManager 类
+
     def get_active_nodes(self):
-        """获取活跃节点列表"""
+        """获取所有节点并进行初步清洗"""
         nodes = []
         if self.use_redis:
             try:
+                # 获取所有 crawler:node:* 的键
                 keys = self.r.keys("crawler:node:*")
                 if keys:
+                    # 批量获取
                     vals = self.r.mget(keys)
-                    nodes = [json.loads(v) for v in vals if v]
+                    for v in vals:
+                        if v:
+                            nodes.append(json.loads(v))
             except Exception as e:
                 print(f"❌ [Cluster] Redis Read Error: {e}")
-                # 如果 Redis 挂了，返回空列表，触发本地降级
                 return []
         else:
-            # 内存模式：清理超过 30 秒没心跳的节点
+            # 内存模式：清理过期节点
             now = time.time()
-            self.nodes = {k: v for k, v in self.nodes.items() if now - v['last_seen'] < 30}
+            # 过滤掉超过 40 秒没心跳的节点 (给一点宽容度)
+            self.nodes = {k: v for k, v in self.nodes.items() if now - v.get('last_seen', 0) < 40}
             nodes = list(self.nodes.values())
         
         return nodes

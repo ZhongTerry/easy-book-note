@@ -87,19 +87,88 @@ def handle_heartbeat():
     cluster_manager.update_heartbeat(data, real_ip)
     return jsonify({"status": "success"})
 
+# routes/admin_bp.py
+
 @admin_bp.route('/api/admin/cluster_status')
 @admin_required
 def get_cluster_status():
-    nodes = cluster_manager.get_active_nodes()
-    # 计算总负载
-    total_processing = sum(n['status']['current_tasks'] for n in nodes)
+    """
+    [重构版] 获取集群详细状态面板
+    """
+    raw_nodes = managers.cluster_manager.get_active_nodes()
+    
+    nodes = []
+    now = time.time()
+    
+    # 全局统计指标
+    summary = {
+        "total_nodes": 0,
+        "online_nodes": 0,
+        "total_tasks": 0,     # 当前正在跑的任务
+        "max_capacity": 0,    # 集群最大并发能力
+        "avg_cpu": 0,
+        "regions": {"CN": 0, "GLOBAL": 0}
+    }
+    
+    cpu_sum = 0
+
+    for n in raw_nodes:
+        # 1. 计算时间差 (心跳延迟)
+        last_seen = n.get('last_seen', 0)
+        lag = int(now - last_seen)
+        
+        # 2. 判断健康状态
+        if lag <= 15:
+            status = "online"   # 🟢 健康
+            summary["online_nodes"] += 1
+        elif lag <= 35:
+            status = "warning"  # 🟡 网络波动
+        else:
+            status = "offline"  # 🔴 疑似掉线
+            
+        # 3. 提取配置
+        cfg = n.get('config', {})
+        sys_stat = n.get('status', {})
+        
+        # 4. 统计累加
+        tasks = sys_stat.get('current_tasks', 0)
+        max_tasks = cfg.get('max_tasks', 20)
+        
+        summary["total_nodes"] += 1
+        summary["total_tasks"] += tasks
+        summary["max_capacity"] += max_tasks
+        cpu_sum += sys_stat.get('cpu', 0)
+        
+        region = cfg.get('region', 'GLOBAL')
+        summary["regions"][region] = summary["regions"].get(region, 0) + 1
+
+        # 5. 格式化单个节点数据 (返回给前端)
+        nodes.append({
+            "uuid": n['uuid'],
+            "name": cfg.get('name', 'Unknown'),
+            "region": region,
+            "ip": cfg.get('public_url', '').replace('http://', '').replace('https://', '').split(':')[0],
+            "status": status,
+            "lag": f"{lag}s",
+            "load": f"{tasks}/{max_tasks}",
+            "load_pct": round((tasks / max_tasks) * 100, 1) if max_tasks > 0 else 0,
+            "cpu": sys_stat.get('cpu', 0),
+            "mem": sys_stat.get('memory', 0),
+            "version": "v1.0" # 预留字段
+        })
+    
+    # 计算平均 CPU
+    if summary["total_nodes"] > 0:
+        summary["avg_cpu"] = round(cpu_sum / summary["total_nodes"], 1)
+
+    # 按名称排序，方便查看
+    nodes.sort(key=lambda x: x['name'])
+
     return jsonify({
         "status": "success",
-        "nodes": nodes,
-        "summary": {
-            "node_count": len(nodes),
-            "total_processing": total_processing
-        }
+        "timestamp": now,
+        "summary": summary,
+        "nodes": nodes
     })
 @admin_bp.route('/api/admin/system_summary')
 @admin_required
