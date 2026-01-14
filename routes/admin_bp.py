@@ -70,11 +70,9 @@ def fetch_task():
                     "uuid": node_uuid,
                     "name": node_uuid,
                     "config": {
-                        "name": f"Unknown-{node_uuid[:4]}", # 暂时不知道名字
+                        "name": f"{node_uuid}", # 暂时不知道名字
                         "region": "GLOBAL",
                         "max_tasks": 20,
-                        "public_url": f"http://{real_ip}:12345", # 猜测一个
-                        "port": 12345
                     },
                     "status": {
                         "cpu": 0, "memory": 0, "current_tasks": 0,
