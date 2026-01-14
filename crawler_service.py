@@ -7,7 +7,7 @@ import sys
 import psutil # 确保安装了 psutil
 from unittest.mock import MagicMock
 from dotenv import load_dotenv
-
+import threading
 load_dotenv('config.env') 
 
 # === [黑魔法：环境模拟] ===
