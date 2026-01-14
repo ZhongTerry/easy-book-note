@@ -42,8 +42,12 @@ def fetch_task():
     try:
         req_data = request.json or {}
         node_uuid = req_data.get('uuid')
-        
-        if node_uuid and managers.cluster_manager.use_redis:
+        if req_data.get('uuid') and 'config' in req_data and 'status' in req_data:
+            # 如果有完整数据，直接调用管理器进行全量更新！
+            # 这样 CPU、内存、任务数都会被写入 Redis
+            print("获取到了整体数据")
+            managers.cluster_manager.update_heartbeat(req_data, real_ip)
+        elif node_uuid and managers.cluster_manager.use_redis:
             key = f"crawler:node:{node_uuid}"
             
             # 尝试从 Redis 读取现有数据
