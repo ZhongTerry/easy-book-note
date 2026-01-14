@@ -10,7 +10,42 @@ import json
 # 创建蓝图
 admin_bp = Blueprint('admin', __name__)
 # routes/admin_bp.py
+# routes/admin_bp.py
 
+@admin_bp.route('/api/cluster/heartbeat', methods=['POST'])
+def handle_heartbeat():
+    auth_header = request.headers.get('Authorization')
+    # 默认 Token，生产环境请在 .env 设置
+    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    
+    if auth_header != f"Bearer {system_token}":
+        return jsonify({"status": "error", "msg": "Forbidden"}), 403
+        
+    data = request.json
+    
+    # [修复] 获取真实 IP (兼容反向代理)
+    if request.headers.getlist("X-Forwarded-For"):
+        real_ip = request.headers.getlist("X-Forwarded-For")[0]
+    else:
+        real_ip = request.remote_addr
+        
+    managers.cluster_manager.update_heartbeat(data, real_ip)
+    return jsonify({"status": "success"})
+
+@admin_bp.route('/api/admin/cluster_status')
+@admin_required
+def get_cluster_status():
+    nodes = managers.cluster_manager.get_active_nodes()
+    # 计算总负载
+    total_processing = sum(n['status']['current_tasks'] for n in nodes)
+    return jsonify({
+        "status": "success",
+        "nodes": nodes,
+        "summary": {
+            "node_count": len(nodes),
+            "total_processing": total_processing
+        }
+    })
 @admin_bp.route('/api/admin/system_summary')
 @admin_required
 def api_admin_system_summary():

@@ -426,7 +426,8 @@ class OfflineBookManager:
         try:
             with open(self._get_book_path(k), 'r') as f: return json.load(f).get(u)
         except: return None
-
+import redis
+import threading
 class CacheManager:
     def __init__(self, ttl=604800): 
         self.cache_dir = CACHE_DIR
@@ -493,7 +494,100 @@ class DownloadManager:
         if data and data['content']: return data['content'], data.get('title', '')
         raise Exception("Empty")
     def get_status(self, tid): return self.downloads.get(tid)
+class ClusterManager:
+    def __init__(self):
+        self.redis_url = os.environ.get('REDIS_URL')
+        self.use_redis = False
+        self.nodes = {} # 内存 fallback
+        self.r = None
 
+        if self.redis_url:
+            try:
+                self.r = redis.from_url(self.redis_url, decode_responses=True)
+                self.r.ping() # 测试连接
+                self.use_redis = True
+                print("✅ [Cluster] Redis 连接成功，集群模式已就绪")
+            except Exception as e:
+                print(f"⚠️ [Cluster] Redis 连接失败 ({e})，降级为内存模式")
+        else:
+            print("ℹ️ [Cluster] 未配置 REDIS_URL，使用内存模式 (重启后节点信息丢失)")
+
+    def update_heartbeat(self, node_data, real_ip):
+        """更新节点心跳"""
+        uuid = node_data['uuid']
+        
+        # 自动补全 IP：如果 Worker 没配 public_url，用 real_ip 补全
+        if not node_data['config'].get('public_url'):
+            port = node_data['config']['port']
+            node_data['config']['public_url'] = f"http://{real_ip}:{port}"
+        
+        # 记录最后更新时间
+        node_data['last_seen'] = time.time()
+
+        if self.use_redis:
+            try:
+                # 30秒过期
+                self.r.setex(f"crawler:node:{uuid}", 30, json.dumps(node_data))
+            except Exception as e:
+                print(f"❌ [Cluster] Redis Write Error: {e}")
+        else:
+            self.nodes[uuid] = node_data
+
+    def get_active_nodes(self):
+        """获取活跃节点列表"""
+        nodes = []
+        if self.use_redis:
+            try:
+                keys = self.r.keys("crawler:node:*")
+                if keys:
+                    vals = self.r.mget(keys)
+                    nodes = [json.loads(v) for v in vals if v]
+            except Exception as e:
+                print(f"❌ [Cluster] Redis Read Error: {e}")
+                # 如果 Redis 挂了，返回空列表，触发本地降级
+                return []
+        else:
+            # 内存模式：清理超过 30 秒没心跳的节点
+            now = time.time()
+            self.nodes = {k: v for k, v in self.nodes.items() if now - v['last_seen'] < 30}
+            nodes = list(self.nodes.values())
+        
+        return nodes
+
+    def select_best_node(self, target_url=None):
+        """智能路由算法"""
+        nodes = self.get_active_nodes()
+        if not nodes: return None
+
+        best_node = None
+        highest_score = -9999
+
+        for node in nodes:
+            cfg = node['config']
+            status = node['status']
+            
+            # 1. 满载检查
+            if status['current_tasks'] >= cfg['max_tasks']: continue
+
+            # 2. 评分: (剩余负载% * 50) + (空闲CPU% * 0.5)
+            load_score = ((cfg['max_tasks'] - status['current_tasks']) / cfg['max_tasks']) * 50
+            cpu_score = (100 - status['cpu']) * 0.5
+            score = load_score + cpu_score
+            
+            # 3. 区域亲和性 (简单规则)
+            if target_url:
+                is_cn = any(x in target_url for x in ['.cn', 'biqu', 'gongzicp'])
+                if is_cn and cfg['region'] == 'CN': score *= 1.5
+                if not is_cn and cfg['region'] == 'GLOBAL': score *= 1.5
+
+            if score > highest_score:
+                highest_score = score
+                best_node = node
+
+        return best_node
+
+# 实例化
+cluster_manager = ClusterManager()
 # ==========================================
 # 6. 初始化所有单例
 # ==========================================

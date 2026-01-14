@@ -19,6 +19,46 @@ from curl_cffi import requests as cffi_requests, CurlHttpVersion
 # ==========================================
 # 0. 辅助工具 (中文数字转阿拉伯数字 - 增强版)
 # ==========================================
+def _remote_request(endpoint, payload):
+    # 1. 检查是否启用了分布式模式 (有 Token 即启用)
+    sys_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
+    if not sys_token: return None
+
+    # 2. [修复] 延迟导入，防止循环引用
+    try:
+        from managers import cluster_manager
+    except ImportError:
+        return None
+
+    # 3. 获取最佳节点
+    node = cluster_manager.select_best_node(target_url=payload.get('url'))
+    
+    if not node:
+        # print("[Cluster] 无可用节点，降级本地") 
+        return None
+    
+    # 4. 发起请求
+    target = f"{node['config']['public_url']}/api/crawl/{endpoint}"
+    
+    try:
+        import requests
+        # print(f"[Cluster] ⚡ 路由 -> {node['config']['name']}")
+        resp = requests.post(
+            target,
+            json=payload,
+            headers={'Authorization': f"Bearer {sys_token}"},
+            timeout=30
+        )
+        if resp.status_code == 200:
+            res_json = resp.json()
+            if res_json.get('status') == 'success':
+                return res_json.get('data')
+        # print(f"[Cluster] 节点返回错误: {resp.text}")
+    except Exception as e:
+        print(f"[Cluster] 连接节点失败: {e}")
+        
+    return None
+
 def parse_chapter_id(text):
     if not text: return -1
     text = text.strip()
@@ -1645,6 +1685,8 @@ class NovelCrawler:
         """
         fast_mode=True: 不重试，超时短，专用于换源检测
         """
+        remote_data = _remote_request('toc', {'url': toc_url})
+        if remote_data: return remote_data
         # 参数设置
         if toc_url.startswith('epub:'):
             return None
@@ -1731,6 +1773,8 @@ class NovelCrawler:
         }
 
     def run(self, url):
+        remote_data = _remote_request('run', {'url': url})
+        if remote_data: return remote_data
         print(f"\n[Run] 🚀 开始处理 URL: {url}")
         
         # 1. 尝试匹配插件
