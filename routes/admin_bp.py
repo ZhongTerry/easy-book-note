@@ -183,6 +183,7 @@ def get_cluster_status():
                     node_data = json.loads(raw_data)
                     node_data['last_seen'] = time.time()
                     managers.cluster_manager.r.setex(key, 60, json.dumps(node_data))
+        print("node_uuid", node_uuid)
     except Exception as e:
         # 不要在取任务时因为心跳逻辑崩了而阻断任务
         print(f"Keep-alive error: {e}")
