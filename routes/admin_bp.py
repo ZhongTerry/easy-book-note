@@ -6,12 +6,62 @@ from shared import CACHE_DIR, USER_DATA_DIR, admin_required
 from managers import role_manager, get_db, cluster_manager
 from datetime import datetime, timedelta
 import json
-
+import managers
 # 创建蓝图
 admin_bp = Blueprint('admin', __name__)
 # routes/admin_bp.py
 # routes/admin_bp.py
+# routes/admin_bp.py
+import uuid
+import json
+import time
 
+# ... (原有代码)
+
+# === [新增] 任务队列接口 (Pull 模式) ===
+
+@admin_bp.route('/api/cluster/fetch_task', methods=['POST'])
+def fetch_task():
+    """Worker 来取任务"""
+    # 1. 鉴权
+    auth_header = request.headers.get('Authorization')
+    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    if auth_header != f"Bearer {system_token}":
+        return jsonify({"status": "error"}), 403
+
+    # 2. 尝试从 Redis 队列弹出一个任务
+    # 使用 Redis 的 RPOP (右出)
+    try:
+        if managers.cluster_manager.use_redis:
+            # 这里的 queue_key 需要和 spider_core 里一致
+            task_json = managers.cluster_manager.r.rpop("crawler:queue:pending")
+            if task_json:
+                return jsonify({"status": "success", "task": json.loads(task_json)})
+    except Exception as e:
+        print(f"Redis Error: {e}")
+        
+    return jsonify({"status": "empty"}) # 没任务，让 Worker 歇会儿
+
+@admin_bp.route('/api/cluster/submit_result', methods=['POST'])
+def submit_result():
+    """Worker 交作业"""
+    # 1. 鉴权 (同上)
+    auth_header = request.headers.get('Authorization')
+    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    if auth_header != f"Bearer {system_token}":
+        return jsonify({"status": "error"}), 403
+
+    data = request.json
+    task_id = data.get('task_id')
+    result = data.get('result') # 爬到的数据
+    
+    if task_id and managers.cluster_manager.use_redis:
+        # 3. 把结果写入结果队列，供 spider_core 读取
+        # 设置 60秒过期，防止垃圾堆积
+        key = f"crawler:result:{task_id}"
+        managers.cluster_manager.r.setex(key, 60, json.dumps(result))
+        
+    return jsonify({"status": "success"})
 @admin_bp.route('/api/cluster/heartbeat', methods=['POST'])
 def handle_heartbeat():
     auth_header = request.headers.get('Authorization')

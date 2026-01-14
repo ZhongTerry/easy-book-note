@@ -19,46 +19,60 @@ from curl_cffi import requests as cffi_requests, CurlHttpVersion
 # ==========================================
 # 0. 辅助工具 (中文数字转阿拉伯数字 - 增强版)
 # ==========================================
-def _remote_request(endpoint, payload):
-    # 1. 检查是否启用了分布式模式 (有 Token 即启用)
-    sys_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
-    if not sys_token: return None
+# spider_core.py
 
-    # 2. [修复] 延迟导入，防止循环引用
+def _remote_request(endpoint, payload):
+    # 1. 检查 Redis 是否可用
+    # 既然是 Pull 模式，必须依赖 Redis 来解耦
+    sys_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
     try:
         from managers import cluster_manager
-    except ImportError:
-        return None
+        if not cluster_manager.use_redis:
+            return None # 没 Redis 只能跑本地
+    except: return None
 
-    # 3. 获取最佳节点
-    node = cluster_manager.select_best_node(target_url=payload.get('url'))
+    # 2. 构造任务
+    import uuid
+    import json
+    import time
     
-    if not node:
-        # print("[Cluster] 无可用节点，降级本地") 
-        return None
-    
-    # 4. 发起请求
-    target = f"{node['config']['public_url']}/api/crawl/{endpoint}"
-    
+    task_id = str(uuid.uuid4())
+    task_package = {
+        "id": task_id,
+        "endpoint": endpoint, # 'run' 或 'toc'
+        "payload": payload,
+        "timestamp": time.time()
+    }
+
+    # 3. 写入队列 (LPUSH 左进)
     try:
-        import requests
-        # print(f"[Cluster] ⚡ 路由 -> {node['config']['name']}")
-        resp = requests.post(
-            target,
-            json=payload,
-            headers={'Authorization': f"Bearer {sys_token}"},
-            timeout=30
-        )
-        if resp.status_code == 200:
-            res_json = resp.json()
-            if res_json.get('status') == 'success':
-                return res_json.get('data')
-        # print(f"[Cluster] 节点返回错误: {resp.text}")
+        cluster_manager.r.lpush("crawler:queue:pending", json.dumps(task_package))
+        # print(f"[Cluster] 任务已入队: {task_id}")
     except Exception as e:
-        print(f"[Cluster] 连接节点失败: {e}")
-        
-    return None
+        print(f"[Cluster] Redis 写入失败: {e}")
+        return None
 
+    # 4. 阻塞等待结果 (轮询 Redis)
+    # 最多等 25 秒 (留 5 秒给 Flask 超时)
+    start_time = time.time()
+    result_key = f"crawler:result:{task_id}"
+    
+    while time.time() - start_time < 25:
+        res = cluster_manager.r.get(result_key)
+        if res:
+            # 拿到结果了！
+            cluster_manager.r.delete(result_key) # 读完即焚
+            json_res = json.loads(res)
+            
+            if json_res.get('status') == 'success':
+                return json_res.get('data')
+            else:
+                return None # 远程报错
+        
+        time.sleep(0.2) # 每 0.2 秒看一眼
+
+    print(f"[Cluster] ⚠️ 任务 {task_id} 等待超时 (无 Worker 接单)")
+    return None
 def parse_chapter_id(text):
     if not text: return -1
     text = text.strip()
