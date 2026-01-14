@@ -44,19 +44,47 @@ def fetch_task():
         node_uuid = req_data.get('uuid')
         
         if node_uuid and managers.cluster_manager.use_redis:
-            # 延长该节点的 Redis Key 过期时间 (续命)
             key = f"crawler:node:{node_uuid}"
-            if managers.cluster_manager.r.exists(key):
-                managers.cluster_manager.r.expire(key, 60) # 续命 60 秒
-                # 还可以顺手更新一下 last_seen
-                raw_data = managers.cluster_manager.r.get(key)
-                if raw_data:
-                    node_data = json.loads(raw_data)
-                    node_data['last_seen'] = time.time()
-                    managers.cluster_manager.r.setex(key, 60, json.dumps(node_data))
-        print("node_uuid", node_uuid)
+            
+            # 尝试从 Redis 读取现有数据
+            raw_data = managers.cluster_manager.r.get(key)
+            
+            if raw_data:
+                # 情况 A: 节点已存在，更新时间戳并续命
+                node_data = json.loads(raw_data)
+                node_data['last_seen'] = time.time()
+                # 重新写入，并重置 60 秒过期
+                managers.cluster_manager.r.setex(key, 60, json.dumps(node_data))
+            else:
+                # 情况 B: 节点不存在 (新节点或已过期)，必须创建一个基础记录！
+                # 注意：这里我们拿不到 CPU/内存信息，只能填默认值
+                # 但至少能让它在 status 列表里显示出来
+                
+                # 尝试获取 IP
+                if request.headers.getlist("X-Forwarded-For"):
+                    real_ip = request.headers.getlist("X-Forwarded-For")[0]
+                else:
+                    real_ip = request.remote_addr
+                
+                new_node_data = {
+                    "uuid": node_uuid,
+                    "config": {
+                        "name": f"Unknown-{node_uuid[:4]}", # 暂时不知道名字
+                        "region": "GLOBAL",
+                        "max_tasks": 20,
+                        "public_url": f"http://{real_ip}:12345", # 猜测一个
+                        "port": 12345
+                    },
+                    "status": {
+                        "cpu": 0, "memory": 0, "current_tasks": 0,
+                        "timestamp": time.time()
+                    },
+                    "last_seen": time.time()
+                }
+                managers.cluster_manager.r.setex(key, 60, json.dumps(new_node_data))
+                print(f"➕ [Cluster] 被动注册新节点: {node_uuid}")
+
     except Exception as e:
-        # 不要在取任务时因为心跳逻辑崩了而阻断任务
         print(f"Keep-alive error: {e}")
     return jsonify({"status": "empty"}) # 没任务，让 Worker 歇会儿
 

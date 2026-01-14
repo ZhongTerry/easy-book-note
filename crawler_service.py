@@ -138,7 +138,8 @@ def worker_loop():
     
     while True:
         try:
-            payload = {"uuid": NODE_NAME}
+            # payload = {"uuid": NODE_NAME}
+            # print(payload)
             resp = session.post(f"{MASTER_URL}/api/cluster/fetch_task", json=payload, timeout=10)
             
             if resp.status_code == 403:
