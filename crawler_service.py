@@ -4,69 +4,86 @@ import requests
 import json
 import logging
 import sys
-import psutil # 确保安装了 psutil
-from unittest.mock import MagicMock
-from dotenv import load_dotenv
 import threading
-load_dotenv('config.env') 
+import psutil
+import uuid
+from dotenv import load_dotenv
 
-# === [黑魔法：环境模拟] ===
-mock_managers = MagicMock()
-def configure_mock_manager(manager_mock):
-    manager_mock.get.return_value = None
-    manager_mock.get_val.return_value = None
-    manager_mock.get_chapter.return_value = None
-    manager_mock.get_toc.return_value = None
-    manager_mock.find.return_value = None
-    manager_mock.load.return_value = {}
-    manager_mock.get_all.return_value = []
-    manager_mock.list_all.return_value = {}
-    manager_mock.get_history.return_value = []
+# 加载配置
+load_dotenv('config.env')
 
-known_managers = ['cache', 'db', 'offline_manager', 'booklist_manager', 'tag_manager', 'stats_manager', 'history_manager', 'update_manager', 'role_manager']
-for name in known_managers:
-    configure_mock_manager(getattr(mock_managers, name))
+# =========================================================
+# 🛡️ 核心修复：构建一个“哑巴”环境 (Dumb Mock)
+# =========================================================
+# 定义一个只会返回 None 的空类，防止 MagicMock 自动生成对象
+class EmptyObject:
+    def __getattr__(self, name):
+        return None  # 访问任何属性都返回 None
+    def __call__(self, *args, **kwargs):
+        return None  # 调用任何方法都返回 None
+    def __getitem__(self, key):
+        return None
+    def get(self, key, default=None):
+        return default
+    def __bool__(self):
+        return False # 关键：让 if obj: 判断为 False
 
-sys.modules['managers'] = mock_managers
-sys.modules['managers.cache'] = mock_managers.cache
-for name in known_managers:
-    sys.modules[f'managers.{name}'] = getattr(mock_managers, name)
+# 1. 创建假的 managers
+class MockManagers:
+    # 模拟 cache
+    class MockCache:
+        def get(self, *args): return None  # 核心：强制未命中缓存
+        def set(self, *args): pass         # 核心：假装写入缓存，实际啥也不干
+        def cleanup_expired(self): pass
+        def _get_filename(self, *args): return "/tmp/dummy"
 
+    # 模拟 db
+    class MockDB:
+        def get_val(self, *args): return None
+        def list_all(self): return {"data": {}}
+        def update(self, *args): return {"status": "success"}
+    
+    # 模拟其他组件 (全部返回 EmptyObject)
+    class MockGeneric(EmptyObject):
+        def load(self, *args): return {} # load 返回空字典，方便迭代
+        def get_all(self, *args): return {}
+
+    # 实例化
+    cache = MockCache()
+    db = MockDB()
+    offline_manager = MockGeneric()
+    booklist_manager = MockGeneric()
+    tag_manager = MockGeneric()
+    stats_manager = MockGeneric()
+    history_manager = MockGeneric()
+    update_manager = MockGeneric()
+    role_manager = MockGeneric()
+
+    # 模拟配置变量 (防止报错)
+    USER_DATA_DIR = "/tmp"
+    CACHE_DIR = "/tmp"
+    DL_DIR = "/tmp"
+    # 模拟 cluster_manager (防止延迟导入报错)
+    cluster_manager = MockGeneric() 
+
+# 2. 强行注入系统模块
+# 这样 spider_core 导入 managers 时，拿到的就是我们定义的这个“哑巴”对象
+sys.modules['managers'] = MockManagers()
+sys.modules['managers.cache'] = MockManagers.cache
+
+# =========================================================
+# 导入爬虫核心 (必须在注入之后)
+# =========================================================
 from spider_core import crawler_instance as crawler, searcher
 
 # === 配置区 ===
 MASTER_URL = os.environ.get("MASTER_URL", "https://book.ztrztr.top")
 AUTH_TOKEN = os.environ.get("REMOTE_CRAWLER_TOKEN", "my-secret-token-888")
 NODE_NAME = os.environ.get("NODE_NAME", "Worker-Node")
-# 导入 uuid
-import uuid
-# 全局 UUID (启动生成一次，不变)
 NODE_UUID = str(uuid.uuid4())
 
-# 任务计数锁
 CURRENT_TASKS = 0
-TASK_LOCK = threading.Lock() # 需要导入 threading
-import threading
-
-# === [新增] 状态生成辅助函数 ===
-def get_node_payload():
-    """生成完整的节点状态数据"""
-    return {
-        "uuid": NODE_UUID,
-        "config": {
-            "name": NODE_CONFIG['name'],
-            "region": NODE_CONFIG['region'],
-            "max_tasks": NODE_CONFIG['max_tasks'],
-            "public_url": NODE_CONFIG['public_url'],
-            "port": NODE_CONFIG['port']
-        },
-        "status": {
-            "cpu": psutil.cpu_percent(interval=None),
-            "memory": psutil.virtual_memory().percent,
-            "current_tasks": CURRENT_TASKS,
-            "timestamp": time.time()
-        }
-    }
+TASK_LOCK = threading.Lock()
 
 # 补全配置对象
 NODE_CONFIG = {
@@ -77,41 +94,78 @@ NODE_CONFIG = {
     "port": int(os.environ.get("PORT", 12345))
 }
 
+def get_node_payload():
+    return {
+        "uuid": NODE_UUID,
+        "config": NODE_CONFIG,
+        "status": {
+            "cpu": psutil.cpu_percent(interval=None),
+            "memory": psutil.virtual_memory().percent,
+            "current_tasks": CURRENT_TASKS,
+            "timestamp": time.time()
+        }
+    }
 
 def do_work(task):
-    global CURRENT_TASKS 
+    """执行具体任务"""
+    global CURRENT_TASKS # 声明全局变量
     endpoint = task['endpoint']
     payload = task['payload']
     url = payload.get('url')
+    
     print(f"⚡ [Job] 执行: {endpoint} -> {url}")
+    
     result = {"status": "failed", "msg": "Unknown error"}
     
     with TASK_LOCK: CURRENT_TASKS += 1
     try:
         data = None
-        if endpoint == 'run': data = crawler.run(url)
-        elif endpoint == 'toc': data = crawler.get_toc(url)
-        elif endpoint == 'search': data = searcher.search_bing(payload.get('keyword'))
+        # 强制爬取逻辑
+        if endpoint == 'run':
+            data = crawler.run(url)
+        elif endpoint == 'toc':
+            data = crawler.get_toc(url)
+        elif endpoint == 'search':
+            data = searcher.search_bing(payload.get('keyword'))
             
         if data:
-            # 简单清洗防序列化错误
-            try: json.dumps(data)
-            except: data = str(data)
+            # 数据清洗：防止任何非标对象混入
+            # 有时候 soup 对象或者 lxml 对象会混进来，导致 JSON 序列化失败
+            try:
+                json.dumps(data) 
+            except TypeError:
+                print("⚠️ 检测到不可序列化数据，执行深度清洗...")
+                data = clean_data(data)
+
             result = {"status": "success", "data": data}
         else:
-            result = {"status": "failed", "msg": "Empty data"}
+            result = {"status": "failed", "msg": "Empty data from crawler"}
+            
     except Exception as e:
         print(f"❌ 任务出错: {e}")
+        # import traceback; traceback.print_exc() # 调试用
         result = {"status": "error", "msg": str(e)}
     finally:
         with TASK_LOCK: CURRENT_TASKS -= 1
         
     return result
 
+def clean_data(obj):
+    """递归清洗数据，把所有非基本类型转为字符串"""
+    if isinstance(obj, dict):
+        return {k: clean_data(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [clean_data(v) for v in obj]
+    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    else:
+        return str(obj) 
+
 def worker_loop():
-    print(f"🚀 Worker [{NODE_NAME}] 启动 (Hybrid Mode)")
+    print(f"🚀 Worker [{NODE_NAME}] 启动 (Pull Mode)")
     print(f"🆔 UUID: {NODE_UUID}")
     print(f"🔗 连接 Master: {MASTER_URL}")
+    print(f"🛡️  Mock层已就绪，全量实时爬取")
     
     session = requests.Session()
     session.headers.update({
@@ -121,17 +175,13 @@ def worker_loop():
     
     while True:
         try:
-            # === [核心修复] 取任务时，携带完整的状态包 ===
-            # 这样即使心跳线程挂了，只要还在取任务，状态就能更新
-            full_payload = get_node_payload()
-            
-            resp = session.post(f"{MASTER_URL}/api/cluster/fetch_task", json=full_payload, timeout=10)
+            # 取任务 (带状态)
+            resp = session.post(f"{MASTER_URL}/api/cluster/fetch_task", json=get_node_payload(), timeout=10)
             
             if resp.status_code == 403:
                 print("🔒 Token 错误")
                 time.sleep(10); continue
             
-            # 处理响应
             try:
                 res_json = resp.json()
             except:
@@ -140,22 +190,24 @@ def worker_loop():
             if res_json.get('status') == 'success':
                 task = res_json['task']
                 crawl_result = do_work(task)
+                
+                # 回传结果
                 session.post(f"{MASTER_URL}/api/cluster/submit_result", json={
-                    "task_id": task['id'], "result": crawl_result
+                    "task_id": task['id'],
+                    "result": crawl_result
                 })
                 print(f"✅ [Job] 完成")
             else:
-                time.sleep(1) 
+                time.sleep(1) # 空闲等待
                 
         except Exception as e:
             print(f"⚠️ 网络波动: {e}")
             time.sleep(5)
 
-# 保留心跳线程作为空闲时的保活手段
+# 独立心跳线程 (作为补充)
 def heartbeat_thread():
     while True:
         try:
-            # 复用同一个 payload 生成函数
             requests.post(
                 f"{MASTER_URL}/api/cluster/heartbeat", 
                 json=get_node_payload(),
