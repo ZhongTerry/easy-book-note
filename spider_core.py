@@ -137,6 +137,8 @@ def _smart_convert_int(s):
 # ==========================================
 # 1. 插件管理器
 # ==========================================
+# spider_core.py
+
 class AdapterManager:
     def __init__(self, folder="adapters"):
         self.folder = os.path.join(BASE_DIR, folder)
@@ -146,21 +148,77 @@ class AdapterManager:
 
     def load_plugins(self):
         self.adapters = []
+        print(f"📂 [AdapterManager] 扫描目录: {self.folder}")
+
         for f in os.listdir(self.folder):
             if f.endswith(".py") and f != "__init__.py":
+                file_path = os.path.join(self.folder, f)
+                module_name = f[:-3]
+                
                 try:
-                    spec = importlib.util.spec_from_file_location(f[:-3], os.path.join(self.folder, f))
+                    # 动态加载模块
+                    spec = importlib.util.spec_from_file_location(module_name, file_path)
                     mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)
+                    
+                    found_in_file = False
+                    
+                    # 遍历模块内所有属性
                     for n in dir(mod):
-                        obj = getattr(mod, n)
-                        if isinstance(obj, type) and "Adapter" in n: self.adapters.append(obj())
-                except: pass
-        print(f"[System] 已加载 {len(self.adapters)} 个站点适配插件")
+                        # 跳过内置属性
+                        if n.startswith('__'): continue
+                        
+                        # 1. 名字匹配 (必须包含 Adapter)
+                        if "Adapter" in n:
+                            obj = getattr(mod, n)
+                            
+                            # 调试日志：看看这个到底是啥
+                            # print(f"    🔎 [Debug] 检查 {n}: 类型={type(obj)}")
+
+                            # 2. 宽松检查：只要是可调用的 (类或函数)，且不是基础类型
+                            if callable(obj) and not isinstance(obj, (str, int, bool)):
+                                try:
+                                    # 尝试实例化
+                                    instance = obj()
+                                    
+                                    # 3. 鸭子类型检查：必须有 can_handle 方法
+                                    if hasattr(instance, 'can_handle'):
+                                        self.adapters.append(instance)
+                                        print(f"✅ [Adapter] 成功挂载: {n} (来自 {f})")
+                                        found_in_file = True
+                                    else:
+                                        # print(f"    ⚠️ {n} 缺少 can_handle 方法，跳过")
+                                        pass
+                                        
+                                except Exception as e:
+                                    # print(f"    ⚠️ 尝试实例化 {n} 失败: {e}")
+                                    pass
+                            else:
+                                # print(f"    ⚠️ {n} 不是可调用的类，跳过")
+                                pass
+                    
+                    if not found_in_file:
+                        # 只有当文件里一个都没找到时才警告
+                        # 很多时候文件里可能只有辅助类，所以这里可以忽略
+                        pass
+                        
+                except Exception as e:
+                    print(f"❌ [Adapter] 加载文件 {f} 崩溃: {e}")
+        
+        print(f"[AdapterManager] 插件扫描完成，共生效 {len(self.adapters)} 个适配器")
 
     def find_match(self, url):
+        print("url", url)
+        if not url: return None
         for a in self.adapters:
-            if hasattr(a, 'can_handle') and a.can_handle(url): return a
+            try:
+                print(url)
+                if a.can_handle(url): 
+                    print(f"🎯 适配器命中: {a.__class__.__name__}")
+                    return a
+            except: 
+                print("Err")
+                pass
         return None
 
 plugin_mgr = AdapterManager()
@@ -1700,7 +1758,6 @@ class NovelCrawler:
         fast_mode=True: 不重试，超时短，专用于换源检测
         """
         from managers import cache
-        
         if not toc_url.startswith('epub:'):
             cached_toc = cache.get(toc_url)
             if cached_toc:
@@ -1708,8 +1765,8 @@ class NovelCrawler:
                 return cached_toc
 
         # 1. 尝试远程集群
-        remote_data = _remote_request('toc', {'url': toc_url})
-        
+        # remote_data = _remote_request('toc', {'url': toc_url})
+        remote_data = {}
         if remote_data:
             print(f"[Crawler] 📥 远程目录获取成功，写入本地缓存")
             cache.set(toc_url, remote_data)
@@ -1720,7 +1777,9 @@ class NovelCrawler:
         timeout = 5 if fast_mode else 15
         retry = 1 if fast_mode else 3
 
+        print("fff", toc_url)
         adapter = plugin_mgr.find_match(toc_url)
+        print(adapter)
         if adapter: 
             # 注意：如果适配器里的 get_toc 调用了 _fetch_page_smart，
             # 我们需要修改适配器才能生效，或者我们在这里 monkey patch 一下？
@@ -1729,6 +1788,7 @@ class NovelCrawler:
             
             old_timeout = self.timeout
             self.timeout = timeout # 临时修改全局超时
+            print("ttt")
             try:
                 data = adapter.get_toc(self, toc_url)
             finally:

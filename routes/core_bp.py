@@ -246,6 +246,7 @@ def toc_page():
     
     if not data:
         data = crawler.get_toc(u)
+        print("getting data", u)
         if data:
             managers.cache.set(u, data)
     
