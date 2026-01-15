@@ -139,6 +139,25 @@ def submit_result():
         managers.cluster_manager.r.setex(key, 60, json.dumps(result))
         
     return jsonify({"status": "success"})
+@admin_bp.route('/api/admin/speedtest/start', methods=['POST'])
+@admin_required
+def start_speed_test():
+    url = request.json.get('url')
+    if not url: return jsonify({"status": "error", "msg": "URL required"})
+    
+    test_id = managers.cluster_manager.start_speed_test(url)
+    if not test_id:
+        return jsonify({"status": "error", "msg": "Redis unavailable"})
+        
+    return jsonify({"status": "success", "test_id": test_id})
+
+@admin_bp.route('/api/admin/speedtest/results/<test_id>')
+@admin_required
+def get_speed_test_results(test_id):
+    results = managers.cluster_manager.get_speed_test_results(test_id)
+    # 按延迟排序
+    results.sort(key=lambda x: x.get('latency', 9999))
+    return jsonify({"status": "success", "data": results})
 @admin_bp.route('/api/cluster/heartbeat', methods=['POST'])
 def handle_heartbeat():
     auth_header = request.headers.get('Authorization')
