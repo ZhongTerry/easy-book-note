@@ -165,13 +165,22 @@ def start_speed_test():
         
     return jsonify({"status": "success", "test_id": test_id})
 
+# src/routes/admin_bp.py
+
 @admin_bp.route('/api/admin/speedtest/results/<test_id>')
 @admin_required
 def get_speed_test_results(test_id):
-    results = managers.cluster_manager.get_speed_test_results(test_id)
-    # 按延迟排序
-    results.sort(key=lambda x: x.get('latency', 9999))
-    return jsonify({"status": "success", "data": results})
+    # 1. 获取包含元数据的完整结果 (这是一个字典)
+    # 格式: {'state': 'running', 'total': 5, 'data': [...]}
+    res = managers.cluster_manager.get_speed_test_results(test_id)
+    
+    # 2. [核心修复] 对内部的 'data' 列表进行排序
+    if 'data' in res and isinstance(res['data'], list):
+        res['data'].sort(key=lambda x: x.get('latency', 9999))
+        
+    # 3. 返回给前端
+    # 前端 JS (admin.html) 里的 const info = json.result; 对应这里的 res
+    return jsonify({"status": "success", "result": res})
 @admin_bp.route('/api/cluster/heartbeat', methods=['POST'])
 def handle_heartbeat():
     auth_header = request.headers.get('Authorization')
