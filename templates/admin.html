@@ -79,7 +79,100 @@
             </div>
         </div>
     </div>
+    <!-- admin.html -->
 
+<!-- 在 grid-3 下方或者合适的位置插入 -->
+<div class="p-card">
+    <h3>🚀 全网一键测速</h3>
+    <div style="display:flex; gap:10px; margin-bottom:15px;">
+        <input type="text" id="speedUrl" class="p-input" placeholder="输入测试 URL (例如 https://www.google.com)" value="https://www.baidu.com">
+        <button class="p-btn p-btn-primary" onclick="startSpeedTest()" id="btnSpeed">开始测速</button>
+    </div>
+    
+    <table class="p-table">
+        <thead>
+            <tr>
+                <th>节点名称</th>
+                <th>区域</th>
+                <th>HTTP 状态</th>
+                <th>耗时 (ms)</th>
+                <th>响应大小</th>
+            </tr>
+        </thead>
+        <tbody id="speedResults">
+            <tr><td colspan="5" style="text-align:center;color:#999">暂无测试数据</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+    let currentTestId = null;
+    let speedTimer = null;
+
+    async function startSpeedTest() {
+        const url = document.getElementById('speedUrl').value;
+        if(!url) return alert("请输入 URL");
+        
+        const btn = document.getElementById('btnSpeed');
+        btn.disabled = true;
+        btn.innerText = "下发指令中...";
+        document.getElementById('speedResults').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#666">⏳ 等待节点响应...</td></tr>';
+        
+        try {
+            const res = await fetch('/api/admin/speedtest/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({url})
+            });
+            const json = await res.json();
+            
+            if (json.status === 'success') {
+                currentTestId = json.test_id;
+                btn.innerText = "测速中...";
+                // 开始轮询结果
+                if(speedTimer) clearInterval(speedTimer);
+                speedTimer = setInterval(pollSpeedResults, 1000);
+            } else {
+                alert("启动失败: " + json.msg);
+                btn.disabled = false;
+                btn.innerText = "开始测速";
+            }
+        } catch(e) {
+            alert("网络错误");
+            btn.disabled = false;
+        }
+    }
+
+    async function pollSpeedResults() {
+        if(!currentTestId) return;
+        
+        const res = await fetch(`/api/admin/speedtest/results/${currentTestId}`);
+        const json = await res.json();
+        
+        if (json.status === 'success') {
+            const list = json.data;
+            if (list.length > 0) {
+                document.getElementById('speedResults').innerHTML = list.map(item => {
+                    let latencyColor = 'green';
+                    if (item.latency > 1000) latencyColor = 'orange';
+                    if (item.latency > 3000 || item.error) latencyColor = 'red';
+                    
+                    const statusDisplay = item.error ? `<span style="color:red">Error</span>` : `<span class="p-tag">${item.status_code}</span>`;
+                    
+                    return `
+                    <tr>
+                        <td><b>${item.worker_name}</b></td>
+                        <td><span class="p-badge">${item.region}</span></td>
+                        <td>${statusDisplay}</td>
+                        <td style="color:${latencyColor}; font-weight:bold;">${item.latency} ms</td>
+                        <td>${(item.size/1024).toFixed(2)} KB</td>
+                    </tr>
+                    `;
+                }).join('');
+            }
+        }
+    }
+</script>
     <!-- 第二排：图表 -->
     <div class="stats-card" style="margin-bottom: 20px;">
         <h3>📈 全站阅读时长趋势 (最近30天)</h3>
