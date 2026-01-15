@@ -514,7 +514,66 @@ class ClusterManager:
     # managers.py -> ClusterManager 类
 
     # ... (前面的方法保持不变) ...
+    def record_latency(self, url, worker_uuid, latency_ms):
+        """
+        [新增] 按域名记录节点的延迟
+        Redis Key: crawler:latency:{domain}  (Hash结构)
+        """
+        if not self.use_redis or not url: return
+        
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc
+            if not domain: return
 
+            key = f"crawler:latency:{domain}"
+            
+            # 存入 Hash: {worker_uuid: latency_ms}
+            self.r.hset(key, worker_uuid, latency_ms)
+            
+            # 设置过期时间 (例如 7 天)，因为网络环境会变，老数据没意义
+            self.r.expire(key, 7 * 86400) 
+            
+            # print(f"[Cluster] 记录延迟: {domain} -> {worker_uuid} = {latency_ms}ms")
+        except Exception as e:
+            print(f"Latency save error: {e}")
+    def _get_speed_coefficient(self, latency):
+        """
+        [辅助] 将延迟毫秒数转换为分数系数 (您可以调整这里的公式)
+        """
+        if latency < 0: return 0.01   # 之前报错过，几乎屏蔽
+        if latency < 200: return 2.0  # 极速
+        if latency < 500: return 1.5  # 优秀
+        if latency < 1000: return 1.1 # 良好
+        if latency < 2000: return 0.9 # 及格
+        if latency < 5000: return 0.6 # 缓慢
+        return 0.3                    # 龟速
+    def get_speed_multiplier(self, url, worker_uuid):
+        """
+        [新增] 计算速度加权系数
+        """
+        if not self.use_redis or not url: return 1.0
+        
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc
+            
+            # 获取该节点的历史延迟
+            latency_str = self.r.hget(f"crawler:latency:{domain}", worker_uuid)
+            
+            if not latency_str: return 1.0 # 无记录，中立
+            
+            latency = int(latency_str)
+            
+            if latency < 0: return 0.1    # 之前报错过，极刑
+            if latency < 200: return 2.0  # 极速
+            if latency < 500: return 1.5  # 很快
+            if latency < 1000: return 1.2 # 还行
+            if latency < 2000: return 1.0 # 一般
+            if latency < 5000: return 0.8 # 有点慢
+            return 0.5                    # 太慢了
+            
+        except: return 1.0
     def start_speed_test(self, url):
         """发布测速广播 (带快照)"""
         if not self.use_redis: return None
@@ -661,33 +720,64 @@ class ClusterManager:
         return nodes
 
     def select_best_node(self, target_url=None):
-        """智能路由算法"""
+        """
+        [重构] 智能路由算法 (负载 + 区域 + 域名级速度)
+        """
         nodes = self.get_active_nodes()
         if not nodes: return None
 
         best_node = None
         highest_score = -9999
+        
+        # 预先提取域名
+        target_domain = None
+        if target_url:
+            try:
+                from urllib.parse import urlparse
+                target_domain = urlparse(target_url).netloc
+            except: pass
 
         for node in nodes:
             cfg = node['config']
             status = node['status']
+            uuid = node['uuid']
             
-            # 1. 满载检查
-            if status['current_tasks'] >= cfg['max_tasks']: continue
+            # 1. 熔断机制：满载不接客
+            if status['current_tasks'] >= cfg['max_tasks']: 
+                continue
 
-            # 2. 评分: (剩余负载% * 50) + (空闲CPU% * 0.5)
-            load_score = ((cfg['max_tasks'] - status['current_tasks']) / cfg['max_tasks']) * 50
-            cpu_score = (100 - status['cpu']) * 0.5
-            score = load_score + cpu_score
+            # 2. 基础资源分 (0~100)
+            # 逻辑：(1 - 负载率) * 100
+            load_ratio = status['current_tasks'] / cfg['max_tasks']
+            base_score = (1 - load_ratio) * 100
             
-            # 3. 区域亲和性 (简单规则)
+            # CPU 惩罚 (如果 CPU > 80%，分数大减)
+            if status['cpu'] > 80: base_score *= 0.5
+
+            # 3. 区域加权 (粗略筛选)
+            region_coef = 1.0
             if target_url:
-                is_cn = any(x in target_url for x in ['.cn', 'biqu', 'gongzicp'])
-                if is_cn and cfg['region'] == 'CN': score *= 1.5
-                if not is_cn and cfg['region'] == 'GLOBAL': score *= 1.5
+                is_cn_site = any(x in target_url for x in ['.cn', 'biqu', 'gongzicp'])
+                if is_cn and cfg['region'] == 'CN': region_coef = 1.2
+                if not is_cn and cfg['region'] == 'GLOBAL': region_coef = 1.2
+            
+            # 4. [核心] 域名级速度加权 (精细筛选)
+            speed_coef = 1.0
+            if target_domain and self.use_redis:
+                # 查 Redis: crawler:latency:www.google.com -> {uuid: 150}
+                latency_str = self.r.hget(f"crawler:latency:{target_domain}", uuid)
+                if latency_str:
+                    speed_coef = self._get_speed_coefficient(int(latency_str))
 
-            if score > highest_score:
-                highest_score = score
+            # === 最终得分公式 ===
+            # 资源分 * 区域系数 * 速度系数
+            final_score = base_score * region_coef * speed_coef
+            
+            # 调试日志 (开发时取消注释)
+            # print(f"Node: {cfg['name']} | Base: {base_score:.0f} | Reg: {region_coef} | Spd: {speed_coef} ({target_domain}) -> Final: {final_score:.1f}")
+
+            if final_score > highest_score:
+                highest_score = final_score
                 best_node = node
 
         return best_node

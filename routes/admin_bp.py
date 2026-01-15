@@ -116,8 +116,19 @@ def submit_result():
     result = data.get('result') # 爬到的数据
     
     if task_id and managers.cluster_manager.use_redis:
+        
         # 3. 把结果写入结果队列，供 spider_core 读取
         # 设置 60秒过期，防止垃圾堆积
+        if result.get('is_speedtest'):
+            worker_uuid = result.get('worker_uuid')
+            target_url = result.get('target')
+            # 提取延迟 (如果报错或超时，记为 -1)
+            latency = result.get('latency', 9999)
+            if result.get('error') or result.get('status_code') != 200:
+                latency = -1 
+            
+            # 存入数据库供下次路由使用
+            managers.cluster_manager.record_latency(target_url, worker_uuid, latency)
         if result.get('is_speedtest'):
             # 1. 检查是否超时 (5秒原则)
             # 读取该任务的元数据
