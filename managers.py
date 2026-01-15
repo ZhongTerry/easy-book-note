@@ -575,62 +575,63 @@ class ClusterManager:
             
         except: return 1.0
     def start_speed_test(self, url):
-        """发布测速广播 (带快照)"""
+        """发布测速广播"""
         if not self.use_redis: return None
         
         import uuid
         import time
         test_id = str(uuid.uuid4())
         
-        # 1. 获取当前在线节点列表 (快照)
-        active_nodes = self.get_active_nodes()
-        total_nodes = len(active_nodes)
-        
-        start_time = time.time()
-        
-        # 2. 构造广播指令
+        # 1. 存入指令
         cmd = {
             "id": test_id,
             "url": url,
-            "timestamp": start_time
+            "timestamp": time.time()
         }
         
-        # 3. 存储任务元数据 (用于判定结束)
-        # 存入: 总节点数、开始时间
+        # 存入元数据 (用于前端判断进度)
+        active_nodes = self.get_active_nodes()
         meta = {
-            "total": total_nodes,
-            "start_time": start_time,
+            "total": len(active_nodes),
+            "start_time": time.time(),
             "url": url
         }
         self.r.setex(f"crawler:speedtest:meta:{test_id}", 300, json.dumps(meta))
         
-        # 4. 发布广播 (Worker 看到这个会去执行)
+        # 2. 发布广播指令
         self.r.setex("crawler:cmd:speedtest", 60, json.dumps(cmd))
         
-        # 5. 清理旧数据
-        self.r.delete(f"crawler:speedtest:done:{test_id}")
+        # 3. [核心修复] 清理所有相关的 Redis Key
+        # dispatched: 记录已领任务的节点 (防止重复领)
+        # results: 记录结果数据
+        self.r.delete(f"crawler:speedtest:dispatched:{test_id}")
         self.r.delete(f"crawler:speedtest:results:{test_id}")
         
         return test_id
-
     def should_dispatch_speedtest(self, worker_uuid):
-        """检查是否需要给该 Worker 下发测速任务"""
+        """检查并分发测速任务 (防抖动版)"""
         if not self.use_redis: return None
         
-        # 1. 检查是否有正在进行的测速指令
+        # 1. 获取全局指令
         cmd_raw = self.r.get("crawler:cmd:speedtest")
         if not cmd_raw: return None
         
         cmd = json.loads(cmd_raw)
         test_id = cmd['id']
         
-        # 2. 检查该 Worker 是否已经在“已完成名单”里
-        # 使用 Redis Set (SISMEMBER)
-        if self.r.sismember(f"crawler:speedtest:done:{test_id}", worker_uuid):
-            return None # 已经测过了，不用再发
+        # 2. [核心修复] 检查“已下发”名单，而不是“已完成”名单
+        dispatch_key = f"crawler:speedtest:dispatched:{test_id}"
+        
+        # 如果该节点已经在“已下发”名单里，直接忽略
+        if self.r.sismember(dispatch_key, worker_uuid):
+            return None 
+            
+        # 3. [核心修复] 立即标记为“已下发” (先斩后奏)
+        # 在任务发出的一瞬间就标记，防止 Worker 还没测完又来请求
+        self.r.sadd(dispatch_key, worker_uuid)
+        self.r.expire(dispatch_key, 60) # 60秒后自动过期
             
         return cmd
-
     def get_speed_test_results(self, test_id):
         """获取结果并判断状态"""
         if not self.use_redis: return {"status": "error"}
