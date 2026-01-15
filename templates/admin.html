@@ -106,51 +106,66 @@
 </div>
 
 <script>
-    let currentTestId = null;
-    let speedTimer = null;
+    // admin.html <script> 部分
 
-    async function startSpeedTest() {
-        const url = document.getElementById('speedUrl').value;
-        if(!url) return alert("请输入 URL");
+let currentTestId = null;
+let speedTimer = null;
+
+async function startSpeedTest() {
+    const url = document.getElementById('speedUrl').value;
+    if(!url) return alert("请输入 URL");
+    
+    const btn = document.getElementById('btnSpeed');
+    btn.disabled = true;
+    btn.innerText = "准备中...";
+    document.getElementById('speedResults').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#666">⏳ 指令已下发，等待响应...</td></tr>';
+    
+    try {
+        const res = await fetch('/api/admin/speedtest/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url})
+        });
+        const json = await res.json();
         
-        const btn = document.getElementById('btnSpeed');
-        btn.disabled = true;
-        btn.innerText = "下发指令中...";
-        document.getElementById('speedResults').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#666">⏳ 等待节点响应...</td></tr>';
-        
-        try {
-            const res = await fetch('/api/admin/speedtest/start', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({url})
-            });
-            const json = await res.json();
-            
-            if (json.status === 'success') {
-                currentTestId = json.test_id;
-                btn.innerText = "测速中...";
-                // 开始轮询结果
-                if(speedTimer) clearInterval(speedTimer);
-                speedTimer = setInterval(pollSpeedResults, 1000);
-            } else {
-                alert("启动失败: " + json.msg);
-                btn.disabled = false;
-                btn.innerText = "开始测速";
-            }
-        } catch(e) {
-            alert("网络错误");
-            btn.disabled = false;
+        if (json.status === 'success') {
+            currentTestId = json.test_id;
+            // 开始轮询
+            if(speedTimer) clearInterval(speedTimer);
+            speedTimer = setInterval(pollSpeedResults, 800); // 0.8秒刷新一次
+        } else {
+            alert("启动失败: " + json.msg);
+            resetSpeedBtn();
         }
+    } catch(e) {
+        alert("网络错误");
+        resetSpeedBtn();
     }
+}
 
-    async function pollSpeedResults() {
-        if(!currentTestId) return;
-        
+function resetSpeedBtn() {
+    const btn = document.getElementById('btnSpeed');
+    btn.disabled = false;
+    btn.innerText = "开始测速";
+    if(speedTimer) clearInterval(speedTimer);
+}
+
+async function pollSpeedResults() {
+    if(!currentTestId) return;
+    
+    try {
         const res = await fetch(`/api/admin/speedtest/results/${currentTestId}`);
         const json = await res.json();
         
         if (json.status === 'success') {
-            const list = json.data;
+            const info = json.result; // 注意：后端包了一层 result
+            const list = info.data;
+            const btn = document.getElementById('btnSpeed');
+            
+            // 更新按钮状态
+            btn.innerText = `测速中 (${info.received}/${info.total}) ${info.elapsed}s`;
+            
+            // 渲染表格
             if (list.length > 0) {
                 document.getElementById('speedResults').innerHTML = list.map(item => {
                     let latencyColor = 'green';
@@ -165,13 +180,37 @@
                         <td><span class="p-badge">${item.region}</span></td>
                         <td>${statusDisplay}</td>
                         <td style="color:${latencyColor}; font-weight:bold;">${item.latency} ms</td>
-                        <td>${(item.size/1024).toFixed(2)} KB</td>
+                        <td>${item.size ? (item.size/1024).toFixed(2) + ' KB' : '-'}</td>
                     </tr>
                     `;
                 }).join('');
             }
+
+            // === [核心] 结束判定 ===
+            if (info.state === 'finished' || info.state === 'timeout') {
+                clearInterval(speedTimer);
+                btn.disabled = false;
+                
+                if (info.state === 'finished') {
+                    btn.innerText = `✅ 完成 (${info.received}/${info.total})`;
+                    btn.className = "p-btn p-btn-success";
+                } else {
+                    btn.innerText = `⚠️ 超时结束 (${info.received}/${info.total})`;
+                    btn.className = "p-btn p-btn-warning";
+                }
+                
+                // 3秒后恢复按钮原始状态
+                setTimeout(() => {
+                    btn.innerText = "开始测速";
+                    btn.className = "p-btn p-btn-primary";
+                }, 3000);
+            }
         }
+    } catch(e) {
+        console.error(e);
+        // resetSpeedBtn(); // 遇到网络错误先别急着停，可能只是抖动
     }
+}
 </script>
     <!-- 第二排：图表 -->
     <div class="stats-card" style="margin-bottom: 20px;">

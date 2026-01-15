@@ -119,6 +119,20 @@ def submit_result():
         # 3. 把结果写入结果队列，供 spider_core 读取
         # 设置 60秒过期，防止垃圾堆积
         if result.get('is_speedtest'):
+            # 1. 检查是否超时 (5秒原则)
+            # 读取该任务的元数据
+            meta_json = managers.cluster_manager.r.get(f"crawler:speedtest:meta:{task_id}")
+            if meta_json:
+                meta = json.loads(meta_json)
+                start_time = meta.get('start_time', 0)
+                # 超过 5.5 秒 (给0.5秒网络宽容度) 拒收
+                if time.time() - start_time > 5.5:
+                    print(f"⏱️ [Cluster] 拒收超时测速结果: {task_id}")
+                    return jsonify({"status": "ignored", "msg": "Timeout"})
+            else:
+                # 元数据没了说明任务早过期了
+                return jsonify({"status": "ignored", "msg": "Expired"})
+        if result.get('is_speedtest'):
             worker_uuid = result.get('worker_uuid')
             
             # 1. 标记该 Worker 已完成 (加入黑名单，防止重复发任务)

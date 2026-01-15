@@ -516,21 +516,39 @@ class ClusterManager:
     # ... (前面的方法保持不变) ...
 
     def start_speed_test(self, url):
-        """发布全网测速广播"""
+        """发布测速广播 (带快照)"""
         if not self.use_redis: return None
         
         import uuid
         import time
         test_id = str(uuid.uuid4())
+        
+        # 1. 获取当前在线节点列表 (快照)
+        active_nodes = self.get_active_nodes()
+        total_nodes = len(active_nodes)
+        
+        start_time = time.time()
+        
+        # 2. 构造广播指令
         cmd = {
             "id": test_id,
             "url": url,
-            "timestamp": time.time()
+            "timestamp": start_time
         }
-        # 1. 设置广播指令 (60秒后过期)
+        
+        # 3. 存储任务元数据 (用于判定结束)
+        # 存入: 总节点数、开始时间
+        meta = {
+            "total": total_nodes,
+            "start_time": start_time,
+            "url": url
+        }
+        self.r.setex(f"crawler:speedtest:meta:{test_id}", 300, json.dumps(meta))
+        
+        # 4. 发布广播 (Worker 看到这个会去执行)
         self.r.setex("crawler:cmd:speedtest", 60, json.dumps(cmd))
         
-        # 2. 清理旧数据
+        # 5. 清理旧数据
         self.r.delete(f"crawler:speedtest:done:{test_id}")
         self.r.delete(f"crawler:speedtest:results:{test_id}")
         
@@ -555,15 +573,45 @@ class ClusterManager:
         return cmd
 
     def get_speed_test_results(self, test_id):
-        """获取测速结果列表"""
-        if not self.use_redis: return []
-        raw = self.r.hgetall(f"crawler:speedtest:results:{test_id}")
+        """获取结果并判断状态"""
+        if not self.use_redis: return {"status": "error"}
+        
+        # 1. 获取元数据
+        meta_json = self.r.get(f"crawler:speedtest:meta:{test_id}")
+        if not meta_json:
+            return {"state": "expired", "data": []}
+            
+        meta = json.loads(meta_json)
+        total_expected = meta['total']
+        start_time = meta['start_time']
+        
+        # 2. 获取当前结果
+        raw_results = self.r.hgetall(f"crawler:speedtest:results:{test_id}")
         results = []
-        for k, v in raw.items():
-            try:
-                results.append(json.loads(v))
+        for k, v in raw_results.items():
+            try: results.append(json.loads(v))
             except: pass
-        return results
+            
+        # 3. 核心：判断状态
+        # 状态：running (进行中), finished (全收齐), timeout (超时)
+        
+        current_count = len(results)
+        elapsed = time.time() - start_time
+        
+        if current_count >= total_expected:
+            state = "finished" # 全齐了
+        elif elapsed > 5:
+            state = "timeout"  # 超过5秒了，强制结束
+        else:
+            state = "running"
+            
+        return {
+            "state": state,
+            "total": total_expected,
+            "received": current_count,
+            "elapsed": round(elapsed, 1),
+            "data": results
+        }
     def update_heartbeat(self, node_data, real_ip):
         """更新节点心跳"""
         uuid = node_data['uuid']
