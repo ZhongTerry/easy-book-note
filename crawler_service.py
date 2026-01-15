@@ -105,7 +105,62 @@ def get_node_payload():
             "timestamp": time.time()
         }
     }
-
+def run_speedtest_async(task):
+    """
+    [新增] 独立的测速线程函数
+    """
+    payload = task['payload']
+    target_url = payload.get('url')
+    print(f"🚀 [SpeedTest] 后台启动测速: {target_url}")
+    
+    try:
+        import time
+        t_start = time.time()
+        status_code = 0
+        error_msg = ""
+        size = 0
+        
+        try:
+            # 使用 requests 直接测速 (不走 curl_cffi，更轻量)
+            # 设置短超时，防止卡线程
+            r = requests.get(
+                target_url, 
+                headers={'User-Agent': 'Mozilla/5.0'}, 
+                timeout=10, 
+                verify=False
+            )
+            status_code = r.status_code
+            size = len(r.content)
+        except Exception as req_e:
+            error_msg = str(req_e)
+        
+        latency = int((time.time() - t_start) * 1000)
+        
+        # 构造结果
+        result = {
+            "is_speedtest": True,
+            "worker_uuid": NODE_UUID,
+            "worker_name": NODE_CONFIG['name'],
+            "region": NODE_CONFIG['region'],
+            "target": target_url,
+            "latency": latency,
+            "status_code": status_code,
+            "size": size,
+            "error": error_msg
+        }
+        
+        # 独立回传结果 (不走主循环)
+        # 重新建立一个 session 也可以，或者直接 post
+        requests.post(
+            f"{MASTER_URL}/api/cluster/submit_result",
+            json={"task_id": task['id'], "result": result},
+            headers={"Authorization": f"Bearer {AUTH_TOKEN}"},
+            timeout=5
+        )
+        # print(f"✅ [SpeedTest] 结果已回传: {latency}ms")
+        
+    except Exception as e:
+        print(f"❌ [SpeedTest] 线程出错: {e}")
 def do_work(task):
     """执行具体任务"""
     global CURRENT_TASKS # 声明全局变量
@@ -189,16 +244,27 @@ def worker_loop():
             
             if res_json.get('status') == 'success':
                 task = res_json['task']
-                crawl_result = do_work(task)
+                task_id = task['id']
+                endpoint = task.get('endpoint') # Master 传回来的 endpoint
                 
-                # 回传结果
-                session.post(f"{MASTER_URL}/api/cluster/submit_result", json={
-                    "task_id": task['id'],
-                    "result": crawl_result
-                })
-                print(f"✅ [Job] 完成")
+                # === [核心逻辑] 分流处理 ===
+                if endpoint == 'speedtest':
+                    # 1. 如果是测速任务，启动线程，立即继续循环
+                    threading.Thread(target=run_speedtest_async, args=(task,)).start()
+                    # 不 sleep，立即去取下一个可能的爬虫任务
+                    continue 
+                else:
+                    # 2. 如果是爬虫任务，阻塞执行 (防止并发过高)
+                    crawl_result = do_work(task)
+                    
+                    # 回传
+                    session.post(f"{MASTER_URL}/api/cluster/submit_result", json={
+                        "task_id": task_id,
+                        "result": crawl_result
+                    })
+                    print(f"✅ [Job] 任务 {task_id} 完成")
             else:
-                time.sleep(1) # 空闲等待
+                time.sleep(1) # 没任务，休息
                 
         except Exception as e:
             print(f"⚠️ 网络波动: {e}")

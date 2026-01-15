@@ -42,6 +42,17 @@ def fetch_task():
     try:
         req_data = request.json or {}
         node_uuid = req_data.get('uuid')
+        if node_uuid and managers.cluster_manager.use_redis:
+            speed_cmd = managers.cluster_manager.should_dispatch_speedtest(node_uuid)
+            if speed_cmd:
+                return jsonify({
+                    "status": "success", 
+                    "task": {
+                        "id": speed_cmd['id'],
+                        "endpoint": "speedtest",
+                        "payload": {"url": speed_cmd['url']}
+                    }
+                })
         if req_data.get('uuid') and 'config' in req_data and 'status' in req_data:
             # 如果有完整数据，直接调用管理器进行全量更新！
             # 这样 CPU、内存、任务数都会被写入 Redis
@@ -107,6 +118,23 @@ def submit_result():
     if task_id and managers.cluster_manager.use_redis:
         # 3. 把结果写入结果队列，供 spider_core 读取
         # 设置 60秒过期，防止垃圾堆积
+        if result.get('is_speedtest'):
+            worker_uuid = result.get('worker_uuid')
+            
+            # 1. 标记该 Worker 已完成 (加入黑名单，防止重复发任务)
+            managers.cluster_manager.r.sadd(f"crawler:speedtest:done:{task_id}", worker_uuid)
+            
+            # 2. 存入结果 Hash 表
+            managers.cluster_manager.r.hset(
+                f"crawler:speedtest:results:{task_id}", 
+                worker_uuid, 
+                json.dumps(result)
+            )
+            # 结果保留 5 分钟
+            managers.cluster_manager.r.expire(f"crawler:speedtest:results:{task_id}", 300)
+            managers.cluster_manager.r.expire(f"crawler:speedtest:done:{task_id}", 300)
+            
+            return jsonify({"status": "success"})
         key = f"crawler:result:{task_id}"
         managers.cluster_manager.r.setex(key, 60, json.dumps(result))
         

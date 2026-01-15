@@ -511,7 +511,59 @@ class ClusterManager:
                 print(f"⚠️ [Cluster] Redis 连接失败 ({e})，降级为内存模式")
         else:
             print("ℹ️ [Cluster] 未配置 REDIS_URL，使用内存模式 (重启后节点信息丢失)")
+    # managers.py -> ClusterManager 类
 
+    # ... (前面的方法保持不变) ...
+
+    def start_speed_test(self, url):
+        """发布全网测速广播"""
+        if not self.use_redis: return None
+        
+        import uuid
+        import time
+        test_id = str(uuid.uuid4())
+        cmd = {
+            "id": test_id,
+            "url": url,
+            "timestamp": time.time()
+        }
+        # 1. 设置广播指令 (60秒后过期)
+        self.r.setex("crawler:cmd:speedtest", 60, json.dumps(cmd))
+        
+        # 2. 清理旧数据
+        self.r.delete(f"crawler:speedtest:done:{test_id}")
+        self.r.delete(f"crawler:speedtest:results:{test_id}")
+        
+        return test_id
+
+    def should_dispatch_speedtest(self, worker_uuid):
+        """检查是否需要给该 Worker 下发测速任务"""
+        if not self.use_redis: return None
+        
+        # 1. 检查是否有正在进行的测速指令
+        cmd_raw = self.r.get("crawler:cmd:speedtest")
+        if not cmd_raw: return None
+        
+        cmd = json.loads(cmd_raw)
+        test_id = cmd['id']
+        
+        # 2. 检查该 Worker 是否已经在“已完成名单”里
+        # 使用 Redis Set (SISMEMBER)
+        if self.r.sismember(f"crawler:speedtest:done:{test_id}", worker_uuid):
+            return None # 已经测过了，不用再发
+            
+        return cmd
+
+    def get_speed_test_results(self, test_id):
+        """获取测速结果列表"""
+        if not self.use_redis: return []
+        raw = self.r.hgetall(f"crawler:speedtest:results:{test_id}")
+        results = []
+        for k, v in raw.items():
+            try:
+                results.append(json.loads(v))
+            except: pass
+        return results
     def update_heartbeat(self, node_data, real_ip):
         """更新节点心跳"""
         uuid = node_data['uuid']
