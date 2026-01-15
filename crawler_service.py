@@ -135,7 +135,7 @@ def run_speedtest_async(task):
             error_msg = str(req_e)
         
         latency = int((time.time() - t_start) * 1000)
-        
+        print("[latency]", latency)
         # 构造结果
         result = {
             "is_speedtest": True,

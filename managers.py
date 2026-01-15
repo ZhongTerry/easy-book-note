@@ -538,6 +538,7 @@ class ClusterManager:
         except Exception as e:
             print(f"Latency save error: {e}")
     def _get_speed_coefficient(self, latency):
+        return 1
         """
         [辅助] 将延迟毫秒数转换为分数系数 (您可以调整这里的公式)
         """
