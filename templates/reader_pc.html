@@ -560,6 +560,33 @@ body.dark-mode .share-text-area textarea:focus {
     /* 原有样式保持不变... */
     cursor: default; /* 避免鼠标在遮罩层上显示为手型，暗示点击关闭 */
 }
+/* 优化下拉框和输入框，使其在设置面板中更协调 */
+#settingsModal select.p-input, 
+#settingsModal input.p-input {
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: #f9f9f9;
+    font-size: 13px;
+    outline: none;
+    transition: all 0.2s;
+}
+
+#settingsModal select.p-input:focus,
+#settingsModal input.p-input:focus {
+    background: #fff;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+}
+
+/* 黑暗模式适配 */
+body.dark-mode #settingsModal select.p-input,
+body.dark-mode #settingsModal input.p-input {
+    background: #2a2a2a;
+    border-color: #444;
+    color: #ccc;
+}
     </style>
     <script>
         // === [核心修复] 智能关闭 Modal ===
@@ -660,6 +687,37 @@ body.dark-mode .share-text-area textarea:focus {
             </div>
         </div>
         <div class="setting-row">
+            <span class="setting-label">字体选择</span>
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <!-- 字体下拉框 -->
+                <select id="fontSelector" class="p-input" onchange="changeFontFamily(this.value)" style="flex: 1;">
+                    <optgroup label="默认预设">
+                        <option value='-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'>系统默认</option>
+                        <option value='"PingFang SC", "Microsoft YaHei", sans-serif'>微软雅黑</option>
+                        <option value='"Songti SC", "Noto Serif SC", "SimSun", serif'>宋体/明体</option>
+                        <option value='"KaiTi", "KaiTi_GB2312", serif'>楷体</option>
+                    </optgroup>
+                    <!-- 本地扫描到的字体会追加到这里 -->
+                </select>
+                
+                <!-- 方案B按钮 -->
+                <button class="btn-action" onclick="detectLocalFonts()" title="扫描本地安装的字体" style="width: auto; padding: 0 10px;">
+                    🔍 扫描
+                </button>
+            </div>
+
+            <!-- 方案C：网络字体 -->
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" id="webFontUrl" class="p-input" placeholder="粘贴字体文件(.woff2/.ttf) 或 CSS 链接" style="font-size: 12px;">
+                <button class="btn-action" onclick="loadCustomWebFont()" style="width: auto; padding: 0 15px; white-space: nowrap;">
+                    ☁️ 加载
+                </button>
+            </div>
+            <div style="font-size: 11px; color: #999; margin-top: 4px;">
+                提示：支持 <a href="https://github.com/lxgw/LxgwWenKai" target="_blank" style="color:#666;text-decoration:underline;">霞鹜文楷</a> 等开源字体直链
+            </div>
+        </div>
+        <div class="setting-row">
             <span class="setting-label">自定义背景</span>
             <div class="color-setting-grid">
                 <div class="color-input-wrapper">
@@ -757,6 +815,128 @@ body.dark-mode .share-text-area textarea:focus {
     function getPageIndex(url) {
         const match = url.match(/_(\d+)\./);
         return match ? parseInt(match[1]) : 1;
+    }
+    function changeFontFamily(fontName) {
+        document.documentElement.style.setProperty('--font-main', fontName);
+        localStorage.setItem('pc_reader_font', fontName);
+        
+        // 如果这是一个自定义的网络字体 URL，我们也存一下 URL，方便下次自动加载
+        // (逻辑：如果 fontName 不在预设列表里，可能就是 Web Font)
+        const selector = document.getElementById('fontSelector');
+        if (selector.value === fontName && fontName.startsWith("'CustomWebFont'")) {
+             // Web Font 的持久化在 loadCustomWebFont 里单独处理
+        }
+    }
+
+    // 2. 方案B：扫描本地字体 (Chrome/Edge/Electron)
+    async function detectLocalFonts() {
+        if (!('queryLocalFonts' in window)) {
+            showToast("❌ 当前浏览器不支持访问本地字体");
+            return;
+        }
+
+        const btn = document.querySelector('button[onclick="detectLocalFonts()"]');
+        btn.innerText = "⏳";
+        
+        try {
+            // 请求权限并获取列表
+            const availableFonts = await window.queryLocalFonts();
+            const selector = document.getElementById('fontSelector');
+            
+            // 去重
+            const uniqueFonts = [...new Set(availableFonts.map(f => f.family))].sort();
+            
+            // 创建分组
+            let group = document.getElementById('local-font-group');
+            if (!group) {
+                group = document.createElement('optgroup');
+                group.id = 'local-font-group';
+                group.label = "本地已安装";
+                selector.appendChild(group);
+            }
+            group.innerHTML = ''; // 清空旧的
+
+            // 填充下拉框
+            uniqueFonts.forEach(family => {
+                const option = document.createElement('option');
+                option.value = `"${family}", sans-serif`;
+                option.innerText = family;
+                group.appendChild(option);
+            });
+
+            showToast(`✅ 扫描到 ${uniqueFonts.length} 款字体`);
+            btn.innerText = "🔍";
+            
+        } catch (err) {
+            console.error(err);
+            showToast("❌ 扫描取消或失败");
+            btn.innerText = "🔍";
+        }
+    }
+
+    // 3. 方案D：加载网络字体 (智能识别 CSS 或 文件)
+    async function loadCustomWebFont(savedUrl = null) {
+        const urlInput = document.getElementById('webFontUrl');
+        const url = savedUrl || urlInput.value.trim();
+        
+        if (!url) return showToast("请输入字体链接");
+
+        const btn = document.querySelector('button[onclick="loadCustomWebFont()"]');
+        if(!savedUrl) btn.innerText = "⏳";
+
+        try {
+            const fontName = 'CustomWebFont-' + Date.now(); // 生成唯一字体名
+            
+            // 情况 A: 输入的是 CSS 文件 (如 Google Fonts, lxgw static css)
+            if (url.endsWith('.css') || url.includes('googleapis.com')) {
+                const link = document.createElement('link');
+                link.href = url;
+                link.rel = 'stylesheet';
+                document.head.appendChild(link);
+                // CSS 加载较难回调，我们假设它会覆盖 font-family，
+                // 但实际上 CSS 链接通常需要用户知道 CSS 里定义的 font-family 名字。
+                // 为了简化，我们建议用户使用 .woff2/.ttf 直链，
+                // 或者我们可以尝试解析 CSS (太复杂)。
+                // 妥协方案：提示用户输入 CSS 里的字体名，或者我们只支持直链文件。
+                
+                // 这里我们做个“直链文件”的优先支持。如果是 CSS，我们只是引入它，
+                // 用户仍需在下拉框选择（如果知道名字）。
+                // 但为了体验，我们主要支持 font file。
+                showToast("CSS 已注入，请确保你知道字体名称");
+            } 
+            // 情况 B: 输入的是字体文件 (.woff2, .ttf, .otf)
+            else {
+                const fontFace = new FontFace('UserWebFont', `url(${url})`);
+                await fontFace.load();
+                document.fonts.add(fontFace);
+                
+                // 添加到下拉框并选中
+                const selector = document.getElementById('fontSelector');
+                let group = document.getElementById('web-font-group');
+                if (!group) {
+                    group = document.createElement('optgroup');
+                    group.id = 'web-font-group';
+                    group.label = "网络字体";
+                    selector.prepend(group); // 放在最前
+                }
+                
+                // 清理旧的 WebFont 选项
+                group.innerHTML = `<option value="'UserWebFont', sans-serif">当前网络字体</option>`;
+                selector.value = "'UserWebFont', sans-serif";
+                
+                // 应用
+                changeFontFamily("'UserWebFont', sans-serif");
+                
+                // 持久化 URL
+                localStorage.setItem('pc_reader_webfont_url', url);
+                if(!savedUrl) showToast("✅ 网络字体已应用");
+            }
+        } catch (e) {
+            console.error(e);
+            if(!savedUrl) showToast("❌ 字体加载失败: " + e.message);
+        } finally {
+            if(!savedUrl) btn.innerText = "☁️ 加载";
+        }
     }
     // 判断是否应该同步
     function shouldSync(remoteUrl, remoteMeta) {
@@ -925,7 +1105,35 @@ body.dark-mode .share-text-area textarea:focus {
         url.searchParams.set('force', 'true');
         window.location.href = url.toString();
     }
+    const originalInitPrefs = initPreferences; // 保存旧引用
+    initPreferences = function() {
+        // 调用旧的初始化 (字号、夜间模式)
+        if(originalInitPrefs) originalInitPrefs();
 
+        // 恢复保存的字体
+        const savedFont = localStorage.getItem('pc_reader_font');
+        const selector = document.getElementById('fontSelector');
+        
+        // 尝试恢复网络字体
+        const savedWebFontUrl = localStorage.getItem('pc_reader_webfont_url');
+        if (savedWebFontUrl) {
+            // 如果上次用的是网络字体，先静默加载
+            loadCustomWebFont(savedWebFontUrl);
+            // 这里 loadCustomWebFont 内部会设置 selector.value
+        } else if (savedFont) {
+            // 普通字体，直接设置
+            // 注意：如果 savedFont 是本地扫描的字体，下拉框里可能还没有这个选项
+            // 我们可以动态加一个“上次使用的”选项，防止显示空白
+            if (![...selector.options].some(o => o.value === savedFont)) {
+                const opt = document.createElement('option');
+                opt.value = savedFont;
+                opt.innerText = savedFont.replace(/"/g, '').split(',')[0];
+                selector.add(opt);
+            }
+            selector.value = savedFont;
+            document.documentElement.style.setProperty('--font-main', savedFont);
+        }
+    };
     // 设置相关
     function initPreferences() {
         const fs = parseInt(localStorage.getItem('pc_reader_fs')) || 19;
