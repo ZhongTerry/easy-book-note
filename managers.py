@@ -249,68 +249,20 @@ class IsolatedStatsManager(BaseJsonManager):
 # ==========================================
 # managers.py 中的 IsolatedDB 类 (替换原有的)
 
+# managers.py -> IsolatedDB 类 (完整替换)
+
+# managers.py -> IsolatedDB 类 (完整替换)
+
+# managers.py -> IsolatedDB 类 (完全替换)
+
 class IsolatedDB:
     def _get_db_conn(self):
-        # 这是一个辅助方法，用于非 Flask 请求上下文（如后台线程）获取连接
-        # 在 web 请求中应优先使用 get_db()
         username = session.get('user', {}).get('username', 'default_user')
         db_path = os.path.join(USER_DATA_DIR, f"{username}.sqlite")
         conn = sqlite3.connect(db_path)
         return conn
-    # managers.py -> IsolatedDB 类中
 
-    def rename_key(self, old_key, new_key):
-        if not old_key or not new_key: return {"status": "error", "message": "Key cannot be empty"}
-        u = get_current_user()
-        
-        try:
-            with get_db() as conn:
-                # 1. 检查新 Key 是否已存在
-                exists = conn.execute("SELECT 1 FROM user_books WHERE username=? AND book_key=?", (u, new_key)).fetchone()
-                if exists:
-                    return {"status": "error", "message": f"目标 Key [{new_key}] 已存在"}
-
-                # 2. 更新主表 (user_books)
-                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
-                
-                # 3. 更新影子元数据 (key:meta)
-                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", 
-                           (f"{new_key}:meta", u, f"{old_key}:meta"))
-                
-                # 4. 更新历史版本表 (book_history)
-                conn.execute("UPDATE book_history SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
-                
-                conn.commit()
-
-            # 5. 更新 JSON 模块中的引用 (Tags 和 Updates)
-            # 处理标签
-            tags_data = tag_manager.load(u)
-            if old_key in tags_data:
-                tags_data[new_key] = tags_data.pop(old_key)
-                tag_manager.save(tags_data, u)
-            
-            # 处理追更状态
-            updates_data = update_manager.load(u)
-            if old_key in updates_data:
-                updates_data[new_key] = updates_data.pop(old_key)
-                update_manager.save(updates_data, u)
-
-            # 6. 处理书单 (Booklists)
-            bl_data = booklist_manager.load(u)
-            changed = False
-            for lid in bl_data:
-                for b in bl_data[lid].get('books', []):
-                    if b['key'] == old_key:
-                        b['key'] = new_key
-                        changed = True
-            if changed:
-                booklist_manager.save(bl_data, u)
-
-            return {"status": "success", "message": f"已将 [{old_key}] 重命名为 [{new_key}]"}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
     def _ensure_history_table(self):
-        """确保历史记录表存在"""
         try:
             with get_db() as conn:
                 conn.execute('''CREATE TABLE IF NOT EXISTS book_history (
@@ -323,17 +275,252 @@ class IsolatedDB:
                 conn.commit()
         except: pass
 
-    def add_version(self, key, value):
-        """添加一个历史版本，并保留最近 5 条"""
-        self._ensure_history_table()
+    # === 1. 迁移逻辑 (启动时运行) ===
+    def migrate_legacy_data(self):
+        """将旧的纯文本 URL 转换为 JSON 对象"""
+        print("[DB] 检查数据结构版本...")
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT username, book_key, value FROM user_books")
+                rows = cursor.fetchall()
+                
+                count = 0
+                for username, key, val in rows:
+                    if not val or key.startswith('@') or key.endswith(':meta'): continue
+                    
+                    # 检查是否已经是 JSON
+                    is_json = False
+                    try:
+                        d = json.loads(val)
+                        if isinstance(d, dict) and 'url' in d: is_json = True
+                    except: pass
+                    
+                    if not is_json:
+                        # 迁移：纯字符串 -> JSON
+                        new_data = json.dumps({
+                            "url": val,
+                            "cover": "",
+                            "updated_at": int(time.time())
+                        }, ensure_ascii=False)
+                        cursor.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (new_json, username, key))
+                        count += 1
+                
+                conn.commit()
+                if count > 0: print(f"[DB] ✅ 已迁移 {count} 条旧数据为 JSON 格式")
+        except Exception as e:
+            print(f"[DB] 迁移检查跳过: {e}")
+
+    # === 2. 核心写入逻辑 (自动包装) ===
+    def insert(self, key, value):
+        if not key: return {"status": "error", "message": "Key cannot be empty"}
+        u = get_current_user()
+        
+        # 智能包装：不管传入什么，最终存入数据库的一定是 JSON 字符串
+        final_json = ""
+        
+        if isinstance(value, dict):
+            # 传入的是字典，直接转 JSON
+            final_json = json.dumps(value, ensure_ascii=False)
+        else:
+            # 传入的是字符串 (兼容旧逻辑)，包装成 {"url": "..."}
+            # 先试探一下是不是已经是 JSON 串
+            try:
+                temp = json.loads(value)
+                if isinstance(temp, dict) and 'url' in temp:
+                    final_json = value # 已经是标准格式
+                else:
+                    raise ValueError()
+            except:
+                # 确实是纯 URL 字符串
+                final_json = json.dumps({
+                    "url": value,
+                    "updated_at": int(time.time())
+                }, ensure_ascii=False)
+
+        try:
+            with get_db() as conn:
+                conn.execute("INSERT OR REPLACE INTO user_books (username, book_key, value) VALUES (?, ?, ?)", (u, key, final_json))
+                conn.commit()
+            
+            # 返回给前端的数据，为了兼容，只返回 URL (或者根据前端需求调整)
+            # 这里我们返回包装后的对象，因为 insert 通常是 API 调用，返回详细点没问题
+            return {"status": "success", "message": f"Saved: {key}", "data": {key: final_json}}
+        except Exception as e: return {"status": "error", "message": str(e)}
+
+    def update(self, key, value):
+        """
+        更新逻辑：先读出旧 JSON，合并新字段，再存入。
+        这样更新 URL 不会把封面弄丢。
+        """
+        u = get_current_user()
+        try:
+            # 获取数据库里的原始 JSON 字符串
+            conn = get_db()
+            row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
+            
+            current_data = {}
+            if row and row[0]:
+                try: current_data = json.loads(row[0])
+                except: current_data = {"url": row[0]} # 旧数据兼容
+            
+            # 合并新值
+            if isinstance(value, dict):
+                current_data.update(value)
+            else:
+                # 传入的是字符串，默认更新 URL
+                current_data['url'] = value
+            
+            current_data['updated_at'] = int(time.time())
+            
+            # 写入
+            final_json = json.dumps(current_data, ensure_ascii=False)
+            conn.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (final_json, u, key))
+            conn.commit()
+            return {"status": "success", "message": f"Updated: {key}"}
+        except Exception as e:
+            # 如果出错尝试直接插入
+            return self.insert(key, value)
+
+    # === 3. 核心读取逻辑 (自动解包 - 兼容旧接口) ===
+    def get_val(self, key):
+        """
+        [关键兼容] 
+        虽然数据库存的是 JSON，但为了不让 core_bp.py 报错，
+        这个方法默认只返回 URL 字符串！
+        """
+        full_data = self.get_full_data(key) # 获取完整字典
+        if full_data:
+            return full_data.get('url') # 只返回 URL 字符串
+        return None
+
+    def get_full_data(self, key):
+        """
+        [新接口] 获取完整的元数据 (URL + 封面 + 作者)
+        供未来 UI 使用
+        """
+        u = get_current_user()
+        try:
+            conn = get_db()
+            row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
+            if row and row[0]:
+                try:
+                    data = json.loads(row[0])
+                    if isinstance(data, dict): return data
+                    return {"url": row[0]} # 兼容旧数据
+                except:
+                    return {"url": row[0]} # 兼容旧数据
+            return None
+        except: return None
+
+    # === 4. 列表查询 (自动解包) ===
+    def list_all(self):
+        """
+        返回 {key: url_string} 格式
+        确保 index.html 不需要改一行代码就能跑
+        """
+        u = get_current_user()
+        try:
+            conn = get_db()
+            cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND book_key NOT LIKE '@%' ORDER BY updated_at DESC", (u,))
+            
+            result = {}
+            for row in cursor.fetchall():
+                k, v_str = row[0], row[1]
+                if k.endswith(':meta'): continue
+                
+                # 解包逻辑
+                try:
+                    obj = json.loads(v_str)
+                    if isinstance(obj, dict):
+                        result[k] = obj.get('url', '') # 只拿 URL
+                    else:
+                        result[k] = v_str
+                except:
+                    result[k] = v_str
+            
+            return {"status": "success", "data": result}
+        except Exception as e: return {"status": "error", "message": str(e)}
+
+    def find(self, term):
+        """同样保持返回 {key: url} 格式"""
+        u = get_current_user()
+        try:
+            t = f'%{term}%'
+            conn = get_db()
+            cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND (book_key LIKE ? OR value LIKE ?)", (u, t, t))
+            
+            result = {}
+            for row in cursor.fetchall():
+                k, v_str = row[0], row[1]
+                if k.endswith(':meta'): continue
+                
+                try:
+                    obj = json.loads(v_str)
+                    if isinstance(obj, dict):
+                        result[k] = obj.get('url', '')
+                    else:
+                        result[k] = v_str
+                except:
+                    result[k] = v_str
+            
+            return {"status": "success", "data": result}
+        except Exception as e: return {"status": "error", "message": str(e)}
+
+    # === 其他方法保持不变 ===
+    def remove(self, key):
         u = get_current_user()
         try:
             with get_db() as conn:
-                # 1. 插入新记录
+                conn.execute("DELETE FROM user_books WHERE username=? AND book_key=?", (u, key))
+                conn.commit()
+            return {"status": "success", "message": f"Removed: {key}"}
+        except Exception as e: return {"status": "error", "message": str(e)}
+
+    def rename_key(self, old_key, new_key):
+        # 复用原代码
+        if not old_key or not new_key: return {"status": "error", "message": "Key cannot be empty"}
+        u = get_current_user()
+        try:
+            with get_db() as conn:
+                exists = conn.execute("SELECT 1 FROM user_books WHERE username=? AND book_key=?", (u, new_key)).fetchone()
+                if exists: return {"status": "error", "message": f"目标 Key [{new_key}] 已存在"}
+                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
+                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", (f"{new_key}:meta", u, f"{old_key}:meta"))
+                conn.execute("UPDATE book_history SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
+                conn.commit()
+            
+            tags_data = tag_manager.load(u)
+            if old_key in tags_data:
+                tags_data[new_key] = tags_data.pop(old_key)
+                tag_manager.save(tags_data, u)
+            
+            updates_data = update_manager.load(u)
+            if old_key in updates_data:
+                updates_data[new_key] = updates_data.pop(old_key)
+                update_manager.save(updates_data, u)
+
+            bl_data = booklist_manager.load(u)
+            changed = False
+            for lid in bl_data:
+                for b in bl_data[lid].get('books', []):
+                    if b['key'] == old_key:
+                        b['key'] = new_key
+                        changed = True
+            if changed: booklist_manager.save(bl_data, u)
+
+            return {"status": "success", "message": f"已将 [{old_key}] 重命名为 [{new_key}]"}
+        except Exception as e: return {"status": "error", "message": str(e)}
+
+    def rollback(self): return {"status": "error", "message": "Use version history instead"}
+    
+    def add_version(self, key, value):
+        self._ensure_history_table()
+        u = get_current_user()
+        # 注意：这里的 value 可能是包装好的 JSON，也可能是 URL，为了历史准确，直接存即可
+        try:
+            with get_db() as conn:
                 conn.execute("INSERT INTO book_history (username, book_key, value) VALUES (?, ?, ?)", (u, key, value))
-                
-                # 2. 清理旧记录 (只保留最近 5 条)
-                # 逻辑：找出该用户该书的所有记录ID，按时间倒序排列，跳过前5个，剩下的删掉
                 conn.execute(f'''
                     DELETE FROM book_history 
                     WHERE id IN (
@@ -350,66 +537,15 @@ class IsolatedDB:
             return False
 
     def get_versions(self, key):
-        """获取某本书的最近 5 个版本"""
         self._ensure_history_table()
         u = get_current_user()
         try:
             with get_db() as conn:
                 cursor = conn.execute("SELECT value, recorded_at FROM book_history WHERE username=? AND book_key=? ORDER BY recorded_at DESC", (u, key))
+                # 这里的 value 可能是 JSON，回退时需要注意
+                # 但既然我们 insert/update 都有自动包装，所以前端回传 JSON 字符串回来也是安全的
                 return [{"value": row[0], "time": row[1]} for row in cursor.fetchall()]
         except: return []
-
-    # === 原有的基础方法 (保持不变，但 update/insert 稍微调整逻辑在路由层做) ===
-    def insert(self, key, value):
-        if not key: return {"status": "error", "message": "Key cannot be empty"}
-        u = get_current_user()
-        try:
-            with get_db() as conn:
-                conn.execute("INSERT OR REPLACE INTO user_books (username, book_key, value) VALUES (?, ?, ?)", (u, key, value))
-                conn.commit()
-            return {"status": "success", "message": f"Saved: {key}", "data": {key: value}}
-        except Exception as e: return {"status": "error", "message": str(e)}
-
-    def update(self, key, value): return self.insert(key, value)
-
-    def remove(self, key):
-        u = get_current_user()
-        try:
-            with get_db() as conn:
-                conn.execute("DELETE FROM user_books WHERE username=? AND book_key=?", (u, key))
-                # 顺便把历史记录也删了？通常保留历史比较安全，这里选择保留
-                conn.commit()
-            return {"status": "success", "message": f"Removed: {key}"}
-        except Exception as e: return {"status": "error", "message": str(e)}
-
-    def list_all(self):
-        u = get_current_user()
-        try:
-            conn = get_db()
-            cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND book_key NOT LIKE '@%' ORDER BY updated_at DESC", (u,))
-            data = {row[0]: row[1] for row in cursor.fetchall()}
-            return {"status": "success", "data": data}
-        except Exception as e: return {"status": "error", "message": str(e)}
-
-    def find(self, term):
-        u = get_current_user()
-        try:
-            t = f'%{term}%'
-            conn = get_db()
-            cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND (book_key LIKE ? OR value LIKE ?)", (u, t, t))
-            data = {row[0]: row[1] for row in cursor.fetchall()}
-            return {"status": "success", "data": data}
-        except Exception as e: return {"status": "error", "message": str(e)}
-
-    def get_val(self, key):
-        u = get_current_user()
-        try:
-            conn = get_db()
-            row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
-            return row[0] if row else None
-        except: return None
-    
-    def rollback(self): return {"status": "error", "message": "Use version history instead"}
 # ==========================================
 # 5. 文件/缓存管理
 # ==========================================
