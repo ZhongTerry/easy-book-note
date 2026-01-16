@@ -784,58 +784,54 @@ class SearchHelper:
         print(f"\n[Search] 🚀 启动全网并发聚合搜索: {keyword}")
         start_time = time.time()
         
-        # 1. 定义参赛选手 (所有搜索引擎一起上)
+        # 1. 定义参赛选手
+        # _do_direct_source_search 会自动加载 search_plugins 里的所有插件
+        # 包括我们刚写的 fanqie_local_source 和之前的 sxg_source
         search_funcs = [
-            self._do_direct_source_search,
-            self._do_so_search,             # 360 (主力)
-            # self._do_baidu_search,          # 百度 (互补)
-            # self.search,
-              # 直连 (兜底+高质量)
-            # self._do_bing_search            # Bing (国际源)
+            self._do_direct_source_search, # 插件大军 (番茄、书香阁等)
+            self._do_so_search,            # 360 (主力)
+            self._do_bing_cn_search        # Bing CN (辅助)
         ]
 
-        # 如果有代理，把 DDG 也加上
-        # if self.proxies:
-            # search_funcs.insert(0, self._do_ddg_search)
-
         all_results = []
-        seen_urls = set()  # 用于 URL 去重
+        seen_urls = set()  # URL 去重
         
-        # 2. 开启线程池，最大并发数 = 引擎数量
-        # 注意：这里不仅搜索引擎并发，内部解析真实链接也是并发的(嵌套并发)，速度极快
+        # 2. 并发执行
         with ThreadPoolExecutor(max_workers=len(search_funcs)) as exe:
-            # 提交所有搜索任务
             future_to_name = {
                 exe.submit(func, keyword): func.__name__ 
                 for func in search_funcs
             }
             
-            # 3. 收集结果 (谁先回来谁先上榜，或者等全部回来)
             for future in as_completed(future_to_name):
-                engine_name = future_to_name[future]
                 try:
                     results = future.result()
                     if results:
-                        print(f"  [Aggregator] {engine_name} 贡献了 {len(results)} 条结果")
-                        
                         for item in results:
-                            url = item['url']
-                            # 简单去重逻辑 (去掉协议头和尾部斜杠进行比对)
-                            clean_url = url.replace('https://', '').replace('http://', '').rstrip('/')
-                            
+                            # 简单去重
+                            clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
                             if clean_url not in seen_urls:
                                 seen_urls.add(clean_url)
                                 all_results.append(item)
-                                
-                except Exception as e:
-                    print(f"  [Aggregator] {engine_name} 异常: {e}")
+                except Exception: pass
 
-        # 4. 结果排序优化 (可选)
-        # 目前是按“谁快谁排前面”的自然顺序。
-        # 如果你想让直连源 (XBiquge) 始终排在前面，可以在这里对 all_results sort 一下
-        # 例如: all_results.sort(key=lambda x: 0 if 'XBiquge' in x['source'] else 1)
+        # === 3. [关键修改] 结果优先级排序 ===
+        # 优先级规则: 
+        # 1. 番茄 (Fanqie) -> 最顶层
+        # 2. 书香阁 (书香阁/sxg) -> 第二层
+        # 3. 其他 -> 后面
+        def get_priority(item):
+            src = item.get('source', '')
+            if '番茄' in src or 'Fanqie' in src:
+                return 0  # 优先级最高
+            if '书香阁' in src:
+                return 1  # 优先级次之
+            return 2      # 其他
 
-        print(f"[Search] 聚合完成，耗时 {time.time() - start_time:.2f}s，共获取 {len(all_results)} 个有效源\n")
+        # 执行排序
+        all_results.sort(key=get_priority)
+
+        print(f"[Search] 聚合完成，耗时 {time.time() - start_time:.2f}s，共 {len(all_results)} 条结果")
         return all_results
 
 
