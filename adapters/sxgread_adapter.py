@@ -90,7 +90,77 @@ class SxgreadAdapter:
             print("[SxgreadAdapter] 未找到 #newlist，尝试通用解析")
             # 如果改版了找不到 newlist，回退到通用逻辑
             return crawler._general_toc_logic(toc_url)
+    # === [新增] 获取元数据函数 ===
+    def get_meta(self, crawler, url):
+        """
+        从书香阁目录页提取封面、作者、简介和标签
+        """
+        # 1. 请求页面
+        html = crawler._fetch_page_smart(url)
+        if not html: return None
+        soup = BeautifulSoup(html, 'html.parser')
 
+        # 2. 提取数据
+        meta = {}
+
+        # --- A. 封面 (Cover) ---
+        # 优先从 meta og:image 获取
+        og_img = soup.find('meta', property='og:image')
+        if og_img:
+            meta['cover'] = urljoin(url, og_img.get('content', ''))
+        else:
+            # 兜底：从 .bookimg img 获取
+            img_div = soup.find('div', class_='bookimg')
+            if img_div and img_div.find('img'):
+                meta['cover'] = urljoin(url, img_div.find('img').get('src', ''))
+
+        # --- B. 作者 (Author) ---
+        # 优先从 meta og:novel:author 获取
+        og_author = soup.find('meta', property='og:novel:author')
+        if og_author:
+            meta['author'] = og_author.get('content', '')
+        else:
+            # 兜底：从 .author 获取 (格式：作者：十月廿二)
+            author_div = soup.find('div', class_='author')
+            if author_div:
+                # 提取第一个 <p>
+                p_tag = author_div.find('p')
+                if p_tag:
+                    meta['author'] = p_tag.get_text(strip=True).replace('作者：', '').replace('作者:', '')
+
+        # --- C. 简介 (Description) ---
+        # 注意：og:description 往往是被截断的，我们优先用页面里的 .intro div
+        intro_div = soup.find('div', class_='intro')
+        if intro_div:
+            # 书香阁简介里有很多 <br>，get_text 会把它们连在一起，最好先换成换行符
+            # 但简单起见，get_text('\n') 通常足够
+            # 另外要清理掉里面的 FONT 标签干扰
+            meta['desc'] = intro_div.get_text('\n', strip=True)
+        else:
+            og_desc = soup.find('meta', property='og:description')
+            if og_desc:
+                meta['desc'] = og_desc.get('content', '')
+
+        # --- D. 书名 (Book Name) - 可选，用于校验 ---
+        og_name = soup.find('meta', property='og:novel:book_name')
+        if og_name:
+            meta['book_name'] = og_name.get('content', '')
+
+        # --- E. 标签 (Tags) ---
+        # 书香阁的分类在 og:novel:category
+        meta['tags'] = []
+        og_cat = soup.find('meta', property='og:novel:category')
+        if og_cat:
+            meta['tags'].append(og_cat.get('content', ''))
+        
+        # 完结状态
+        status_div = soup.find('div', class_='author')
+        if status_div and "已完结" in status_div.get_text():
+            meta['tags'].append("完结")
+        elif status_div and "连载" in status_div.get_text():
+            meta['tags'].append("连载")
+
+        return meta
     def run(self, crawler, url):
         html = crawler._fetch_page_smart(url)
         if not html: return None
