@@ -790,7 +790,7 @@ class SearchHelper:
         search_funcs = [
             self._do_direct_source_search, # 插件大军 (番茄、书香阁等)
             self._do_so_search,            # 360 (主力)
-            self._do_bing_cn_search        # Bing CN (辅助)
+            self._do_bing_search        # Bing CN (辅助)
         ]
 
         all_results = []
