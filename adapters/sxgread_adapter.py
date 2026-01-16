@@ -99,7 +99,7 @@ class SxgreadAdapter:
         html = crawler._fetch_page_smart(url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
-
+        print(url)
         # 2. 提取数据
         meta = {}
 
