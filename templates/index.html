@@ -1560,17 +1560,42 @@ async function clearHistory() {
             }
         }
 
-        function renderFilterBar() {
-            const bar = document.getElementById('filterBar');
-            const allUniqueTags = new Set();
-            Object.values(globalTags).forEach(tags => tags.forEach(t => allUniqueTags.add(t)));
-            let html = `<span class="p-tag filter-chip ${activeFilter === 'all' ? 'active' : ''}" onclick="filterByTag('all')">全部</span>`;
-            Array.from(allUniqueTags).sort().forEach(tag => {
-                const isActive = activeFilter === tag ? 'active' : '';
-                html += `<span class="p-tag filter-chip ${isActive}" onclick="filterByTag('${tag}')">${tag}</span>`;
-            });
-            bar.innerHTML = html;
-        }
+        // index.html -> script -> renderFilterBar
+
+function renderFilterBar() {
+    const bar = document.getElementById('filterBar');
+    const allUniqueTags = new Set();
+    
+    // 遍历当前所有书籍数据
+    if (currentData) {
+        Object.keys(currentData).forEach(key => {
+            // 跳过系统键
+            if (key.startsWith('@') || key.endsWith(':meta')) return;
+
+            // 1. 收集用户标签
+            const uTags = globalTags[key] || [];
+            uTags.forEach(t => allUniqueTags.add(t));
+
+            // 2. [新增] 收集官方标签
+            const valObj = currentData[key];
+            if (typeof valObj === 'object' && valObj !== null && valObj.official_tags) {
+                valObj.official_tags.forEach(t => allUniqueTags.add(t));
+            }
+        });
+    }
+
+    // 渲染 HTML
+    let html = `<span class="p-tag filter-chip ${activeFilter === 'all' ? 'active' : ''}" onclick="filterByTag('all')">全部</span>`;
+    
+    // 排序并生成标签
+    Array.from(allUniqueTags).sort().forEach(tag => {
+        const isActive = activeFilter === tag ? 'active' : '';
+        // 给官方标签和用户标签一样的样式，或者你可以加个 class 区分
+        html += `<span class="p-tag filter-chip ${isActive}" onclick="filterByTag('${tag}')">${tag}</span>`;
+    });
+    
+    bar.innerHTML = html;
+}
 
         function filterByTag(tag) { activeFilter = tag; renderFilterBar(); renderTable(currentData); }
 
@@ -1619,7 +1644,25 @@ function renderTable(data) {
     currentData = data;
     const container = document.getElementById('tableContainer');
     let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@') && !k.endsWith(':meta'));
-    
+    renderFilterBar();
+
+    // === [核心修改] 过滤逻辑升级 ===
+    if (activeFilter !== 'all') {
+        filteredKeys = filteredKeys.filter(k => {
+            const valObj = data[k];
+            
+            // 1. 检查用户标签
+            const uTags = globalTags[k] || [];
+            if (uTags.includes(activeFilter)) return true;
+
+            // 2. 检查官方标签
+            if (typeof valObj === 'object' && valObj !== null && valObj.official_tags) {
+                if (valObj.official_tags.includes(activeFilter)) return true;
+            }
+
+            return false;
+        });
+    }
     if (activeFilter !== 'all') {
         filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
     }
