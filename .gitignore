@@ -51,7 +51,8 @@ build/
 .DS_Store
 Thumbs.db
 desktop.ini
-
+/tools
+debug.*
 # === 8. 图标脚本生成的临时备份 (可选) ===
 # 如果你不希望把原始的大图或转换过程中的 png 传上去，可以取消注释
 # static/icons/*.png

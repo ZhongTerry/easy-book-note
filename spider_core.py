@@ -239,7 +239,13 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 from pypinyin import lazy_pinyin, Style
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import datetime
 
+def debug_log(message):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open('debug.txt', 'a', encoding='utf-8') as f:
+        f.write(f"[{timestamp}] {message}\n")
 class SearchHelper:
     def __init__(self):
         # [Owllook 配置] 模拟 Chrome 指纹，这是过盾的关键
@@ -520,7 +526,7 @@ class SearchHelper:
         
         try:
             res = []
-            for i in range(1, 3) :
+            for i in range(1, 2) :
                 params['pn'] = i
                 resp = cffi_requests.get(url, params=params, impersonate=self.impersonate, timeout=self.timeout)
                 soup = BeautifulSoup(resp.content, 'html.parser')
@@ -735,12 +741,14 @@ class SearchHelper:
                 plugin = future_to_plugin[future]
                 try:
                     res = future.result()
+                    print(plugin.source_name, res)
                     if res:
                         # 给结果补上 pinyin_key (插件里可能没加)
                         for item in res:
                             if 'suggested_key' not in item:
                                 item['suggested_key'] = self.get_pinyin_key(keyword)
                         all_results.extend(res)
+                        debug_log(f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
                         print(f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
                 except Exception as e:
                     print(f"  -> {plugin.source_name} 运行时异常: {e}")
@@ -789,14 +797,27 @@ class SearchHelper:
         # 包括我们刚写的 fanqie_local_source 和之前的 sxg_source
         search_funcs = [
             self._do_direct_source_search, # 插件大军 (番茄、书香阁等)
-            self._do_so_search,            # 360 (主力)
+            # self._do_so_search,            # 360 (主力)
             self._do_bing_search        # Bing CN (辅助)
         ]
 
         all_results = []
         seen_urls = set()  # URL 去重
-        
+        # with open('debug.json', 'w', encoding='utf-8') as f:
+                # f.write(str(search_funcs))
         # 2. 并发执行
+        # for func in search_funcs:
+        #     try:
+        #         results = func(keyword)  # 直接调用函数
+        #         if results:
+        #             for item in results:
+        #                 # 简单去重
+        #                 clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
+        #                 if clean_url not in seen_urls:
+        #                     seen_urls.add(clean_url)
+        #                     all_results.append(item)
+        #     except Exception: 
+        #         pass  # 忽略单个函数的异常
         with ThreadPoolExecutor(max_workers=len(search_funcs)) as exe:
             future_to_name = {
                 exe.submit(func, keyword): func.__name__ 

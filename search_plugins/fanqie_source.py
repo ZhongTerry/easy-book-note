@@ -31,7 +31,6 @@ class SourceWorker:
             except Exception as e:
                 print(f"[FanqieLocal] JSON解析崩溃! 返回的可能不是JSON。内容预览: {resp.text[:50]}")
                 return []
-            
             # 4. 处理双重序列化 (String -> JSON)
             if isinstance(data, str):
                 try:
@@ -42,34 +41,74 @@ class SourceWorker:
             if data.get('code') != 0:
                 print(f"[FanqieLocal] API返回错误: {data.get('msg')}")
                 return []
-
+            # with open('debug.json', 'w', encoding='utf-8') as f:
+            #     f.write(json.dumps(data))
             # 5. 提取数据
+            # data = json.dumps(data)
             results = []
             # 兼容两种返回结构：data['book_data'] 或 data['data']['book_data']
-            raw_data = data.get('data', {})
+            raw_data = data.get('search_tabs', {})
             book_list = []
-            
+            # raw_data = data.get("search_tabs", )
+            # with open('debug.json', 'w', encoding='utf-8') as f:
+                # f.write(json.dumps(raw_data)) 
+            # raw_data = raw_data.get("data", [])
             if isinstance(raw_data, list):
-                book_list = raw_data
-            elif 'book_data' in raw_data:
-                book_list = raw_data['book_data']
+                with open('debug.json', 'w', encoding='utf-8') as f:
+                    for i, item in enumerate(raw_data):
+                        print(f"第 {i} 个元素的类型: {type(item)}")
+                        
+                        # 获取 data 字段
+                        if isinstance(item, dict):
+                            allbooks = item.get("data", {})
+                            
+                            # 如果 allbooks 是字符串，尝试解析
+                            if isinstance(allbooks, str):
+                                try:
+                                    allbooks = json.loads(allbooks)
+                                except:
+                                    print(f"第 {i} 个元素的 data 不是有效的 JSON")
+                                    continue
+                            
+                            # 写入文件
+                            if isinstance(allbooks, list):
+                                for _b in allbooks:
+                                    # print("")
+                                    book_list.append(json.dumps(_b, ensure_ascii=False, indent=2))
+                                    # f.write(json.dumps(_b, ensure_ascii=False, indent=2) + ',\n')
+                            else:
+                                print("")
+                                # f.write(json.dumps(allbooks, ensure_ascii=False, indent=2) + ',\n')
+                        else:
+                            print(f"第 {i} 个元素不是字典: {type(item)}")
+            # if isinstance(raw_data, list):
+            #     book_list = raw_data
+            # elif 'book_data' in raw_data:
+            #     book_list = raw_data['book_data']
             
             for book in book_list:
+                # book = json.loads(json.dumps(book["book_data"]))
+                # print("book", type())
+                book = json.loads(book).get("book_data")[0]
+                # print(book)
                 book_id = book.get('book_id')
                 title = book.get('book_name')
                 author = book.get('author')
                 desc = book.get('abstract', '')
-                
+                print(title)
                 if book_id and title:
                     results.append({
                         'title': title,
                         'url': f"https://fanqienovel.com/page/{book_id}",
-                        'source': self.source_name,
+                        'source': "番茄小说",
                         'description': f"作者: {author}"
                     })
-            
-            return results[:3]
+                    print("appened")
+            # print(results[:3])
+            return results[:5]
 
         except Exception as e:
+            with open('debug.json', 'w', encoding='utf-8') as f:
+                f.write(f"[FanqieLocal] 插件运行出错: {e}")
             print(f"[FanqieLocal] 插件运行出错: {e}")
             return []
