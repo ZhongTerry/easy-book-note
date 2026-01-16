@@ -1769,7 +1769,32 @@ class NovelCrawler:
             final_chapters = prologues + final_chapters
         else: final_chapters = others + numbered
         return final_chapters
+    def _get_book_meta(self, soup, base_url):
+        meta = {"cover": "", "author": "未知作者", "desc": ""}
+        
+        # 1. 封面
+        og_img = soup.find('meta', property='og:image')
+        if og_img: meta['cover'] = urljoin(base_url, og_img.get('content', ''))
+        else:
+            # 兜底找 img
+            img = soup.find('div', class_=re.compile(r'cover|img|book-img')).find('img') if soup.find('div', class_=re.compile(r'cover|img|book-img')) else None
+            if img: meta['cover'] = urljoin(base_url, img.get('src', ''))
 
+        # 2. 作者
+        og_author = soup.find('meta', property='og:novel:author')
+        if og_author: meta['author'] = og_author.get('content', '')
+        else:
+            for tag in soup.find_all(['p', 'span', 'div']):
+                txt = tag.get_text(strip=True)
+                if txt.startswith('作者：') or txt.startswith('作者:'):
+                    meta['author'] = txt.replace('作者：', '').replace('作者:', '').strip()
+                    break
+        
+        # 3. 简介
+        og_desc = soup.find('meta', property='og:description')
+        if og_desc: meta['desc'] = og_desc.get('content', '')[:100] + '...'
+
+        return meta
     def get_toc(self, toc_url, fast_mode=False):
         """
         fast_mode=True: 不重试，超时短，专用于换源检测
@@ -1822,27 +1847,63 @@ class NovelCrawler:
         # 重新写一段通用的 get_toc 调用逻辑：
         old_timeout = self.timeout
         self.timeout = timeout
-        
+        adapter = plugin_mgr.find_match(toc_url)
+        data = None
+        final_meta = {"cover": "", "author": "", "desc": "", "tags": []}
+
+
         try:
-             # 这里调用原来的逻辑
-             if adapter: 
-                 data = adapter.get_toc(self, toc_url)
-             else:
-                 # 修改 _general_toc_logic 内部调用的 _fetch_page_smart
-                 # 由于 _fetch_page_smart 现在用的是参数默认值，我们需要它读取 self.timeout
-                 # 请确保你的 _fetch_page_smart 默认 timeout=self.timeout
-                 
-                 # 或者我们简单粗暴重写 _fetch_page_smart 让他优先用参数，没有参数用 self.timeout
-                 data = self._general_toc_logic(toc_url)
-        except Exception:
+            if adapter: 
+                # 1. 调用适配器获取目录 (标准操作)
+                data = adapter.get_toc(self, toc_url)
+                
+                # 2. [新增功能] 检查并调用适配器的 get_meta 方法
+                if hasattr(adapter, 'get_meta'):
+                    try:
+                        print(f"[Crawler] ⚡ 优先调用适配器元数据接口: {adapter.__class__.__name__}")
+                        plugin_meta = adapter.get_meta(self, toc_url)
+                        
+                        if plugin_meta:
+                            # 优先使用适配器返回的数据 (如果非空)
+                            if plugin_meta.get('cover'): final_meta['cover'] = plugin_meta['cover']
+                            if plugin_meta.get('author'): final_meta['author'] = plugin_meta['author']
+                            if plugin_meta.get('desc'): final_meta['desc'] = plugin_meta['desc']
+                            if plugin_meta.get('tags'): final_meta['tags'] = plugin_meta['tags']
+                    except Exception as e:
+                        print(f"[Crawler] ⚠️ 适配器 get_meta 执行出错: {e}")
+
+                # 3. 兜底：如果 get_meta 没实现或没返回，尝试从 get_toc 的结果里找
+                if data:
+                    if not final_meta['cover'] and data.get('cover'): final_meta['cover'] = data['cover']
+                    if not final_meta['author'] and data.get('author'): final_meta['author'] = data['author']
+                    if not final_meta['desc'] and data.get('desc'): final_meta['desc'] = data.get('desc')
+            else:
+                # 通用逻辑
+                data = self._general_toc_logic(toc_url)
+                if data:
+                    final_meta['cover'] = data.get('cover', '')
+                    final_meta['author'] = data.get('author', '')
+                    final_meta['desc'] = data.get('desc', '')
+
+        except Exception as e:
             return None
         finally:
-            self.timeout = old_timeout # 恢复默认 15s
+            self.timeout = old_timeout
 
         if not data or not data.get('chapters'): return None
+        
         if data.get('manual_sort') is True: return data
         final_chapters = self._standardize_chapters(data['chapters'])
-        return {'title': data['title'], 'chapters': final_chapters}
+        
+        # 返回合并后的结果
+        return {
+            'title': data['title'], 
+            'chapters': final_chapters,
+            'cover': final_meta['cover'],
+            'author': final_meta['author'],
+            'desc': final_meta['desc'],
+            'tags': final_meta['tags']
+        }
 
     def _general_toc_logic(self, toc_url):
         html = self._fetch_page_smart(toc_url)
@@ -1861,7 +1922,15 @@ class NovelCrawler:
             with ThreadPoolExecutor(max_workers=5) as exe:
                 results = exe.map(lambda u: self._parse_chapters_from_soup(BeautifulSoup(self._fetch_page_smart(u) or "", 'html.parser'), toc_url), sorted(list(pages)))
                 for sub in results: raw_chapters.extend(sub)
-        return {'title': self._get_smart_title(soup), 'chapters': raw_chapters}
+        meta = self._get_book_meta(soup, toc_url)
+        
+        return {
+            'title': self._get_smart_title(soup), 
+            'chapters': raw_chapters,
+            'cover': meta['cover'],
+            'author': meta['author'],
+            'desc': meta['desc']
+        }
 
     def get_latest_chapter(self, toc_url):
         toc_data = self.get_toc(toc_url)

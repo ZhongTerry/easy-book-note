@@ -255,6 +255,8 @@ class IsolatedStatsManager(BaseJsonManager):
 
 # managers.py -> IsolatedDB 类 (完全替换)
 
+# managers.py -> IsolatedDB 类 (请替换整个类)
+
 class IsolatedDB:
     def _get_db_conn(self):
         username = session.get('user', {}).get('username', 'default_user')
@@ -301,9 +303,11 @@ class IsolatedDB:
                         new_data = json.dumps({
                             "url": val,
                             "cover": "",
+                            "author": "",
+                            "desc": "",
                             "updated_at": int(time.time())
                         }, ensure_ascii=False)
-                        cursor.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (new_json, username, key))
+                        cursor.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (new_data, username, key))
                         count += 1
                 
                 conn.commit()
@@ -316,25 +320,17 @@ class IsolatedDB:
         if not key: return {"status": "error", "message": "Key cannot be empty"}
         u = get_current_user()
         
-        # 智能包装：不管传入什么，最终存入数据库的一定是 JSON 字符串
         final_json = ""
-        
         if isinstance(value, dict):
-            # 传入的是字典，直接转 JSON
             final_json = json.dumps(value, ensure_ascii=False)
         else:
-            # 传入的是字符串 (兼容旧逻辑)，包装成 {"url": "..."}
-            # 先试探一下是不是已经是 JSON 串
             try:
                 temp = json.loads(value)
-                if isinstance(temp, dict) and 'url' in temp:
-                    final_json = value # 已经是标准格式
-                else:
-                    raise ValueError()
+                if isinstance(temp, dict) and 'url' in temp: final_json = value
+                else: raise ValueError()
             except:
-                # 确实是纯 URL 字符串
                 final_json = json.dumps({
-                    "url": value,
+                    "url": value, 
                     "updated_at": int(time.time())
                 }, ensure_ascii=False)
 
@@ -342,132 +338,90 @@ class IsolatedDB:
             with get_db() as conn:
                 conn.execute("INSERT OR REPLACE INTO user_books (username, book_key, value) VALUES (?, ?, ?)", (u, key, final_json))
                 conn.commit()
-            
-            # 返回给前端的数据，为了兼容，只返回 URL (或者根据前端需求调整)
-            # 这里我们返回包装后的对象，因为 insert 通常是 API 调用，返回详细点没问题
             return {"status": "success", "message": f"Saved: {key}", "data": {key: final_json}}
         except Exception as e: return {"status": "error", "message": str(e)}
 
     def update(self, key, value):
-        """
-        更新逻辑：先读出旧 JSON，合并新字段，再存入。
-        这样更新 URL 不会把封面弄丢。
-        """
         u = get_current_user()
         try:
-            # 获取数据库里的原始 JSON 字符串
             conn = get_db()
             row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
             
             current_data = {}
             if row and row[0]:
                 try: current_data = json.loads(row[0])
-                except: current_data = {"url": row[0]} # 旧数据兼容
+                except: current_data = {"url": row[0]}
             
-            # 合并新值
             if isinstance(value, dict):
                 current_data.update(value)
             else:
-                # 传入的是字符串，默认更新 URL
                 current_data['url'] = value
             
             current_data['updated_at'] = int(time.time())
             
-            # 写入
             final_json = json.dumps(current_data, ensure_ascii=False)
             conn.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (final_json, u, key))
             conn.commit()
             return {"status": "success", "message": f"Updated: {key}"}
-        except Exception as e:
-            # 如果出错尝试直接插入
+        except:
             return self.insert(key, value)
 
     # === 3. 核心读取逻辑 (自动解包 - 兼容旧接口) ===
     def get_val(self, key):
-        """
-        [关键兼容] 
-        虽然数据库存的是 JSON，但为了不让 core_bp.py 报错，
-        这个方法默认只返回 URL 字符串！
-        """
-        full_data = self.get_full_data(key) # 获取完整字典
-        if full_data:
-            return full_data.get('url') # 只返回 URL 字符串
-        return None
+        """默认只返回 URL 字符串，保证旧代码不崩"""
+        full = self.get_full_data(key)
+        return full.get('url') if full else None
 
     def get_full_data(self, key):
-        """
-        [新接口] 获取完整的元数据 (URL + 封面 + 作者)
-        供未来 UI 使用
-        """
+        """新接口：获取完整元数据"""
         u = get_current_user()
         try:
             conn = get_db()
             row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
             if row and row[0]:
                 try:
-                    data = json.loads(row[0])
-                    if isinstance(data, dict): return data
-                    return {"url": row[0]} # 兼容旧数据
-                except:
-                    return {"url": row[0]} # 兼容旧数据
+                    d = json.loads(row[0])
+                    return d if isinstance(d, dict) else {"url": row[0]}
+                except: return {"url": row[0]}
             return None
         except: return None
 
     # === 4. 列表查询 (自动解包) ===
     def list_all(self):
-        """
-        返回 {key: url_string} 格式
-        确保 index.html 不需要改一行代码就能跑
-        """
         u = get_current_user()
         try:
             conn = get_db()
             cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND book_key NOT LIKE '@%' ORDER BY updated_at DESC", (u,))
-            
             result = {}
             for row in cursor.fetchall():
                 k, v_str = row[0], row[1]
                 if k.endswith(':meta'): continue
-                
-                # 解包逻辑
                 try:
                     obj = json.loads(v_str)
-                    if isinstance(obj, dict):
-                        result[k] = obj.get('url', '') # 只拿 URL
-                    else:
-                        result[k] = v_str
-                except:
-                    result[k] = v_str
-            
+                    if isinstance(obj, dict): result[k] = obj
+                    else: result[k] = {"url": v_str}
+                except: result[k] = {"url": v_str}
             return {"status": "success", "data": result}
         except Exception as e: return {"status": "error", "message": str(e)}
 
+    # ... (find, remove, rename_key, rollback, add_version, get_versions 保持不变) ...
     def find(self, term):
-        """同样保持返回 {key: url} 格式"""
         u = get_current_user()
         try:
             t = f'%{term}%'
             conn = get_db()
             cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND (book_key LIKE ? OR value LIKE ?)", (u, t, t))
-            
             result = {}
             for row in cursor.fetchall():
                 k, v_str = row[0], row[1]
                 if k.endswith(':meta'): continue
-                
                 try:
                     obj = json.loads(v_str)
-                    if isinstance(obj, dict):
-                        result[k] = obj.get('url', '')
-                    else:
-                        result[k] = v_str
-                except:
-                    result[k] = v_str
-            
+                    result[k] = obj if isinstance(obj, dict) else {"url": obj}
+                except: result[k] = {"url": v_str}
             return {"status": "success", "data": result}
         except Exception as e: return {"status": "error", "message": str(e)}
 
-    # === 其他方法保持不变 ===
     def remove(self, key):
         u = get_current_user()
         try:
@@ -478,7 +432,6 @@ class IsolatedDB:
         except Exception as e: return {"status": "error", "message": str(e)}
 
     def rename_key(self, old_key, new_key):
-        # 复用原代码
         if not old_key or not new_key: return {"status": "error", "message": "Key cannot be empty"}
         u = get_current_user()
         try:
@@ -517,7 +470,6 @@ class IsolatedDB:
     def add_version(self, key, value):
         self._ensure_history_table()
         u = get_current_user()
-        # 注意：这里的 value 可能是包装好的 JSON，也可能是 URL，为了历史准确，直接存即可
         try:
             with get_db() as conn:
                 conn.execute("INSERT INTO book_history (username, book_key, value) VALUES (?, ?, ?)", (u, key, value))
@@ -532,9 +484,7 @@ class IsolatedDB:
                 ''', (u, key))
                 conn.commit()
             return True
-        except Exception as e:
-            print(f"[DB] Add Version Error: {e}")
-            return False
+        except Exception as e: return False
 
     def get_versions(self, key):
         self._ensure_history_table()
@@ -542,8 +492,6 @@ class IsolatedDB:
         try:
             with get_db() as conn:
                 cursor = conn.execute("SELECT value, recorded_at FROM book_history WHERE username=? AND book_key=? ORDER BY recorded_at DESC", (u, key))
-                # 这里的 value 可能是 JSON，回退时需要注意
-                # 但既然我们 insert/update 都有自动包装，所以前端回传 JSON 字符串回来也是安全的
                 return [{"value": row[0], "time": row[1]} for row in cursor.fetchall()]
         except: return []
 # ==========================================

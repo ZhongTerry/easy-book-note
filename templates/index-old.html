@@ -696,91 +696,6 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         display: flex !important;      /* 消除 baseline 对齐问题 */
     }
 }
-.book-list-container {
-    display: flex; flex-direction: column; gap: 15px; margin-top: 20px;
-}
-
-.book-row {
-    display: flex;
-    background: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 15px;
-    position: relative;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-    transition: all 0.2s;
-}
-.book-row:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 12px rgba(0,0,0,0.05);
-    border-color: #d1d5db;
-}
-
-/* 封面 */
-.book-cover-img {
-    width: 80px; height: 106px; object-fit: cover;
-    border-radius: 4px; background: #f3f4f6; flex-shrink: 0;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-.book-cover-default {
-    width: 80px; height: 106px; border-radius: 4px;
-    background: linear-gradient(135deg, #e0e7ff 0%, #f3f4f6 100%);
-    display: flex; align-items: center; justify-content: center;
-    color: #6366f1; font-weight: bold; font-size: 24px; flex-shrink: 0;
-}
-
-/* 信息区 */
-.book-info {
-    flex: 1; margin-left: 15px; margin-right: 10px;
-    display: flex; flex-direction: column; justify-content: space-between;
-}
-.book-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-.book-title { font-size: 17px; font-weight: 700; color: #1f2937; }
-.tag-badge { font-size: 11px; background: #f3f4f6; color: #6b7280; padding: 2px 6px; border-radius: 4px; }
-
-.book-meta { font-size: 13px; color: #6b7280; display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-.book-desc {
-    font-size: 13px; color: #9ca3af; line-height: 1.4;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-    overflow: hidden; margin-bottom: 8px;
-}
-
-/* 桌面端操作栏 (垂直排列) */
-.action-col {
-    display: flex; flex-direction: column; justify-content: center; gap: 8px;
-    min-width: 90px; border-left: 1px solid #f3f4f6; padding-left: 15px;
-}
-
-/* 通用动作按钮 */
-.act-btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
-    cursor: pointer; transition: 0.2s; text-decoration: none;
-}
-.act-primary { background: #4f46e5; color: white; border: 1px solid #4f46e5; }
-.act-primary:hover { background: #4338ca; }
-
-/* 次级按钮样式 (更新 & 更多) */
-.act-outline {
-    background: white; color: #374151; border: 1px solid #e5e7eb;
-}
-.act-outline:hover {
-    border-color: #4f46e5; color: #4f46e5; background: #eff6ff;
-}
-@media (max-width: 600px) {
-    .book-row { padding-bottom: 50px; } /* 底部留给按钮 */
-    .book-cover-img, .book-cover-default { width: 70px; height: 93px; }
-    .book-title { font-size: 16px; }
-    .book-desc { display: none; } /* 隐藏简介 */
-    
-    .action-col {
-        border-left: none; padding-left: 0;
-        flex-direction: row; /* 变横排 */
-        position: absolute; bottom: 12px; right: 15px; left: 100px;
-        justify-content: flex-end;
-    }
-    .act-btn { padding: 4px 10px; font-size: 12px; }
-}
     </style>
         <script>
             // === [核心修复] 智能关闭 Modal ===
@@ -1618,8 +1533,9 @@ async function clearHistory() {
 function renderTable(data) {
     currentData = data;
     const container = document.getElementById('tableContainer');
-    let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@') && !k.endsWith(':meta'));
+    let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@'));
     
+    // 标签过滤逻辑
     if (activeFilter !== 'all') {
         filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
     }
@@ -1630,94 +1546,92 @@ function renderTable(data) {
     }
     filteredKeys.sort();
 
+    // 如果是网格视图，保持不变
     if (currentView === 'grid') return renderGrid(data, container, filteredKeys);
 
-    let html = '<div class="book-list-container">';
-    
+    let html = '<table class="p-table">'; // 确保加上 p-table 类以获得更好的默认样式
     filteredKeys.forEach(k => {
-        let valObj = data[k];
-        let url = "", cover = "", author = "未知", desc = "暂无简介", lastRead = 0;
-        let officialTags = valObj.official_tags || [];
-
-        const userTags = globalTags[k] || []; // 用户标签
-        // 兼容旧数据
-        if (typeof valObj === 'object' && valObj !== null) {
-            url = valObj.url || "";
-            cover = valObj.cover || "";
-            author = valObj.author || "未知";
-            desc = valObj.desc || "暂无简介";
-            lastRead = valObj.last_read_at || 0;
-        } else {
-            url = valObj;
-        }
-
+        const v = data[k];
         const tags = globalTags[k] || [];
         const parts = k.split('/');
         const displayName = parts[parts.length-1];
         
-        const isLink = url.startsWith('http') || url.startsWith('https');
-        const isEpub = url.startsWith('epub:');
+        const isLink = v.startsWith('http') || v.startsWith('https');
+        const isEpub = v.startsWith('epub:');
 
-        // 封面
-        let coverHtml = '';
-        if (cover) {
-            coverHtml = `<img src="${cover}" class="book-cover-img" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-                         <div class="book-cover-default" style="display:none">${displayName[0]}</div>`;
+        // 1. 生成标签 HTML
+        let tagsHtml = tags.map(t => 
+            `<span class="p-tag" style="font-size:10px; margin-right:4px;">${t}</span>`
+        ).join('');
+        
+        // 2. [关键修改] 生成链接按钮 HTML (扁平化风格)
+        // 我们使用 p-btn-sm 但去掉边框和背景，让它看起来像个图标链接，但能完美对齐
+        let linkElement = '';
+        if (isEpub) {
+            linkElement = `<span class="p-btn p-btn-sm" style="border:none; background:transparent; color:var(--p-success); cursor:default; padding-left:0;">📦 本地</span>`;
+        } else if (isLink) {
+            // 设置 text-decoration:none 去掉下划线，display:inline-flex 保证垂直居中
+            linkElement = `<a href="${v}" target="_blank" class="p-btn p-btn-sm" style="border:none; background:transparent; color:#9ca3af; text-decoration:none; margin-right:5px;" title="${v}">🔗 链接</a>`;
         } else {
-            const bg = stringToColor(displayName);
-            coverHtml = `<div class="book-cover-default" style="background:${bg}; color:white;">${displayName[0]}</div>`;
+            // 纯文本内容，限制最大宽度防止撑开
+            linkElement = `<span class="p-btn p-btn-sm" style="border:none; background:transparent; color:#d1d5db; cursor:default; max-width:100px; overflow:hidden; text-overflow:ellipsis; padding-left:0;">${v}</span>`;
         }
 
-        // 标签
-        let tagsHtml = userTags.map(t => 
-            `<span class="tag-badge">${t}</span>`
-        ).join('');
-        let officialTagsHtml = officialTags.slice(0, 3).map(t => 
-            `<span class="tag-badge" style="background:#e0f2fe; color:#0369a1;">${t}</span>`
-        ).join('');
-        let allTagsHtml = tagsHtml + officialTagsHtml;
-        // 操作按钮组 (Vertical Layout)
-        let actionGroup = `
-            <div class="action-col">
-                ${isLink || isEpub ? 
-                    `<a href="/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(k)}" class="act-btn act-primary">📖 阅读</a>` : ''
-                }
-                
-                <button class="act-btn act-outline" id="upd-${k}" onclick="checkUpdate('${k}', '${url}')" title="检查更新">
-                    🔄 更新
-                </button>
-                
-                <!-- 更多按钮 (次级样式) -->
-                <button class="act-btn act-outline" onclick="openMoreMenu('${k}', '${url}', '${displayName}', ${isEpub}, ${isLink})" title="更多操作">
-                    ⋮ 更多
-                </button>
-            </div>
-        `;
+        // 3. [关键修改] 按钮组：将 linkElement 放在最前面
+        // 增加了一个小竖线分割线 (span style="border-left...") 让视觉区分更明显
+        // 在 renderTable 函数内部修改 actionGroup 的生成逻辑：
+        
 
-        html += `
-        <div class="book-row">
-            ${coverHtml}
-            <div class="book-info">
-                <div>
-                    <div class="book-header">
-                        <span class="book-title">${displayName}</span>
-                        ${allTagsHtml}  <!-- 这里放入组合后的标签 -->
-                    </div>
-                    <div class="book-meta">
-                        <span>👤 ${author}</span>
-                        ${lastRead ? `<span>🕒 ${formatTime(lastRead).split(' ')[0]}</span>` : ''}
-                    </div>
-                    <div class="book-desc">${desc}</div>
-                </div>
-            </div>
-            ${actionGroup}
-        </div>`;
+// index.html -> renderTable 函数内
+
+// ... (前文代码不变) ...
+
+// === [核心修复] 统一按钮组生成逻辑 ===
+let actionGroup = `
+    <div class="action-group">
+        <!-- 1. 阅读按钮 (如果有链接，它会自动占据左侧最大空间) -->
+        ${isLink || isEpub ? 
+            `<a href="/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}" class="p-btn p-btn-sm p-btn-primary read-btn">
+                <span style="font-size:18px;">📖</span>
+                <span class="btn-text">阅读</span>
+            </a>` : ''
+        }
+        
+        <!-- 2. 更新按钮 -->
+        <button class="p-btn p-btn-sm icon-btn" id="upd-${k}" onclick="checkUpdate('${k}', '${v}')" title="检查更新">
+            <span>🔄</span>
+        </button>
+        
+        <!-- 3. 书单按钮 -->
+        <button class="p-btn p-btn-sm icon-btn" onclick="openAddToListModal('${k}', '${displayName}')" title="加入书单">
+            <span>🔖</span>
+        </button>
+        
+        <!-- 4. 更多菜单 (三点图标) -->
+        <button class="p-btn p-btn-sm icon-btn" onclick="openMoreMenu('${k}', '${v}', '${displayName}', ${isEpub}, ${isLink})" title="更多操作">
+            <span style="font-weight:bold; margin-top:-4px;">...</span>
+        </button>
+    </div>
+`;
+
+// ... (后文代码不变) ...
+
+        // 4. 组装行 (现在右侧 td 只有一行 action-group)
+        html += `<tr>
+            <td style="vertical-align: middle;">
+                <div class="key-final" style="font-size:15px; font-weight:600; color:#374151;">${displayName}</div>
+                <div style="margin-top:2px;">${tagsHtml}</div>
+            </td>
+            <td style="text-align:right; vertical-align: middle; width: 1%; white-space: nowrap;">
+                ${actionGroup}
+            </td>
+        </tr>`;
     });
-
-    html += '</div>';
+    html += '</table>';
     container.innerHTML = html;
     renderUpdates();
 }
+// 打开版本历史
 async function openVersionModal(key) {
     document.getElementById('versionBookName').innerText = `书籍 Key: ${key}`;
     const cont = document.getElementById('versionList');

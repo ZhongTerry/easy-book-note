@@ -29,7 +29,91 @@ class FanqieLocalAdapter:
         match = re.search(r'page/(\d+)', url)
         if match: return match.group(1)
         return None
+    # adapters/fanqie_local_adapter.py -> FanqieLocalAdapter -> get_meta
 
+    def get_meta(self, crawler, url):
+        """
+        利用微服务 /get_detail 接口获取超详细元数据 (含标签)
+        """
+        book_id = self._get_book_id(url)
+        if not book_id:
+            item_id = self._get_item_id(url)
+            if item_id:
+                book_id = self._resolve_book_id_by_item(crawler, item_id)
+        
+        if not book_id: return None
+
+        try:
+            resp = requests.get(f"{self.API_HOST}/get_detail", params={"book_id": book_id}, timeout=10)
+            json_data = resp.json()
+            if isinstance(json_data, str): 
+                try: json_data = json.loads(json_data)
+                except: pass
+
+            if json_data.get('code') == 0:
+                data = json_data.get('data', {})
+                
+                # 1. 封面
+                cover = data.get('thumb_url') or data.get('thumb_uri')
+                if cover and not cover.startswith('http'):
+                    cover = f"https://p3-novel.byteimg.com/origin/{cover}"
+
+                # 2. 作者
+                author = data.get('author', '未知作者')
+                
+                # 3. 简介
+                abstract = data.get('abstract', '暂无简介').replace('\n', '<br>')
+                
+                # === [核心新增] 标签提取挑战 ===
+                tags_list = []
+                
+                # A. 评分 (如果有且不为0)
+                score = data.get('score')
+                if score and str(score) != '0.0':
+                    tags_list.append(f"{score}分")
+                
+                # B. 连载状态 (creation_status: 1=连载, ?=完结)
+                # 番茄API中 creation_status=1 通常是连载，status=1 也是
+                # 我们这里简单判定：如果 score 是完结，或者 word_number 很大，可以推测
+                # 暂时先不猜状态，直接拿 category
+                
+                # C. 分类与标签
+                category = data.get('category') # "都市高武"
+                if category: tags_list.append(category)
+                
+                raw_tags = data.get('tags', '') # "都市高武,都市,穿越"
+                if raw_tags: tags_list.extend(raw_tags.split(','))
+                
+                # D. 高质量标签 (如"编辑推荐")
+                hq_tags = data.get('high_quality_tags', '')
+                if hq_tags: tags_list.extend(hq_tags.split(','))
+
+                # E. 去重 & 清洗 & 截断
+                # 保持顺序去重
+                seen = set()
+                clean_tags = []
+                for t in tags_list:
+                    t = t.strip()
+                    if t and t not in seen:
+                        seen.add(t)
+                        clean_tags.append(t)
+                
+                # 只取前 4 个标签，防止太长
+                final_tags = clean_tags[:4]
+
+                return {
+                    "cover": cover,
+                    "author": author,
+                    "desc": abstract,
+                    "book_name": data.get('book_name'),
+                    "tags": final_tags # 返回列表
+                }
+                
+        except Exception as e:
+            print(f"[FanqieLocal] Detail 获取失败: {e}")
+            return None
+        
+        return None
     def _resolve_book_id_by_item(self, crawler, item_id):
         """
         [增强版] 通过章节 ID 反查书籍 ID
@@ -159,7 +243,7 @@ class FanqieLocalAdapter:
             
             data = resp.json()
             if isinstance(data, str): data = json.loads(data)
-            print(data)
+            # print(data)
             if data.get('code') == 0:
                 raw_text = data.get('data', {}).get('content', '')
                 if raw_text:
