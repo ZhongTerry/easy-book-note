@@ -2094,9 +2094,15 @@ function renderUpdates() {
 }
 
 // 3. 手动检查更新函数
+// index.html -> script -> checkUpdate
+
 async function checkUpdate(key, url) {
     const btn = document.getElementById(`upd-${key}`);
-    btn.innerHTML = "⏳";
+    if (!btn) return;
+    
+    const originalHtml = btn.innerHTML;
+    // 视觉反馈：变为沙漏
+    btn.innerHTML = "⏳"; 
     btn.disabled = true;
 
     try {
@@ -2108,30 +2114,34 @@ async function checkUpdate(key, url) {
         const json = await res.json();
         
         if (json.status === 'success') {
-            // [关键] 这里拿到了后端算好的 data
-            const d = json.data; 
+            const d = json.data;
             
-            let msg = `📖 书籍检查报告\n\n`;
-            msg += `最新章节：${d.latest_title}\n`;
-            
-            if (d.unread_count > 0) {
-                msg += `⚠️ 状态：${d.status_text} (落后 ${d.unread_count} 章)`;
-            } else {
-                msg += `✅ 状态：${d.status_text}`;
-            }
-            alert(msg);
-            
-            // 更新本地缓存，让小红点立即变色
+            // 1. 更新本地红点缓存
             updatesCache[key] = d;
-            renderUpdates();
+
+            // 2. 提示用户
+            let tip = `更新完成：${d.status_text}`;
+            if (d.unread_count > 0) tip += ` (+${d.unread_count})`;
+            showMsg(tip, "success");
+
+            // === [核心] 重新拉取数据并渲染 ===
+            // 这会将新抓取到的封面、作者、标签显示出来
+            await doAction('find'); 
+            
+            // 注意：此时页面已重绘，btn 元素已被销毁，无需再还原它的状态
         } else {
-            showMsg("检查失败: " + json.msg, "error");
+            showMsg("更新失败: " + (json.msg || "未知错误"), "error");
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
         }
     } catch(e) {
-        showMsg("网络错误", "error");
-    } finally {
-        if(btn.innerHTML === "⏳") btn.innerHTML = "🔄";
-        btn.disabled = false;
+        console.error(e);
+        showMsg("网络请求错误", "error");
+        // 如果页面没刷新，还原按钮
+        if(document.body.contains(btn)) {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
     }
 }
 // 记得在 renderTable 的最后调用一次 renderUpdates()，防止翻页/搜索后红点消失
