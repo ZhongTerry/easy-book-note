@@ -143,6 +143,25 @@
             padding-top: calc(20px + var(--safe-top)); font-size: 18px;
             display: flex; justify-content: space-between; align-items: center;
         }
+
+        /* 目录刷新按钮 */
+        .btn-refresh-toc {
+            background: transparent;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 4px 10px;
+            border-radius: 16px;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .btn-refresh-toc:active {
+            background: var(--accent);
+            color: white;
+        }
+
         .drawer-list { flex: 1; overflow-y: auto; }
         .drawer-item {
             padding: 15px 20px; border-bottom: 1px solid var(--border); font-size: 14px;
@@ -327,12 +346,16 @@
     <div class="drawer">
         <div class="drawer-header">
             <span>目录</span>
-            <span style="font-size:12px; color:var(--text-sec); font-weight:normal;">{{ db_key }}</span>
+            <button class="btn-refresh-toc" onclick="refreshTOC()">
+                <i class="ri-refresh-line"></i>
+                <span>刷新</span>
+            </button>
         </div>
         <div class="drawer-list" id="tocList">
             <div style="text-align:center; padding:20px; color:#999;">加载中...</div>
         </div>
     </div>
+
 
     <!-- 换源弹窗 -->
     <div class="drawer-overlay" id="sourceOverlay" onclick="closeSourceModal()"></div>
@@ -524,7 +547,50 @@
     // === 5. 侧滑目录 (终极修复版) ===
     let tocLoaded = false;
     
+    // 刷新目录功能
+    async function refreshTOC() {
+        if(!tocUrl) {
+            showToast("无法获取目录链接");
+            return;
+        }
+        
+        showToast("🔄 正在刷新目录...");
+        const list = document.getElementById('tocList');
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">刷新中，请稍候...</div>';
+        
+        try {
+            // 强制刷新：添加 force=true 参数
+            const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true&force=true`);
+            const data = await res.json();
+            
+            if(data && data.chapters) {
+                list.innerHTML = data.chapters.map(c => {
+                    const isCurrent = c.url === currentUrl; 
+                    const activeClass = isCurrent ? 'active' : '';
+                    return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
+                }).join('');
+                
+                // 标记为已加载
+                tocLoaded = true;
+                
+                // 自动滚动到当前章节
+                setTimeout(() => {
+                    const active = list.querySelector('.active');
+                    if(active) active.scrollIntoView({block: 'center'});
+                }, 100);
+                
+                showToast("✅ 目录已更新");
+            } else {
+                throw new Error("目录数据无效");
+            }
+        } catch(e) {
+            list.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-sec);">刷新失败，请重试<br><small>' + e.message + '</small></div>';
+            showToast("❌ 刷新失败");
+        }
+    }
+
     async function toggleDrawer() {
+
         const body = document.body;
         
         // 核心：只操作 class，绝对不要手动改 style
