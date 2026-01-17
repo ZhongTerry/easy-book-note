@@ -186,6 +186,14 @@
             <button class="control-btn" onclick="adjustSpeed(1.2)">1.2x</button>
         </div>
     </div>
+    
+    <!-- [新增] 调试工具栏 -->
+    <div class="setting-row" style="margin-top:20px; border-top:1px dashed #eee; padding-top:15px;">
+        <span class="setting-label">调试工具</span>
+        <button class="control-btn" onclick="window.open(currentUrl, '_blank')" style="width:100%; border:1px solid #ddd; background:white;">
+            🔗 在新标签页打开原站
+        </button>
+    </div>
 </div>
 
 <div class="container" id="readContainer">
@@ -243,6 +251,10 @@
     let synth = window.speechSynthesis;
     let utterance = null;
     let isSpeaking = false;
+    
+    // 全局上下文
+    let switchContext = {};
+
     async function openSourceModal() {
     const modal = document.getElementById('sourceModal');
     const loading = document.getElementById('sourceLoading');
@@ -252,6 +264,8 @@
     loading.style.display = 'block';
     list.style.display = 'none';
     list.innerHTML = '';
+    
+    loading.innerHTML = '🔍 正在聚合全网搜索结果...<br><span style="font-size:12px;">(点击结果后自动匹配章节)</span>';
 
     try {
         const res = await fetch('/api/source/list', {
@@ -260,7 +274,7 @@
             body: JSON.stringify({ 
                 key: dbKey, 
                 url: currentUrl,
-                title: document.getElementById('chapterTitle').innerText // 传标题辅助后端解析ID
+                title: document.getElementById('chapterTitle').innerText 
             })
         });
         const json = await res.json();
@@ -269,16 +283,30 @@
         list.style.display = 'block';
 
         if (json.status === 'success' && json.data.length > 0) {
+            switchContext = json.match_info || {};
+            
             let html = '';
             json.data.forEach(src => {
-                // 简单的域名提取展示
+                // 提取域名，看起来更干净
+                let domain = '';
+                try { domain = new URL(src.url).hostname; } catch(e) { domain = src.url; }
+
                 html += `
-                <div onclick="confirmSwitch('${src.url}')" style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:10px; cursor:pointer; transition:0.2s; display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <div style="font-weight:bold; color:#333;">${src.source}</div>
-                        <div style="font-size:12px; color:#666; margin-top:4px;">${src.title}</div>
+                <div onclick="requestSwitch('${src.url}', '${src.source}')" 
+                     style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:10px; cursor:pointer; background:#fff; position:relative; overflow:hidden;">
+                    
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <div style="font-weight:bold; color:#333; font-size:15px;">${src.source}</div>
+                        <span style="font-size:12px; background:#f3f4f6; color:#666; padding:2px 6px; border-radius:4px;">${src.description || '未知作者'}</span>
                     </div>
-                    <div style="color:#8b5cf6; font-size:12px;">Go →</div>
+
+                    <div style="font-size:13px; color:#555; margin-top:4px; font-weight:500;">
+                        ${src.title}
+                    </div>
+
+                    <div style="font-size:11px; color:#aaa; margin-top:6px; font-family:monospace; border-top:1px dashed #eee; padding-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        🔗 ${src.url}
+                    </div>
                 </div>`;
             });
             list.innerHTML = html;
@@ -292,8 +320,53 @@
     }
 }
 
+async function requestSwitch(targetUrl, sourceName) {
+    const list = document.getElementById('sourceList');
+    const loading = document.getElementById('sourceLoading');
+    
+    list.style.display = 'none';
+    loading.style.display = 'block';
+    loading.innerHTML = `
+        <div style="font-size:24px; margin-bottom:10px;">⏳</div>
+        <div>正在前往 <b>${sourceName}</b></div>
+        <div style="font-size:12px; color:#666; margin-top:5px;">正在匹配第 ${switchContext.current_id || '?'} 章...</div>
+    `;
+
+    try {
+        const res = await fetch('/api/source/confirm_switch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                target_url: targetUrl,
+                current_id: switchContext.current_id,
+                current_title: switchContext.current_title
+            })
+        });
+        
+        const json = await res.json();
+        
+        if (json.status === 'success') {
+            loading.innerHTML = `<div style="color:green; font-weight:bold;">✅ 匹配成功，正在跳转...</div>`;
+            await fetch('/update', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey, value: json.new_url })
+            });
+            window.location.href = `/read?url=${encodeURIComponent(json.new_url)}&key=${dbKey}`;
+        } else {
+            alert(json.msg || "切换失败");
+            loading.style.display = 'none';
+            list.style.display = 'block';
+        }
+    } catch (e) {
+        alert("请求失败");
+        loading.style.display = 'none';
+        list.style.display = 'block';
+    }
+}
+
 async function confirmSwitch(newUrl) {
-    // 1. 更新数据库
+    // 废弃
     await fetch('/update', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},

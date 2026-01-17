@@ -171,7 +171,12 @@ class SxgreadAdapter:
         # 1. 标题与书名
         h1 = soup.find('div', class_='Noveltitle')
         meta['title'] = h1.get_text(strip=True) if h1 else crawler._get_smart_title(soup)
+        
+        # [修复] 优先使用适配器专用书名解析，如果失败则回退到爬虫通用逻辑
+        # 解决 api/source/list 报错 "无法识别书名(当前:None)" 的问题
         meta['book_name'] = self.get_book_name(soup)
+        if not meta['book_name']:
+            meta['book_name'] = crawler._get_book_name(soup)
 
         # 2. 正文提取
         content_div = soup.find('div', class_='NovelTxt')

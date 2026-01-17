@@ -310,9 +310,13 @@
             </div>
             <div class="opt-row">
                 <span>功能</span>
-                <div style="display:flex; gap:10px; font-size:12px;">
+                <div style="display:flex; gap:10px; font-size:12px; flex-wrap: wrap;"> <!-- flex-wrap 以防按钮太多换行 -->
                     <button class="p-btn p-btn-sm" onclick="toggleTTS()" id="ttsBtn">🎧 朗读</button>
                     <button class="p-btn p-btn-sm" onclick="openSourceModal()">⇄ 换源</button>
+                    <!-- [新增] 追更按钮 -->
+                    <button class="p-btn p-btn-sm" id="subBtn" onclick="toggleSubscribe()">🔔 追更</button>
+                    
+                    <button class="p-btn p-btn-sm" onclick="jumpToSource()" style="background:#f0f0f0; color:#666;">🔗 原文</button>
                 </div>
             </div>
         </div>
@@ -699,6 +703,86 @@
     function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
     function reportWordCount() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ words: document.getElementById('article-text').innerText.length, book_key: dbKey }) }); }
 
+    // [新增] 跳转到源站
+    function jumpToSource() {
+        if (confirm('是否要在新窗口打开原网站？')) {
+            window.open(currentUrl, '_blank');
+        }
+    }
+
+    // [检查追更状态]
+    async function checkSubscribeStatus() {
+        try {
+            const res = await fetch('/api/updates/status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey })
+            });
+            const json = await res.json();
+            const btn = document.getElementById('subBtn');
+            if (json.subscribed) {
+                btn.classList.add('active');
+                btn.innerText = '🔥 已追更';
+                btn.style.background = '#ffe4e6';
+                btn.style.color = '#e11d48';
+            } else {
+                btn.classList.remove('active');
+                btn.innerText = '🔔 追更';
+                btn.style.background = ''; // reset
+                btn.style.color = '';
+            }
+        } catch(e) {}
+    }
+    
+    async function toggleSubscribe() {
+        const btn = document.getElementById('subBtn');
+        const isSub = btn.classList.contains('active');
+        
+        // 尝试获取当前目录 URL (如果没有 toc_url, 尝试用当前 URL)
+        // 这里的 tocUrl 来自后端模板注入
+        const targetToc = "{{ article.toc_url }}" || currentUrl;
+        
+        // 获取当前 ID: 尝试从 URL 正则，或者后端注入
+        // 简单正则提取
+        let cid = 0;
+        const m = currentUrl.match(/\/(\d+)(?:_\d+)?(?:\.html)?$/);
+        if (m) cid = parseInt(m[1]);
+        
+        try {
+            const res = await fetch('/api/updates/subscribe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    key: dbKey, 
+                    enable: !isSub,
+                    toc_url: targetToc,
+                    current_id: cid
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                showToast(json.msg);
+                checkSubscribeStatus(); // 刷新 UI
+            }
+        } catch(e) { showToast("操作失败"); }
+    }
+    
+    // 初始化时调用
+    checkSubscribeStatus();
 </script>
+
+<!-- 在设置面板 -> 功能区域添加按钮 -->
+            <div class="opt-row">
+                <span>功能</span>
+                <div style="display:flex; gap:10px; font-size:12px; flex-wrap: wrap;"> 
+                    <button class="p-btn p-btn-sm" onclick="toggleTTS()" id="ttsBtn">🎧 朗读</button>
+                    <button class="p-btn p-btn-sm" onclick="openSourceModal()">⇄ 换源</button>
+                    <!-- [新增] 追更按钮 -->
+                    <button class="p-btn p-btn-sm" id="subBtn" onclick="toggleSubscribe()">🔔 追更</button>
+                    
+                    <button class="p-btn p-btn-sm" onclick="jumpToSource()" style="background:#f0f0f0; color:#666;">🔗 原文</button>
+                </div>
+            </div>
+ 
 </body>
 </html>

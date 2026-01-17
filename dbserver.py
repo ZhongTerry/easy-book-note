@@ -10,7 +10,7 @@ from flask import Flask, render_template
 from datetime import timedelta
 import threading
 import time
-
+from spider_core import crawler_instance
 # 导入配置
 from shared import USER_DATA_DIR
 import managers
@@ -19,6 +19,8 @@ import json
 from routes.core_bp import core_bp
 from routes.admin_bp import admin_bp
 from routes.pro_bp import pro_bp
+# [新增] 引入解析函数
+from spider_core import parse_chapter_id
 
 app = Flask(__name__)
 
@@ -40,75 +42,103 @@ def schedule_cache_cleanup():
 
 threading.Thread(target=schedule_cache_cleanup, daemon=True).start()
 # === 在 dbserver.py ===
+import random
 @app.route('/reader_m')
 def reader_m():
     """处理/reader_m路由，返回reader_m.html模板页面"""
     return render_template('reader_m.html')
 def schedule_auto_check():
     """
-    后台线程：每 4 小时检查一次 'to_read' 书单的更新
+    后台线程：每 5 小时检查一次 'book_updates' 表的更新
     """
     time.sleep(60) # 启动后等一会再跑
     
     while True:
-        print("[AutoCheck] 开始检查必读书单更新...")
+        print("[AutoCheck] 🕒 开始后台追更检查...")
         try:
-            # 遍历 user_data 下所有的 booklist 文件
-            # 因为是后台线程，没有 session，需要物理扫描文件
-            for f in os.listdir(managers.USER_DATA_DIR):
-                if f.endswith("_booklists.json"):
-                    username = f.replace("_booklists.json", "")
-                    filepath = os.path.join(managers.USER_DATA_DIR, f)
+            # 1. 扫描 data.sqlite (针对主数据库模式)
+            # 或者扫描 user_data/ 下的所有 .sqlite 文件
+            db_files = [f for f in os.listdir(managers.USER_DATA_DIR) if f == 'data.sqlite']
+            
+            for db_f in db_files:
+                db_path = os.path.join(managers.USER_DATA_DIR, db_f)
+                try:
+                    conn = sqlite3.connect(db_path)
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
                     
-                    with open(filepath, 'r', encoding='utf-8') as bf:
-                        lists = json.load(bf)
-                    
-                    # 寻找名为 to_read 的书单 (不区分大小写)
-                    target_list = None
-                    for lid, data in lists.items():
-                        if data['name'].lower() in ['to_read', '必读', '追更']:
-                            target_list = data['books']
-                            break
-                    
-                    if target_list:
-                        print(f"[AutoCheck] 正在为用户 {username} 检查 {len(target_list)} 本书...")
-                        # 遍历书籍 (注意：这里我们缺 toc_url，只能用 key 去 kv_store 反查 value)
-                        # 为了简化，我们假设 value 就是最新的阅读进度 URL，爬虫能从这个 URL 找到目录
-                        
-                        # 加载该用户的 KV 库
-                        user_db_path = os.path.join(managers.USER_DATA_DIR, f"{username}.sqlite")
-                        conn = sqlite3.connect(user_db_path)
-                        cursor = conn.cursor()
-                        
-                        for book in target_list:
-                            key = book['key']
-                            cursor.execute("SELECT value FROM kv_store WHERE key=?", (key,))
-                            row = cursor.fetchone()
-                            if row:
-                                current_url = row[0]
-                                # 调用爬虫 (这里复用 crawler 实例)
-                                # 注意：这里是耗时操作
-                                try:
-                                    # 先找目录
-                                    page_info = managers.crawler_instance.run(current_url)
-                                    toc_url = page_info.get('toc_url') or current_url
-                                    
-                                    latest = managers.crawler_instance.get_latest_chapter(toc_url)
-                                    if latest:
-                                        managers.update_manager.set_update(key, latest, username)
-                                        print(f"   -> {book['title']} 更新至: {latest['title']}")
-                                        # 随机休眠，防止被封 IP
-                                        time.sleep(random.uniform(2, 5))
-                                except Exception as e:
-                                    print(f"   -> 检查失败 {key}: {e}")
-                        
+                    # 检查表是否存在
+                    try: cursor.execute("SELECT * FROM book_updates LIMIT 1")
+                    except: 
                         conn.close()
+                        continue
+
+                    # 获取所有订阅
+                    cursor.execute("SELECT book_key, toc_url, last_local_id FROM book_updates")
+                    tasks = cursor.fetchall()
+                    
+                    print(f"[AutoCheck] 发现 {len(tasks)} 个追更任务 (DB: {db_f})")
+                    
+                    for task in tasks:
+                        key = task['book_key']
+                        toc_url = task['toc_url']
+                        local_id = task['last_local_id']
+                        
+                        if not toc_url: continue
+                        
+                        try:
+                            # === [核心修复] 修正本地基准 (同步 api_subscribe 逻辑) ===
+                            # 即使数据库里记的是 Ch 1，但如果缓存里已经有了 Ch 100，
+                            # 我们应该以 Ch 100 为基准，避免误报 "发现更新"。
+                            cached_toc = managers.cache.get(toc_url)
+                            if cached_toc and cached_toc.get('chapters'):
+                                last_chap = cached_toc['chapters'][-1]
+                                cached_id = last_chap.get('id')
+                                # 如果 id 不存在或异常，尝试从标题解析
+                                if not cached_id or cached_id <= 0:
+                                    cached_id = parse_chapter_id(last_chap.get('title', ''))
+                                
+                                # 取大者作为基准
+                                if cached_id > local_id:
+                                    # print(f"   [AutoCheck] 基准修正 {key}: DB({local_id}) -> Cache({cached_id})")
+                                    local_id = cached_id
+
+                            # === 爬取最新章节 ===
+                            # 1. 获取目录
+                            latest_chap = crawler_instance.get_latest_chapter(toc_url, no_cache=True)
+                            if latest_chap:
+                                remote_id = latest_chap.get('id', 0)
+                                # 再次尝试解析
+                                if remote_id <= 0:
+                                    remote_id = parse_chapter_id(latest_chap.get('title', ''))
+
+                                if remote_id > local_id:
+                                    print(f"   🔥 [UPDATE] {key}: 基准{local_id} -> 远程{remote_id}")
+                                    # 更新状态
+                                    cursor.execute("UPDATE book_updates SET last_remote_id=?, has_update=1, updated_at=CURRENT_TIMESTAMP WHERE book_key=?", 
+                                                 (remote_id, key))
+                                    conn.commit()
+                                else:
+                                    # 无更新，也更新一下 last_remote_id 防止下次还要爬？
+                                    # 其实可以只 update updated_at
+                                    pass
+                            
+                            # 随机休眠
+                            time.sleep(random.uniform(3, 8))
+                            
+                        except Exception as e:
+                            print(f"   ❌ 检查失败 {key}: {e}")
+                            
+                    conn.close()
+                except Exception as e:
+                    print(f"Db Error: {e}")
 
         except Exception as e:
             print(f"[AutoCheck] 线程出错: {e}")
             
-        # 休眠 4 小时 (14400 秒)
-        time.sleep(3600)
+        # 休眠 5 小时 (18000 秒)
+        print("[AutoCheck] 休眠 5 小时...")
+        time.sleep(18000)
 
 # 在 main 中启动
 threading.Thread(target=schedule_auto_check, daemon=True).start()

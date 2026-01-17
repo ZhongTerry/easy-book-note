@@ -670,7 +670,23 @@ body.dark-mode #settingsModal input.p-input {
         <span>设置</span>
     </div>
 </aside>
-
+<div id="tocOverlay" class="modal-overlay" onclick="closeByOverlay(event, 'tocOverlay')">
+    <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 class="modal-title">目录</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                 <!-- 目录内刷新按钮 -->
+                 <button class="btn-refresh-toc" onclick="loadTOC(true)" title="从源站重新抓取目录">🔄 刷新</button>
+                 <!-- 关闭按钮 -->
+                 <button onclick="document.getElementById('tocOverlay').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+            </div>
+        </div>
+        <!-- 目录列表容器 -->
+        <div id="tocList" style="flex: 1; overflow-y: auto;">
+            <!-- 目录将通过 JS 动态加载到这里 -->
+        </div>
+    </div>
+</div>
 <!-- 设置 Modal -->
 <div id="settingsModal" class="modal-overlay" onclick="closeByOverlay(event, 'settingsModal')">
     <div class="modal-box" onclick="event.stopPropagation()">
@@ -749,26 +765,42 @@ body.dark-mode #settingsModal input.p-input {
                 </button>
             </div>
         </div>
+        <div class="setting-row">
+            <span class="setting-label">高级选项</span>
+            <div class="btn-grid">
+                <button class="btn-action" onclick="forceRefresh()">
+                    <span>🔄</span> 强制重新抓取
+                </button>
+                <button class="btn-action" onclick="triggerSourceModal()">
+                    <span>📚</span> 切换书源...
+                </button>
+            </div>
+        </div>
 
-        <div style="text-align:center; margin-top:10px;">
-            <button onclick="document.getElementById('settingsModal').style.display='none'" style="padding:10px 40px; border-radius:8px; border:1px solid #eee; background:var(--accent); color:white; cursor:pointer; font-weight:bold;">确定</button>
+        <!-- [新增] 追更开关 (放在设置面板的高级选项里) -->
+        <div class="setting-row">
+            <span class="setting-label">自动追更系统</span>
+            <div class="btn-grid">
+                <button class="btn-action" id="pcSubBtn" onclick="toggleSubscribePC()">
+                    <span>🔔</span> 开启追更
+                </button>
+            </div>
+            <div style="font-size:12px; color:#999; margin-top:5px; text-align:center;">
+                系统将每隔 5 小时自动检查一次更新
+            </div>
+        </div>
+
+        <!-- [新增] 调试链接 -->
+        <div class="setting-row" style="margin-bottom:0;">
+            <button class="btn-action" onclick="window.open('{{ current_url }}', '_blank')" style="width:100%; justify-content:center; color:#666;">
+                🔗 在新标签页打开源网站
+            </button>
+        </div>
         </div>
     </div>
-</div>
 
-<!-- 目录 Modal -->
-<div id="tocOverlay" class="modal-overlay" onclick="this.style.display='none'">
-    <div class="modal-box" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <h3 class="modal-title">章节目录</h3>
-            <button class="btn-refresh-toc" onclick="loadTOC(true)">🔄 刷新目录</button>
-        </div>
-        <div id="tocList" style="max-height: 500px; overflow-y:auto;">正在加载...</div>
-    </div>
-</div>
-
-<!-- 换源 Modal -->
-<div id="sourceModal" class="modal-overlay" onclick="this.style.display='none'">
+    <!-- 换源模态框 -->
+    <div id="sourceModal" class="modal-overlay" onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-box" onclick="event.stopPropagation()">
         <div class="modal-header">
             <h3 class="modal-title">选择备选源</h3>
@@ -805,6 +837,7 @@ body.dark-mode #settingsModal input.p-input {
         </div>
     </div>
 </div>
+
 <script>
     const localChapterId = parseInt("{{ chapter_id }}") || -1;
     const dbKey = "{{ db_key }}";
@@ -812,6 +845,62 @@ body.dark-mode #settingsModal input.p-input {
     const currentUrl = "{{ current_url }}";
     // 自动注入版本号
     const APP_VERSION = "{{ app_version }}";
+    let isSubscribed = false;
+    async function checkSubPC() {
+        try {
+            const res = await fetch('/api/updates/status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey })
+            });
+            const json = await res.json();
+            isSubscribed = json.subscribed;
+            updateSubBtnUI();
+        } catch(e) {}
+    }
+    
+    function updateSubBtnUI() {
+        const btn = document.getElementById('pcSubBtn');
+        if (isSubscribed) {
+            btn.innerHTML = '<span>🔥</span> 已追更';
+            btn.style.borderColor = "#e11d48";
+            btn.style.color = "#e11d48";
+            btn.style.background = "#fff1f2";
+        } else {
+            btn.innerHTML = '<span>🔔</span> 开启追更';
+            btn.style.borderColor = "";
+            btn.style.color = "";
+            btn.style.background = "";
+        }
+    }
+    
+    async function toggleSubscribePC() {
+        const tocUrl = "{{ article.toc_url }}" || "{{ current_url }}";
+        // 简单正则提取ID
+        let cid = 0;
+        const m = "{{ current_url }}".match(/\/(\d+)(?:_\d+)?(?:\.html)?$/);
+        if (m) cid = parseInt(m[1]);
+        
+        const res = await fetch('/api/updates/subscribe', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                key: dbKey, 
+                enable: !isSubscribed, 
+                toc_url: tocUrl,
+                current_id: cid
+            })
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+            showToast(json.msg);
+            isSubscribed = !isSubscribed;
+            updateSubBtnUI();
+        }
+    }
+    
+    // 初始化
+    checkSubPC();
     function getPageIndex(url) {
         const match = url.match(/_(\d+)\./);
         return match ? parseInt(match[1]) : 1;
@@ -1205,8 +1294,20 @@ body.dark-mode #settingsModal input.p-input {
                 
                 list.innerHTML = d.chapters.map(c => {
                     const isCurrent = normalizeUrl(c.url) === normCurrent;
-                    let displayTitle = c.raw_title || c.title || c.name;
-                    if (c.id && c.id > 0) displayTitle = `第${c.id}章 ${c.name}`;
+                    
+                    // [修复] 优先使用 title，解决 undefined 问题
+                    let nameText = c.title || c.name || c.raw_title || "无标题";
+                    let displayTitle = nameText;
+
+                    // [修复] 智能判断 ID 类型：
+                    // 只有当 id 是合理的短序号(小于 100000)时，才拼接 "第x章"
+                    // 避免把 19 位长的数据库 ID 当作章节号显示
+                    if (c.id && c.id > 0 && c.id < 100000) {
+                         // 防止标题里本来就有"第x章"，导致重复
+                         if (!nameText.includes('第')) {
+                             displayTitle = `第${c.id}章 ${nameText}`;
+                         }
+                    }
 
                     return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${dbKey}" 
                                class="toc-item ${isCurrent ? 'active-chap' : ''}">
@@ -1265,6 +1366,8 @@ body.dark-mode #settingsModal input.p-input {
     }
 
     // === 换源逻辑 ===
+    let switchContext = {}; // 上下文
+
     function triggerSourceModal() {
         document.getElementById('settingsModal').style.display = 'none';
         showModal('sourceModal');
@@ -1274,6 +1377,8 @@ body.dark-mode #settingsModal input.p-input {
         const list = document.getElementById('sourceList');
         const loading = document.getElementById('sourceLoading');
         list.innerHTML = ''; loading.style.display = 'block';
+        loading.innerText = '🔍 正在聚合全网搜索结果...';
+        
         try {
             const res = await fetch('/api/source/list', {
                 method: 'POST',
@@ -1283,19 +1388,71 @@ body.dark-mode #settingsModal input.p-input {
             const json = await res.json();
             loading.style.display = 'none';
             if (json.status === 'success') {
-                list.innerHTML = json.data.map(src => `
-                    <div onclick="confirmSwitch('${src.url}')" style="padding:12px; border:1px solid #eee; border-radius:8px; margin-bottom:8px; cursor:pointer; transition:0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='#eee'">
-                        <div style="font-weight:bold; color: #333;">${src.source}</div>
-                        <div style="font-size:12px; color:#666;">${src.title}</div>
-                    </div>`).join('');
+                switchContext = json.match_info || {};
+                list.innerHTML = json.data.map(src => {
+                    let domain = '';
+                    try { domain = new URL(src.url).hostname; } catch(e) { domain = src.url; }
+                    
+                    return `
+                    <div onclick="requestSwitch('${src.url}', '${src.source}')" 
+                         style="padding:15px; border:1px solid #eee; border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; background:#fff;" 
+                         onmouseover="this.style.borderColor='var(--accent)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.05)'" 
+                         onmouseout="this.style.borderColor='#eee'; this.style.boxShadow='none'">
+                        
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <div style="font-weight:bold; color: #333; font-size:15px;">${src.source}</div>
+                            <div style="font-size:12px; color:#888;">${src.description || ''}</div>
+                        </div>
+
+                        <div style="font-size:13px; color:#555; margin-bottom:8px;">${src.title}</div>
+                        
+                        <div style="font-size:11px; color:#999; background:#f9f9f9; padding:4px 8px; border-radius:4px; font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                            ${src.url}
+                        </div>
+                    </div>`;
+                }).join('');
             } else { list.innerHTML = `<div style="text-align:center; padding: 20px;">${json.msg}</div>`; }
         } catch(e) { showToast("换源服务暂时不可用"); }
     }
-    async function confirmSwitch(newUrl) {
-        await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: newUrl }) });
-        window.location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+    async function requestSwitch(targetUrl, sourceName) {
+        const list = document.getElementById('sourceList');
+        const loading = document.getElementById('sourceLoading');
+        
+        list.parentElement.scrollTop = 0; // 滚回顶部
+        list.style.display = 'none';
+        loading.style.display = 'block';
+        loading.innerHTML = `⏳ 正在前往 ${sourceName}<br>尝试匹配章节...`;
+
+        try {
+            const res = await fetch('/api/source/confirm_switch', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    target_url: targetUrl,
+                    current_id: switchContext.current_id,
+                    current_title: switchContext.current_title
+                })
+            });
+            
+            const json = await res.json();
+            
+            if (json.status === 'success') {
+                loading.innerText = '✅ 跳转中...';
+                await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: json.new_url }) });
+                window.location.href = `/read?url=${encodeURIComponent(json.new_url)}&key=${encodeURIComponent(dbKey)}`;
+            } else {
+                showToast(json.msg || "切换失败");
+                loading.style.display = 'none';
+                list.style.display = 'block';
+            }
+        } catch (e) {
+            showToast("请求超时");
+            loading.style.display = 'none';
+            list.style.display = 'block';
+        }
     }
 
+    // async function confirmSwitch(newUrl) { ... }
     // === 统计与热力图 ===
     async function loadStats() {
         const grid = document.getElementById('heatmapGrid');

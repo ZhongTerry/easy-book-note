@@ -189,6 +189,7 @@ class FanqieLocalAdapter:
                 if isinstance(item, str): continue # 过滤纯ID
                 cid = str(item.get('item_id'))
                 chapter_list.append({
+                    'id': int(cid), # [核心修复] 显式设定 id 为长整数(item_id)，供 updateManager 比较使用
                     'item_id': cid,
                     'title': item.get('title', '无标题'),
                     'url': f"https://fanqienovel.com/reader/{cid}"
@@ -222,6 +223,7 @@ class FanqieLocalAdapter:
         
         return {
             'title': book_title,
+            'manual_sort': True, # [核心修复] 开启手动模式，禁止 spider_core 修改/重排 ID
             'chapters': chapters
         }
 

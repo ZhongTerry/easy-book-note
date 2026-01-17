@@ -13,7 +13,8 @@ from pypinyin import lazy_pinyin, Style
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ebooklib import epub
 from werkzeug.utils import secure_filename
-from shared import BASE_DIR, LIB_DIR
+# [确保这里有 CACHE_DIR]
+from shared import BASE_DIR, LIB_DIR, CACHE_DIR
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
 # ==========================================
@@ -301,6 +302,12 @@ class SearchHelper:
                 "encoding": "gbk"
             }
         ]
+
+    @lru_cache(maxsize=100)
+    def search_bing_cached(self, keyword):
+        """[新增] 带缓存的搜索入口 (兼容旧接口并提高性能)"""
+        # print(f"[Search Cache] Miss, fetching: {keyword}")
+        return self.search_bing(keyword)
 
     def _search_single_site(self, site, keyword):
         """搜索单个站点"""
@@ -797,8 +804,8 @@ class SearchHelper:
         # 包括我们刚写的 fanqie_local_source 和之前的 sxg_source
         search_funcs = [
             self._do_direct_source_search, # 插件大军 (番茄、书香阁等)
-            # self._do_so_search,            # 360 (主力)
-            self._do_bing_search        # Bing CN (辅助)
+            self._do_so_search,            # 360 (主力)
+            # self._do_bing_search        # Bing CN (辅助)
         ]
 
         all_results = []
@@ -1106,7 +1113,7 @@ class SearchHelperOld:
                     # 直接调用函数，而不是提交给线程池
                     real_url = self._resolve_real_url(item['url'])
                     # print(111)
-                    # [重要] 只有当 URL 不再包含 "so.com/link" 时，才算解析成功
+                    # [重要] 只有当 URL 不再包含 "so.com" 时，才算解析成功
                     # 并且要符合小说站白名单
                     if "so.com/link" not in real_url and self._is_valid_novel_site(real_url):
                         item['url'] = real_url
@@ -1388,30 +1395,21 @@ class SearchHelperOld:
                     title = title_elem.get_text(strip=True)
                     href = title_elem.get('href') # 这是百度的加密链接
                     
-                    # 提取下方显示的真实域名 (辅助判断)
-                    footer_text = box.get_text()
-                    
-                    # 强力过滤
-                    if self._is_junk(title, ""): continue # URL是加密的，暂时只能检查标题
-                    
-                    # 百度特色：广告通常有 '广告' 字样
-                    if "广告" in footer_text: continue
+                    if not href: continue
 
-                    # 既然拿不到真实URL（需要再次请求解密，太慢），
-                    # 我们这里做一个大胆的策略：
-                    # 直接返回这个加密链接。
-                    # 因为你的 NovelCrawler.run() 能够处理 302 跳转！
-                    
-                    results.append({
-                        'title': self._clean_title(title),
-                        'url': href, # 这是一个 http://www.baidu.com/link?url=...
-                        'suggested_key': self.get_pinyin_key(keyword),
-                        'source': 'Baidu 🔵'
-                    })
-                    if len(results) >= 6: break
-                except: pass
-                
-            return results
+                    if self._is_valid_result(title, href):
+                        raw_results.append({
+                            'title': self._clean_title(title),
+                            'url': href,
+                            'suggested_key': self.get_pinyin_key(keyword),
+                            'source': 'Baidu (Owllook)'
+                        })
+                except: continue
+                if len(raw_results) >= 8: break
+            
+            # 百度链接全是加密的，必须并发解密
+            return self._concurrent_resolve(raw_results)
+
         except Exception as e:
             print(f"[Search] Baidu Error: {e}")
             return []
@@ -1481,43 +1479,167 @@ class NovelCrawler:
         
         print(f"[Switch] 🏁 耗时操作结束，找到 {len(valid_sources)} 个有效源")
         return valid_sources
+
+    def find_best_match(self, toc_url, target_id, target_title):
+        """
+        在指定源(toc_url)中查找最佳匹配章节
+        策略调整：
+        1. 优先尝试标题模糊匹配 (Title Fuzzy Match) - 解决 ID 错位问题
+        2. 其次尝试 ID 匹配 (ID Match) - 解决标题被改名问题
+        3. 失败则返回第一章
+        """
+        print(f"[Switch] 🔎 正在新源 {toc_url} 查找章节: ID={target_id}, Title={target_title}")
+        
+        try:
+            # 快速获取目录 (fast_mode, 超时较短)
+            toc = self.get_toc(toc_url, fast_mode=True)
+            if not toc or not toc.get('chapters'):
+                print("[Switch] ❌ 目录获取失败或为空")
+                return None 
+
+            chapters = toc['chapters']
+            if not chapters: return None
+
+            # === 1. 优先尝试标题模糊匹配 ===
+            if target_title:
+                from difflib import SequenceMatcher
+                
+                # 预处理：去掉 "第xxx章" 和空格，只比对核心文字
+                def clean_t(t):
+                    # 去除 "第xxx章"、"Episode X" 等前缀，以及所有空格和标点
+                    t = re.sub(r'^(?:第)?\s*[0-9零一二三四五六七八九十百千万]+\s*[章节回卷\.]', '', str(t))
+                    t = re.sub(r'[ \u3000\t\r\n]', '', t)
+                    return t.strip()
+                
+                clean_target = clean_t(target_title)
+                
+                if clean_target:
+                    best_ratio = 0
+                    best_url = None
+                    best_title_found = ""
+
+                    # 遍历目录查找最相似的
+                    for chap in chapters:
+                        clean_chap = clean_t(chap.get('name', '') or chap['title'])
+                        
+                        # A. 完全包含 (极高置信度，例如 "大战三百回合" vs "大战三百回合(修)")
+                        if clean_target == clean_chap and len(clean_target) > 1:
+                            print(f"[Switch] ✅ 标题完全一致: {chap['title']}")
+                            return chap['url']
+                        
+                        # B. 相似度计算
+                        ratio = SequenceMatcher(None, clean_target, clean_chap).ratio()
+                        
+                        # 如果相似度超过 0.7 且是目前最高的
+                        if ratio > 0.7 and ratio > best_ratio:
+                            best_ratio = ratio
+                            best_url = chap['url']
+                            best_title_found = chap['title']
+                    
+                    if best_url:
+                        print(f"[Switch] ✅ 标题相似度命中 ({best_ratio:.2f}): [{target_title}] vs [{best_title_found}]")
+                        return best_url
+
+            # === 2. 其次尝试 ID 匹配 ===
+            if target_id and target_id > 0:
+                print(f"[Switch] ⚠️ 标题匹配未命中，尝试 ID 匹配: {target_id}")
+                for chap in reversed(chapters):
+                    if chap.get('id') == target_id:
+                        print(f"[Switch] ✅ ID 精确命中: {chap['title']}")
+                        return chap['url']
+
+            # === 3. 兜底策略：返回第一章 ===
+            print(f"[Switch] ⚠️ 全部匹配失败，回退到第一章")
+            return chapters[0]['url']
+            
+        except Exception as e:
+            print(f"[Switch] 匹配过程出错: {e}")
+            return None
+
+# ...existing code...
     def _get_book_name(self, soup):
         """
-        通用的小说名识别逻辑
+        通用的小说名识别逻辑 (增强版)
         """
+        # [新增] 策略 0: 从页面底部的脚本 lastread.set(...) 提取
+        # 很多笔趣阁模版都有这个 script
+        # 格式: lastread.set(id, zid, '书名', '章节名', '作者', ...)
+        try:
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string and 'lastread.set' in script.string:
+                    # 匹配单引号或双引号包裹的第三个参数
+                    match = re.search(r"lastread\.set\([^,]+,[^,]+,\s*['\"]([^'\"]+)['\"]", script.string)
+                    if match:
+                        print(f"[Smart Title] 🎯 从 JS lastread 提取成功: {match.group(1)}")
+                        return match.group(1)
+        except: pass
+
+        # [新增] 策略 1: 智能分析 <title> 标签
+        # 常见的 title 格式: "章节名_书名_作者_网站名" 或 "书名_作者_网站名"
+        if soup.title and soup.title.string:
+            title_text = soup.title.string
+            parts = re.split(r'[_\-]', title_text) # 用 _ 或 - 切分
+            
+            # 如果切分后有 3 部分以上 (如: 第477章..._学霸..._十月廿二_新笔趣阁)
+            # 通常书名在倒数第三个 (如果是4段) 或 倒数第二个 (如果是3段)
+            # 这里的逻辑比较这玄学，我们尝试提取最像书名的部分
+            if len(parts) >= 3:
+                # 倒数第三个通常是书名 (如果是 章节_书名_作者_网名)
+                # 倒数第二个通常是书名 (如果是 章节_书名_网名)
+                # 我们优先找倒数第三个，如果它是空的或者太短，再看别的
+                
+                # 排除列表: 常见的网站后缀
+                exclude_keywords = ['笔趣', '小说', '最新', '章节', '无弹窗', '阅读', '下载', '作者']
+                
+                # 从后往前找，找到第一个不包含上述关键字且长度适中的部分
+                for part in reversed(parts):
+                    p = part.strip()
+                    if not p: continue
+                    if any(k in p for k in exclude_keywords): continue
+                    
+                    # 它是书名的概率很大，但要排除作者名
+                    # 我们可以配合 meta keywords 验证
+                    meta_kw = soup.find('meta', attrs={'name': 'keywords'})
+                    if meta_kw:
+                        kw_content = meta_kw.get('content', '')
+                        if p in kw_content:
+                            print(f"[Smart Title] 🎯 从 Title+Keywords 锁定书名: {p}")
+                            return p
+                    
+                    # 如果没有meta验证，简单的长度判断
+                    if 1 < len(p) < 20: 
+                        # 暂时先返回这个
+                        # print(f"[Smart Title] 猜测 Title 中的书名: {p}")
+                        # return p
+                        pass
+
         # 1. 尝试从常见面包屑导航中提取
         # 匹配包含 'path', 'breadcrumb', 'crumb' 的 class 或 id
-        path_box = soup.find(class_=re.compile(r'path|crumb|breadcrumb', re.I)) or \
-                   soup.find(id=re.compile(r'path|crumb|breadcrumb', re.I))
-        
-        if path_box:
-            links = path_box.find_all('a')
-            # 逻辑：首页 > 分类 > 书名 > 章节名，通常倒数第二个或第三个是书名
-            if len(links) >= 3:
-                # 针对书香阁这种：首页(0) > 分类(1) > 书名(2) > 章节
-                return links[2].get_text(strip=True)
-            elif len(links) == 2:
-                return links[1].get_text(strip=True)
+# ...existing code...
+        # [增强] 策略 2: 搜寻 con_top 或类似的非标准面包屑
+        # 很多站用 .con_top > a 
+        con_top = soup.find(class_='con_top')
+        if con_top:
+            text = con_top.get_text()
+            if '>' in text:
+                links = con_top.find_all('a')
+                if len(links) >= 2:
+                    # 假设结构: 首页 > 书名 > 章节
+                     # 或者是: 首页 > 分类 > 书名 > 章节
+                    # 取倒数第二个 link 的文本通常是书名 (因为最后一个是章节，或者没有链接)
+                    
+                    # 倒叙遍历链接
+                    for link in reversed(links):
+                        lt = link.get_text(strip=True)
+                        if "小说" in lt or "首页" in lt: continue
+                        # 过滤掉显然是分类的 (2个字)
+                        if len(lt) == 2: continue
+                        
+                        return lt
 
-        # 2. 尝试从 Meta Keywords 提取 (第一个词通常是书名)
-        meta_kw = soup.find('meta', attrs={'name': 'keywords'})
-        if meta_kw:
-            kw = meta_kw.get('content', '').split(',')[0]
-            if kw and len(kw) < 20: return kw
-
-        # 3. 尝试从 Title 标签拆分
-        if soup.title:
-            t_text = soup.title.get_text(strip=True)
-            # 常见格式：章节名_书名_站点名 或 书名_章节名
-            if "_" in t_text:
-                parts = t_text.split('_')
-                for p in parts:
-                    if "第" not in p and "章" not in p and "节" not in p:
-                        # 剔除常见的后缀
-                        name = re.sub(r'(小说|全文|阅读|最新章节|笔趣阁).*', '', p)
-                        if len(name) > 1: return name.strip()
-
-        return "未知书名"
+        # 最后兜底 ...
+        return None
     def search_and_switch_source(self, book_name, target_chapter_id):
         """
         根据书名和目标章节ID，全网搜索备选源，并寻找匹配的章节链接
@@ -1587,7 +1709,7 @@ class NovelCrawler:
             return url
         print(f"[SmartURL] Analyzing: {url}")
         
-        # 1. 特征预判：如果 URL 以 .html 结尾且包含数字，大概率是章节，直接返回
+        # 1. 特征预判：如果 URL  以 .html 结尾且包含数字，大概率是章节，直接返回
         # (这能节省一次网络请求)
         if re.search(r'\d+\.html$', url) and "index" not in url:
             return url
@@ -1795,32 +1917,38 @@ class NovelCrawler:
         if og_desc: meta['desc'] = og_desc.get('content', '')[:100] + '...'
 
         return meta
-    def get_toc(self, toc_url, fast_mode=False):
+    def get_toc(self, url, fast_mode=False, no_cache=False):
         """
-        fast_mode=True: 不重试，超时短，专用于换源检测
+        获取目录
+        :param no_cache: 如果为 True，强制忽略本地缓存文件
         """
-        from managers import cache
-        if not toc_url.startswith('epub:'):
-            cached_toc = cache.get(toc_url)
-            if cached_toc:
-                print(f"[Crawler] ✅ 命中本地目录缓存: {toc_url}")
-                return cached_toc
-
-        # 1. 尝试远程集群
-        # remote_data = _remote_request('toc', {'url': toc_url})
-        remote_data = {}
-        if remote_data:
-            print(f"[Crawler] 📥 远程目录获取成功，写入本地缓存")
-            cache.set(toc_url, remote_data)
-            return remote_data
+        if not url: return None
+        
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        # [修复] 使用 CACHE_DIR 而不是 managers.CACHE_DIR
+        cache_path = os.path.join(CACHE_DIR, f"{url_hash}.json")
+        
+        # 1. 尝试读缓存 (如果没开启 no_cache)
+        if not no_cache and os.path.exists(cache_path):
+             try:
+                # 检查过期时间 (例如 12 小时)
+                if time.time() - os.path.getmtime(cache_path) < 43200: 
+                    with open(cache_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        if data and data.get('chapters'):
+                            print(f"[Crawler] ✅ 命中本地目录缓存: {url}")
+                            return data
+             except: pass
+             
+        # 2. 只有当没有缓存或强制刷新时，才走网络
+        print(f"[Crawler] 🌐 正在联网获取目录 (强制刷新={no_cache}): {url}")
+        
         # 参数设置
-        if toc_url.startswith('epub:'):
-            return None
         timeout = 5 if fast_mode else 15
         retry = 1 if fast_mode else 3
 
-        print("fff", toc_url)
-        adapter = plugin_mgr.find_match(toc_url)
+        print("fff", url)
+        adapter = plugin_mgr.find_match(url)
         print(adapter)
         if adapter: 
             # 注意：如果适配器里的 get_toc 调用了 _fetch_page_smart，
@@ -1832,7 +1960,7 @@ class NovelCrawler:
             self.timeout = timeout # 临时修改全局超时
             print("ttt")
             try:
-                data = adapter.get_toc(self, toc_url)
+                data = adapter.get_toc(self, url)
             finally:
                 self.timeout = old_timeout # 恢复
         else: 
@@ -1847,7 +1975,7 @@ class NovelCrawler:
         # 重新写一段通用的 get_toc 调用逻辑：
         old_timeout = self.timeout
         self.timeout = timeout
-        adapter = plugin_mgr.find_match(toc_url)
+        adapter = plugin_mgr.find_match(url)
         data = None
         final_meta = {"cover": "", "author": "", "desc": "", "tags": []}
 
@@ -1855,13 +1983,13 @@ class NovelCrawler:
         try:
             if adapter: 
                 # 1. 调用适配器获取目录 (标准操作)
-                data = adapter.get_toc(self, toc_url)
+                data = adapter.get_toc(self, url)
                 
                 # 2. [新增功能] 检查并调用适配器的 get_meta 方法
                 if hasattr(adapter, 'get_meta'):
                     try:
                         print(f"[Crawler] ⚡ 优先调用适配器元数据接口: {adapter.__class__.__name__}")
-                        plugin_meta = adapter.get_meta(self, toc_url)
+                        plugin_meta = adapter.get_meta(self, url)
                         
                         if plugin_meta:
                             # 优先使用适配器返回的数据 (如果非空)
@@ -1879,7 +2007,7 @@ class NovelCrawler:
                     if not final_meta['desc'] and data.get('desc'): final_meta['desc'] = data.get('desc')
             else:
                 # 通用逻辑
-                data = self._general_toc_logic(toc_url)
+                data = self._general_toc_logic(url)
                 if data:
                     final_meta['cover'] = data.get('cover', '')
                     final_meta['author'] = data.get('author', '')
@@ -1932,18 +2060,17 @@ class NovelCrawler:
             'desc': meta['desc']
         }
 
-    def get_latest_chapter(self, toc_url):
-        toc_data = self.get_toc(toc_url)
-        if not toc_data or not toc_data.get('chapters'): return None
-        chapters = toc_data['chapters']
-        last_chapter = chapters[-1]
-        # 兼容性处理
-        return {
-            "title": last_chapter.get('name', last_chapter.get('raw_title', '未知章节')),
-            "url": last_chapter['url'],
-            "id": last_chapter.get('id', -1),
-            "total_chapters": len(chapters)
-        }
+    def get_latest_chapter(self, toc_url, no_cache=False):
+        """
+        获取最新章节信息
+        :param no_cache: 是否强制刷新
+        """
+        # [修复] 传递 no_cache 参数给 get_toc
+        toc = self.get_toc(toc_url, fast_mode=True, no_cache=no_cache)
+        
+        if toc and toc.get('chapters'):
+            return toc['chapters'][-1]
+        return None
 
     def run(self, url):
                 # 0. [新增] 优先检查本地缓存

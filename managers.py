@@ -274,6 +274,16 @@ class IsolatedDB:
                                 value TEXT,
                                 recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                             )''')
+                # === [新增] 追更表 ===
+                conn.execute('''CREATE TABLE IF NOT EXISTS book_updates (
+                                book_key TEXT PRIMARY KEY,
+                                username TEXT NOT NULL,
+                                toc_url TEXT,
+                                last_local_id INTEGER DEFAULT 0,
+                                last_remote_id INTEGER DEFAULT 0,
+                                has_update BOOLEAN DEFAULT 0,
+                                updated_at TIMESTAMP
+                            )''')
                 conn.commit()
         except: pass
 
@@ -494,6 +504,89 @@ class IsolatedDB:
                 cursor = conn.execute("SELECT value, recorded_at FROM book_history WHERE username=? AND book_key=? ORDER BY recorded_at DESC", (u, key))
                 return [{"value": row[0], "time": row[1]} for row in cursor.fetchall()]
         except: return []
+
+class UpdateRecordManager:
+    """管理自动追更的数据库操作"""
+    def __init__(self):
+        self._ensure_table() # [修复] 初始化时自动建表
+        pass
+
+    def _ensure_table(self):
+        """确保 book_updates 表存在"""
+        try:
+            # 这里调用 get_db() 可能会因为没有 request context 报错
+            # 但我们在 __init__ 里调用时通常是在 import 阶段，也不行
+            # 所以只能把建表逻辑通过独立的连接来做，或者每次操作前检查
+            
+            # 使用独立连接建表，防止 Flask context 报错
+            conn = sqlite3.connect(DB_PATH) 
+            conn.execute('''CREATE TABLE IF NOT EXISTS book_updates (
+                            book_key TEXT PRIMARY KEY,
+                            username TEXT NOT NULL,
+                            toc_url TEXT,
+                            last_local_id INTEGER DEFAULT 0,
+                            last_remote_id INTEGER DEFAULT 0,
+                            has_update BOOLEAN DEFAULT 0,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )''')
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[DB Init] 自动建表失败 (不用担心，可能是文件锁定): {e}")
+
+    def subscribe(self, username, book_key, toc_url, current_id):
+        """开启追更"""
+        # 为了双重保险，如果 __init__ 失败了，这里再试一次
+        try: self._ensure_table()
+        except: pass
+        
+        with get_db() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO book_updates 
+                (book_key, username, toc_url, last_local_id, has_update, updated_at)
+                VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
+            """, (book_key, username, toc_url, current_id))
+            conn.commit()
+
+    def unsubscribe(self, book_key):
+        """取消追更"""
+        with get_db() as conn:
+            conn.execute("DELETE FROM book_updates WHERE book_key=?", (book_key,))
+            conn.commit()
+
+    def is_subscribed(self, book_key):
+        with get_db() as conn:
+            row = conn.execute("SELECT 1 FROM book_updates WHERE book_key=?", (book_key,)).fetchone()
+            return bool(row)
+
+    # [新增] 获取更详细的状态，供前端渲染红点
+    def get_book_status(self, book_key):
+        with get_db() as conn:
+            row = conn.execute("SELECT has_update, last_remote_id FROM book_updates WHERE book_key=?", (book_key,)).fetchone()
+            if row:
+                return {"subscribed": True, "has_update": bool(row['has_update']), "remote_id": row['last_remote_id']}
+            return {"subscribed": False, "has_update": False}
+    
+    def update_status(self, book_key, remote_id, has_u):
+        with get_db() as conn:
+            conn.execute("UPDATE book_updates SET last_remote_id=?, has_update=?, updated_at=CURRENT_TIMESTAMP WHERE book_key=?", 
+                         (remote_id, 1 if has_u else 0, book_key))
+            conn.commit()
+
+    def get_all_updates(self, username):
+        """获取某用户所有有更新的书"""
+        with get_db() as conn:
+            rows = conn.execute("SELECT book_key FROM book_updates WHERE username=? AND has_update=1", (username,)).fetchall()
+            return [r[0] for r in rows]
+
+    def get_all_tasks(self):
+        """后台线程用：获取所有任务"""
+        # 注意：这里可能是在 request 上下文之外调用的，所以不能用 get_db()，要手动连
+        # 但因为 DB 是按用户分文件的，我们这里需要遍历所有用户的 DB 文件？
+        # 简化策略：目前单机版很多逻辑还没做完全的用户隔离，我们先只处理主DB
+        # 或者修正逻辑：schedule_auto_check 负责遍历文件
+        pass
+
 # ==========================================
 # 5. 文件/缓存管理
 # ==========================================
@@ -883,6 +976,7 @@ tag_manager = IsolatedTagManager()
 stats_manager = IsolatedStatsManager()
 history_manager = HistoryManager()
 update_manager = UpdateManager()
+update_sub_manager = UpdateRecordManager()
 
 # 注入到 shared 供装饰器使用
 shared.role_manager_instance = role_manager

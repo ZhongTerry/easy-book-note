@@ -99,7 +99,7 @@ def index():
         
         # 这里的 render_template_string 会自动接收 context_processor 注入的 app_version
         return render_template("index.html", 
-        api_url="")
+        api_url="", app_version="1.1.3")
     except Exception as e:
         return f"Error loading index: {str(e)}", 500
 
@@ -470,17 +470,45 @@ def api_source_list():
          match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
          if match: current_id = int(match.group(1))
     
-    if current_id <= 0:
-        return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
+    # if current_id <= 0:
+    #    return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
 
-    # === 搜索并比对 ===
-    print(f"[Switch] 准备搜索新源，关键词: {book_name}, 目标章节: {current_id}")
-    sources = crawler.search_alternative_sources(book_name, current_id)
+    # === 搜索 ===
+    print(f"[Switch] 准备搜索新源，关键词: {book_name}")
+    # 改为直接返回搜索结果，不做耗时的验证
+    from spider_core import searcher
+    sources = searcher.search_bing_cached(book_name)
     
     if not sources:
-        return jsonify({"status": "failed", "msg": "全网未找到包含该章节的其他源"})
+        return jsonify({"status": "failed", "msg": "全网未找到相关书籍"})
         
-    return jsonify({"status": "success", "data": sources})
+    return jsonify({
+        "status": "success", 
+        "data": sources,
+        # 回传上下文，供前端二次确认使用
+        "match_info": {
+            "current_id": current_id,
+            "current_title": frontend_title
+        }
+    })
+
+@core_bp.route('/api/source/confirm_switch', methods=['POST'])
+@login_required
+def api_confirm_switch():
+    data = request.json
+    target_url = data.get('target_url')
+    current_id = data.get('current_id', -1)
+    current_title = data.get('current_title', '')
+    
+    if not target_url: return jsonify({"status": "error", "msg": "Target URL missing"})
+
+    new_url = crawler.find_best_match(target_url, current_id, current_title)
+    
+    if new_url:
+        return jsonify({"status": "success", "new_url": new_url})
+    else:
+        return jsonify({"status": "failed", "msg": "无法解析目标源"})
+
 @core_bp.route('/api/history/versions', methods=['POST'])
 @login_required
 def api_history_versions():
@@ -832,3 +860,143 @@ def serve_sw(): return send_file('sw.js')
 def serve_static(filename): return send_from_directory(os.path.join(BASE_DIR, 'static'), filename)
 @core_bp.route('/purecss/<path:path>')
 def send_pure(path): return send_from_directory(os.path.join(BASE_DIR, 'purecss'), path)
+
+# === 追更 API ===
+
+import threading # 确保导入
+@core_bp.route('/api/updates/subscribe', methods=['POST'])
+@login_required
+def api_subscribe():
+    username = session.get('user', {}).get('username')
+    data = request.json
+    key = data.get('key')
+    enable = data.get('enable')
+    toc_url = data.get('toc_url')
+    
+    current_id = data.get('current_id', 0)
+
+    if enable:
+        # 1. [修复] 提前在主线程预取数据，防止子线程 Context 丢失
+        user_db_val = None
+        try:
+            user_db_val = managers.db.get_val(key)
+        except: pass
+
+        managers.update_sub_manager.subscribe(username, key, toc_url, current_id)
+        
+        def _instant_check(pre_fetched_val):
+            print(f"[Instant Check] ⚡ 用户手动订阅 {key}，正在立即检查更新...")
+            try:
+                # =========================================================
+                # 核心逻辑修正：对比基准应该是 [本地缓存TOC的最后一章]
+                # 而不是 [用户当前的阅读进度]
+                # =========================================================
+
+                # --- 1. 获取本地已知进度 (Local Knowledge) ---
+                local_seq = -1
+                local_title = "未知"
+                
+                # 策略A (最准确)：读取本地缓存的目录文件的最后一章
+                cached_toc = managers.cache.get(toc_url)
+                if cached_toc and cached_toc.get('chapters'):
+                    local_last_chap = cached_toc['chapters'][-1]
+                    local_title = local_last_chap.get('title', '')
+                    local_seq = parse_chapter_id(local_title)
+                    # 如果标题解析失败，尝试用原始ID (针对番茄等特殊源)
+                    if local_seq == -1 and 'id' in local_last_chap:
+                        # 注意：这里如果是番茄的长ID，后面会在比较环节处理
+                        pass 
+                    
+                    print(f"[Check] 本地缓存TOC命中: 最后一章 {local_title} -> {local_seq}")
+
+                # 策略B (兜底)：如果完全没有TOC缓存，才退化为使用阅读进度
+                # (场景：刚加书架还没点开过目录，或者缓存被清空)
+                if local_seq == -1:
+                    print(f"[Check] 本地无TOC缓存，尝试使用阅读进度作为基准...")
+                    current_reading_url = None
+                    if isinstance(pre_fetched_val, dict):
+                        current_reading_url = pre_fetched_val.get('url')
+                    elif isinstance(pre_fetched_val, str):
+                        current_reading_url = pre_fetched_val
+                    
+                    if current_reading_url:
+                        cached_chap = managers.cache.get(current_reading_url)
+                        if cached_chap and cached_chap.get('title'):
+                            local_title = cached_chap['title']
+                            local_seq = parse_chapter_id(local_title)
+                            print(f"[Check] 阅读进度兜底: {local_title} -> {local_seq}")
+                
+                # --- 2. 获取远程进度 (Remote) ---
+                latest_data = crawler.get_latest_chapter(toc_url, no_cache=True)
+                remote_seq = -1
+                remote_title = "未知"
+                remote_id = -1
+                
+                if latest_data:
+                    remote_title = latest_data.get('title', '')
+                    remote_id = latest_data.get('id')
+                    remote_seq = parse_chapter_id(remote_title)
+                    if remote_seq == -1 and isinstance(latest_data.get('id'), int):
+                         remote_seq = latest_data['id']
+                    print(f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq}")
+                else:
+                    return
+
+                # --- 3. 核心比对 ---
+                print(f"[Check] 最终比对: Local({local_seq}) vs Remote({remote_seq})")
+                
+                has_update = False
+                
+                # A. 序号比对 (最优先)
+                if local_seq > 0 and remote_seq > 0:
+                    if remote_seq > local_seq:
+                        has_update = True
+                
+                # B. 标题比对 (兜底，防止序号解析失败)
+                # 只有当本地已经有一定的数据(local_seq != -1)才对比，否则刚加书架没缓存全报更新也不太对
+                elif local_title != "未知" and local_title != remote_title:
+                     has_update = True
+                     # 如果是番茄源长ID场景，可能走到这里
+                     print(f"[Check] 标题/ID 变动触发更新: {local_title} != {remote_title}")
+
+                if has_update:
+                     managers.update_sub_manager.update_status(key, remote_id, True)
+                     print(f"✅ 发现更新")
+                else:
+                     # 关键：如果没有更新，也要更新一下 update_sub_manager 里的 last_check_time 和 latest_id
+                     # 这样前端可以显示“刚刚检查过”
+                     managers.update_sub_manager.update_status(key, remote_id, False)
+                     print(f"💤 无更新 (已同步状态)")
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[Instant Check] 失败: {e}")
+
+        threading.Thread(target=_instant_check, args=(user_db_val,), daemon=True).start()
+
+        return jsonify({"status": "success", "msg": "已开启追更，正在后台立即检查..."})
+    else:
+        managers.update_sub_manager.unsubscribe(key)
+        return jsonify({"status": "success", "msg": "已取消追更"})
+
+@core_bp.route('/api/updates/status', methods=['POST'])
+@login_required
+def api_updates_status():
+    """返回给定 key 的追更状态，包含是否有红点"""
+    key = request.json.get('key')
+    # [修改] 调用新方法获取详细信息
+    status = managers.update_sub_manager.get_book_status(key)
+    return jsonify({
+        "status": "success", 
+        "subscribed": status['subscribed'],
+        "has_update": status['has_update'] # 告诉前端有没有新章节
+    })
+
+@core_bp.route('/api/updates/all_red_dots')
+@login_required
+def api_all_red_dots():
+    """首页用：一次性返回所有有红点的 book_key"""
+    username = session.get('user', {}).get('username')
+    keys = managers.update_sub_manager.get_all_updates(username)
+    return jsonify({"status": "success", "data": keys})

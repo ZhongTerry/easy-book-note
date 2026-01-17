@@ -1,5 +1,18 @@
-<div class="version-block" id="v1.1.2">
+<div class="version-block" id="v1.1.3">
     <div class="version-tag">当前版本</div>
+    <h2 class="version-title">v1.1.3 追更系统深度修复与适配增强</h2>
+    <div class="version-content">
+        <ul>
+            <li><strong>全面优化了追更功能：</strong> 用户可以在阅读界面的设置里面选择追更，来体验最新功能。</li>
+            <li><strong>核心追更修复：</strong> 修复了 <code>update_sub_manager</code> 初始化缺失导致追更接口报错 500 的严重 Bug；重构了番茄小说适配器的 ID 逻辑（采用长整型 snowflakes ID），彻底解决“明明有新章节却提示暂无更新”的问题。</li>
+            <li><strong>搜索稳定性增强：</strong> 在搜索核心中恢复了 <code>search_bing_cached</code> 缓存层，修复了调用源列表时因缺少方法导致的崩溃，大幅提升换源响应速度。</li>
+            <li><strong>适配器容错升级：</strong> 为书香阁（sxgread）等适配器增加了书名解析兜底逻辑，防止因页面结构微调导致元数据获取失败进而阻断阅读流程。</li>
+            <li><strong>代码健壮性：</strong> 优化了 <code>spider_core</code> 的元数据合并策略，确保在“手动排序”模式下依然能正确保留封面、作者等书籍信息。</li>
+        </ul>
+    </div>
+</div>
+
+<div class="version-block" id="v1.1.2">
     <h2 class="version-title">v1.1.2 搜索核心重构与交互微调</h2>
     <div class="version-content">
         <ul>

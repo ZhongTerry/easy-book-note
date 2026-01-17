@@ -1103,6 +1103,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         let insightData = null;
         let chartInstance = null;
         let allBooklists = {};
+        let redDotsSet = new Set(); // [新增] 全局红点集合
         let pendingBook = { key: '', title: '' };
         function openMoreMenu(key, value, title, isEpub, isLink) {
     document.getElementById('moreMenuTitle').innerText = title;
@@ -1541,6 +1542,90 @@ async function clearHistory() {
         openHistory(); // 刷新
     }
 }
+async function showActionSheet(key, url) {
+        // 如果是手机端，显示底部抽屉；如果是PC，显示中间弹窗（已有的逻辑）
+        // 这里重点是动态往里面加内容
+        
+        // 1. 准备基础菜单
+        let menuHtml = `
+            <div style="padding:15px; border-bottom:1px solid #eee; font-weight:bold; color:#666; font-size:14px; text-align:center;">
+                ${key}
+            </div>
+            <div class="action-item" onclick="window.location.href='/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}'">
+                📖 开始阅读
+            </div>
+            <div class="action-item" onclick="openHistoryVersions('${key}')">
+                🕒 历史回退
+            </div>
+             <div class="action-item" onclick="showTagModal('${key}')">
+                🏷️ 管理标签
+            </div>
+        `;
+        
+        // 2. [新增] 异步查询订阅状态，动态添加按钮
+        // 为了显示“加载中”或默认状态，我们可以先显示一个 loading 占位
+        menuHtml += `<div id="menuSubBtn" class="action-item" style="color:#666;">⏳ 查询追更状态...</div>`;
+        
+        // 3. 基础功能继续
+        menuHtml += `
+            <div class="action-item" onclick="confirmDelete('${key}')" style="color:#ef4444;">
+                🗑️ 删除书籍
+            </div>
+        `;
+
+        // 渲染弹窗
+        // 假设你要用现有的 layer 或自定义 modal
+        // 这里复用你以前可能存在的 showModal 逻辑，或者直接用 SweetAlert/Layer
+        // 为了兼容性，我这里写一个简单的覆盖层逻辑
+        
+        const overlay = document.createElement('div');
+        overlay.style.position = 'fixed'; overlay.style.top = '0'; overlay.style.left = '0';
+        overlay.style.width = '100%'; overlay.style.height = '100%';
+        overlay.style.background = 'rgba(0,0,0,0.5)'; overlay.style.zIndex = '9999';
+        overlay.style.display = 'flex'; overlay.style.justifyContent = 'center'; overlay.style.alignItems = 'end';
+        
+        // 适配 PC 居中
+        if (window.innerWidth > 600) overlay.style.alignItems = 'center';
+
+        const content = document.createElement('div');
+        content.style.background = '#fff'; content.style.width = '100%'; content.style.maxWidth = '400px';
+        content.style.borderRadius = window.innerWidth > 600 ? '12px' : '16px 16px 0 0';
+        content.style.overflow = 'hidden';
+        content.innerHTML = menuHtml;
+        
+        overlay.appendChild(content);
+        document.body.appendChild(overlay);
+        
+        // 点击遮罩关闭
+        overlay.onclick = (e) => { if(e.target === overlay) document.body.removeChild(overlay); };
+
+        // 绑定关闭事件到 window，方便特定回调关闭
+        window.closeActionSheet = () => { try { document.body.removeChild(overlay); } catch(e){} };
+
+        // [核心] 异步逻辑执行：去后端查状态
+        try {
+            const res = await fetch('/api/updates/status', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: key })
+            });
+            const json = await res.json();
+            const btn = document.getElementById('menuSubBtn');
+            
+            if (json.subscribed) {
+                btn.innerHTML = `🔕 取消自动追更`;
+                btn.onclick = () => toggleSubInMenu(key, false, url);
+                btn.style.color = "#d97706"; // 橙色
+            } else {
+                btn.innerHTML = `🔔 开启自动追更`;
+                btn.onclick = () => toggleSubInMenu(key, true, url);
+                btn.style.color = "#059669"; // 绿色
+            }
+        } catch(e) {
+            const btn = document.getElementById('menuSubBtn');
+            if(btn) btn.innerText = "⚠️ 追更服务不可用";
+        }
+    }
         async function doRollback() {
             if(!confirm("确定回退到上一步吗？")) return;
             const res = await fetch(`${API_URL}/rollback`, { method: 'POST' });
@@ -1559,9 +1644,87 @@ async function clearHistory() {
                 if (currentData && Object.keys(currentData).length > 0) renderTable(currentData);
             }
         }
+        function renderBookshelf(books) {
+        const grid = document.getElementById('bookshelfGrid');
+        grid.innerHTML = '';
+        books.forEach(book => {
+            // ... (域名解析逻辑) ...
+            let domain = '本地';
+            try { domain = new URL(book.val).hostname; } catch(e) {}
+            
+            const div = document.createElement('div');
+            div.className = 'book-card';
+            div.onclick = () => window.location.href = `/read?url=${encodeURIComponent(book.val)}&key=${encodeURIComponent(book.key)}`;
+            
+            // [新增] 红点 HTML
+            let dotHtml = '';
+            if (redDotsSet.has(book.key)) {
+                dotHtml = `<div title="有新章节更新" style="position:absolute; top:8px; right:8px; width:10px; height:10px; background:#ef4444; border-radius:50%; border:2px solid white; box-shadow:0 2px 4px rgba(0,0,0,0.2); z-index:10;"></div>`;
+            }
 
+            // [修改] 增加长按菜单触发 (可选)
+            div.oncontextmenu = (e) => { e.preventDefault(); showActionSheet(book.key, book.val); };
+
+            div.innerHTML = `
+                <div class="book-cover" style="background:${getGradient(book.key)}">
+                    ${dotHtml}
+                    <div class="book-title-card">${book.key}</div>
+                    <div style="font-size:12px; margin-top:5px; opacity:0.8;">${domain}</div>
+                </div>
+                <div class="book-info-row">
+                    <span>最后阅读...</span>
+                    <!-- 点击菜单按钮，阻止冒泡防止跳转 -->
+                    <span onclick="event.stopPropagation(); showActionSheet('${book.key}', '${book.val}')" style="padding:5px 10px; margin:-5px -10px; cursor:pointer; color:#999;">⋮</span>
+                </div>
+            `;
+            grid.appendChild(div);
+        });
+        
+        // 渲染加号
+        const addDiv = document.createElement('div');
+        addDiv.className = 'book-card';
+        addDiv.style.border = '2px dashed #eee';
+        addDiv.style.boxShadow = 'none';
+        addDiv.onclick = () => document.getElementById('key').focus();
+        addDiv.innerHTML = `<div style="flex:1; display:flex; justify-content:center; align-items:center; color:#ccc; font-size:40px;">+</div>`;
+        grid.appendChild(addDiv);
+    }
         // index.html -> script -> renderFilterBar
+        async function toggleSubInMenu(key, enable, url) {
+        window.closeActionSheet(); // 先关弹窗
+        
+        showMsg('正在处理...', 'normal');
+        
+        // 获取 cid (简易版：不爬虫了，直接设为 0，让后台第一次全量爬或者手动点进去一次更新)
+        // 或者如果能从 user_db 拿到 value 也可以
+        let cid = 0;
+        const m = url.match(/\/(\d+)(?:_\d+)?(?:\.html)?$/);
+        if (m) cid = parseInt(m[1]);
 
+        try {
+            const res = await fetch('/api/updates/subscribe', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    key: key, 
+                    enable: enable, 
+                    toc_url: url, // 暂用正文URL混一下，后台爬虫会自动跳目录
+                    current_id: cid 
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                showMsg(json.msg, 'success');
+                // 刷新一下红点状态 (如果是取消订阅，红点应该消失)
+                if (!enable) {
+                    redDotsSet.delete(key);
+                    renderBookshelf(currentBooks); // 重绘
+                }
+            } else {
+                showMsg(json.msg, 'error');
+            }
+        } catch(e) { showMsg('网络错误', 'error'); }
+    }
 function renderFilterBar() {
     const bar = document.getElementById('filterBar');
     const allUniqueTags = new Set();
@@ -1702,13 +1865,27 @@ function renderTable(data) {
         const isEpub = url.startsWith('epub:');
 
         // 封面
+        let dotStyle = 'display:none';
+        if (updatesCache[k] && updatesCache[k].unread_count > 0) {
+            // 列表模式下，红点放在封面右上角，稍小一点
+            dotStyle = 'position:absolute; top:-3px; right:-3px; width:8px; height:8px; background:#ef4444; border-radius:50%; border:1px solid white; z-index:10; box-shadow: 0 1px 2px rgba(0,0,0,0.2);';
+        }
+
+        // 封面 HTML 构建
         let coverHtml = '';
         if (cover) {
-            coverHtml = `<img src="${cover}" class="book-cover-img" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-                         <div class="book-cover-default" style="display:none">${displayName[0]}</div>`;
+            // 给 img 外层包一个 relative 的 div，以便绝对定位红点
+            coverHtml = `<div style="position:relative; display:inline-block;">
+                            <img src="${cover}" class="book-cover-img" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                            <div class="book-cover-default" style="display:none">${displayName[0]}</div>
+                            <div style="${dotStyle}"></div> <!-- 红点 -->
+                         </div>`;
         } else {
             const bg = stringToColor(displayName);
-            coverHtml = `<div class="book-cover-default" style="background:${bg}; color:white;">${displayName[0]}</div>`;
+            coverHtml = `<div style="position:relative; display:inline-block;">
+                            <div class="book-cover-default" style="background:${bg}; color:white;">${displayName[0]}</div>
+                            <div style="${dotStyle}"></div> <!-- 红点 -->
+                         </div>`;
         }
 
         // 标签
@@ -1920,6 +2097,22 @@ function restoreVersion(key, value) {
                 div.innerHTML = '<div style="text-align:center; padding:40px; color:red;">搜索服务连接失败</div>';
             }
         }
+        async function loadBooks() {
+        // 1. 先异步拉取红点数据
+        try {
+            const res = await fetch('/api/updates/all_red_dots');
+            const json = await res.json();
+            if (json.status === 'success') {
+                redDotsSet = new Set(json.data);
+            }
+        } catch(e) {}
+
+        const res = await fetch('/api/get_all');
+        const data = await res.json();
+        currentBooks = Object.entries(data).map(([k, v]) => ({ key: k, val: v }));
+        renderBookshelf(currentBooks);
+        renderTable(currentBooks);
+    }
         async function downloadBook(key, url, title) {
     // 1. 简单的权限检查 (可选，提升体验)
     // 假设 api/me 返回了 role，如果没有 role 字段，说明还没刷新或者后端没传
@@ -1961,6 +2154,7 @@ function fetchUpdates() {
         .then(data => {
             console.log("🔥 状态已同步");
             updatesCache = data;
+            if(currentData) renderTable(currentData);
             renderUpdates();
         });
 }
@@ -2116,7 +2310,7 @@ async function checkUpdate(key, url) {
         if (json.status === 'success') {
             const d = json.data;
             
-            // 1. 更新本地红点缓存
+            // 1. 更新全局缓存
             updatesCache[key] = d;
 
             // 2. 提示用户
@@ -2124,11 +2318,12 @@ async function checkUpdate(key, url) {
             if (d.unread_count > 0) tip += ` (+${d.unread_count})`;
             showMsg(tip, "success");
 
-            // === [核心] 重新拉取数据并渲染 ===
-            // 这会将新抓取到的封面、作者、标签显示出来
-            await doAction('find'); 
+            // 3. [核心] 重绘列表，让封面红点立刻出现/消失
+            await doAction('find'); // 这会触发 renderTable，进而读取最新的 updatesCache 渲染红点
             
-            // 注意：此时页面已重绘，btn 元素已被销毁，无需再还原它的状态
+            // 4. 单独刷新按钮状态 (防止 doAction 重绘后按钮状态丢失)
+            setTimeout(() => renderUpdates(), 50);
+
         } else {
             showMsg("更新失败: " + (json.msg || "未知错误"), "error");
             btn.innerHTML = originalHtml;
