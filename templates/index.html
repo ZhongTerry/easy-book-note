@@ -2012,7 +2012,7 @@ function restoreVersion(key, value) {
                     <div class="book-info-row">
                         <span>${title}</span>
                         <button class="p-btn p-btn-sm" style="padding:2px;" onclick="event.stopPropagation(); openAddToListModal('${k}', '${title}')" title="加入书单">🔖</button>
-                        <button class="p-btn p-btn-sm" style="padding:2px;" onclick="event.stopPropagation(); openTagModal('${k}')">🏷️</button>
+                        <button class="p-btn p-btn-sm" style="padding:2px;" onclick="event.stopPropagation(); openTagModal('${k}')" title="管理标签">🏷️</button>
                     </div>
                 </div>`;
             });
@@ -2149,14 +2149,22 @@ let updatesCache = {};
 // 1. 页面加载时获取更新状态
 function fetchUpdates() {
     // 依然加时间戳防止 304 缓存
-    fetch(`/api/updates/status?t=${new Date().getTime()}`)
-        .then(r => r.json())
-        .then(data => {
-            console.log("🔥 状态已同步");
-            updatesCache = data;
-            if(currentData) renderTable(currentData);
-            renderUpdates();
-        });
+    fetch('/api/updates/status')
+            .then(res => res.json())
+            .then(data => {
+                console.log("更新状态已获取 (全量):", data);
+                
+                // 调试：打印数据来源
+                for (let k in data) {
+                    if (data[k].unread_count > 0) {
+                        console.log(`[书本 ${k}] 未读: ${data[k].unread_count}, 数据源: ${data[k].debug_source}`);
+                    }
+                }
+
+                updatesCache = data;
+                if(currentData) renderTable(currentData);
+                renderUpdates();
+            });
 }
 // 当页面从后台切回来，或者标签页被重新激活时触发
 document.addEventListener("visibilitychange", function() {
@@ -2184,7 +2192,7 @@ window.addEventListener('pageshow', function(event) {
         fetchUpdates();
     }
 });
-// 在 window.onload 里调用 fetchUpdates();
+// 记得在 renderTable 的最后调用一次 renderUpdates();
 
 // 2. 渲染更新状态 (小红点)
 // 在 index.html 的 script 标签中

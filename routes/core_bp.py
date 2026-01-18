@@ -587,6 +587,18 @@ def api_booklists_create(): return jsonify({"status": "success", "id": managers.
 def api_booklists_add(): 
     managers.booklist_manager.add_to_list(request.json['list_id'], request.json['book_data'])
     return jsonify({"status": "success"})
+@core_bp.route('/api/booklists/update_book', methods=['POST'])
+@login_required
+def api_booklists_update():
+    d = request.json
+    managers.booklist_manager.update_status(
+        d.get('list_id'), 
+        d.get('book_key'), 
+        d.get('status'), 
+        d.get('action')
+    )
+    # 必须返回最新的 data，因为前端 updateBookStatus 依赖它来刷新页面
+    return jsonify({"status": "success", "data": managers.booklist_manager.load()})
 
 @core_bp.route('/api/prefetch', methods=['POST'])
 @login_required
@@ -737,18 +749,17 @@ def api_check_update():
 from spider_core import searcher, epub_handler, parse_chapter_id 
 
 # =========================================================
-# 核心接口 1：获取所有书的实时状态 (前端刷新/轮询调用)
+# 核心接口：获取所有书的实时状态
+# 重构说明：
+# 1. Modern Path: 优先读取 update_sub_manager (SQLite),这是后台自动追更的结果
+# 2. Legacy Path: 如果没订阅，回退读取 update_manager (JSON),这是旧版爬虫的结果
 # =========================================================
-# routes/core_bp.py
 
-# routes/core_bp.py
-
-# routes/core_bp.py
-
-@core_bp.route('/api/updates/status')
+@core_bp.route('/api/updates/status', methods=['GET'])
 @login_required
 def api_get_updates_status():
-    # 1. 寻找 target_books (只检查 to_read 书单里的书)
+    # --- 1. 确定检查范围 ---
+    # (只检查 to_read/必读/追更 等书单里的书，避免全库扫描性能爆炸)
     all_lists = managers.booklist_manager.load()
     target_books = []
     
@@ -759,6 +770,7 @@ def api_get_updates_status():
         if any(k in list_name for k in watch_keywords):
             target_books.extend(list_data.get('books', []))
             
+    # 如果没找到特定书单，兜底检查所有标记为 'want' 的书
     if not target_books:
         for list_data in all_lists.values():
             for book in list_data.get('books', []):
@@ -766,64 +778,82 @@ def api_get_updates_status():
                     target_books.append(book)
 
     target_keys = list(set([b['key'] for b in target_books]))
-    updates_record = managers.update_manager.load()
-    response_data = {}
     
+    # [核心修复] 必须包含所有“已手动订阅”的书！
+    # 无论这本书在不在书单里，只要用户点了“追更”，就必须检查
+    username = session.get('user', {}).get('username')
+    try:
+        subscribed_keys = managers.update_sub_manager.get_all_subscribed(username)
+        target_keys.extend(subscribed_keys)
+        # 再次去重
+        target_keys = list(set(target_keys))
+        # print(f"[DEBUG] 检查列表: {target_keys}")
+    except Exception as e:
+        print(f"[Updates] 获取订阅列表失败: {e}")
+
     # 获取用户进度
     user_progress = managers.db.list_all().get('data', {})
-
-    # print(f"\n[StatusCheck] 正在为 {len(target_keys)} 本追更书籍计算进度...")
+    
+    # 预加载旧版数据 (Legacy Data Source)
+    legacy_records = managers.update_manager.load()
+    
+    response_data = {}
 
     for key in target_keys:
-        # === [核心修复] 智能提取 URL ===
+        # === Step 1: 获取用户当前进度 (Common Logic) ===
         val_obj = user_progress.get(key)
+        
+        # 提取当前阅读链接
         current_url = ""
-        
-        if isinstance(val_obj, dict):
-            current_url = val_obj.get('url') # 如果是字典，提取 url
-        elif isinstance(val_obj, str):
-            current_url = val_obj            # 如果是字符串，直接用
-            
+        if isinstance(val_obj, dict): current_url = val_obj.get('url', '')
+        elif isinstance(val_obj, str): current_url = val_obj
         if not current_url: continue
-        # ==============================
 
-        # --- A. 获取当前阅读章节的 ID ---
+        # 计算当前章节 ID (Current ID)
         current_id = -1
+        # cached_page = managers.cache.get(current_url) 
         
-        # 1. 缓存
-        cached_page = managers.cache.get(current_url)
-        if cached_page and cached_page.get('title'):
-            current_id = parse_chapter_id(cached_page['title'])
+        match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
+        if match: current_id = int(match.group(1))
+
+        if current_id <= 0: continue 
+
+        # === Step 2: 获取最新章节信息 (Logic Branching) ===
+        latest_id = -1
+        latest_title = ""
+        data_source = "none" 
+
+        # --- A. Modern Path (新逻辑: SQLite) ---
+        sub_status = managers.update_sub_manager.get_book_status(key)
         
-        # 2. 爬取 (简单防抖：如果缓存没有且没ID，才爬)
-        if current_id <= 0:
-            try:
-                # 这里可以加个逻辑：如果 updates_record 里记录的 last_check 很近，就不爬了
-                # 但为了准确性暂且保留
-                pass
-            except: pass
+        # [关键判定] 只要 subscribed 且 remote_id > 0，就采信
+        if sub_status and sub_status.get('subscribed') and sub_status.get('remote_id', 0) > 0:
+            latest_id = sub_status['remote_id']
+            latest_title = "最新章节" 
+            data_source = "modern_sql"
         
-        # 3. 正则兜底
-        if current_id <= 0:
-            match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
-            if match: current_id = int(match.group(1))
+        # --- B. Legacy Path (旧逻辑: JSON) ---
+        if latest_id <= 0:
+            legacy_info = legacy_records.get(key)
+            if legacy_info:
+                lid = int(legacy_info.get('latest_id', -1))
+                if lid <= 0 and legacy_info.get('latest_title'):
+                    lid = parse_chapter_id(legacy_info['latest_title'])
+                
+                if lid > 0:
+                    latest_id = lid
+                    latest_title = legacy_info.get('latest_title', '')
+                    data_source = "legacy_json"
 
-        # --- B. 获取最新章节 ID ---
-        latest_info = updates_record.get(key)
-        if not latest_info: continue
-
-        latest_id = int(latest_info.get('latest_id', -1))
-        if latest_id <= 0 and latest_info.get('latest_title'):
-             latest_id = parse_chapter_id(latest_info['latest_title'])
-
-        # --- C. 计算差值 ---
+        # === Step 3: 计算更新 (Payload Construction) ===
         status_payload = {
             "unread_count": 0,
             "status_text": "已最新",
-            "latest_title": latest_info.get('latest_title', '')
+            "latest_title": latest_title,
+            "debug_source": data_source
         }
 
-        if latest_id > 0 and current_id > 0:
+        if latest_id > 0:
             diff = latest_id - current_id
             if diff > 0:
                 status_payload['unread_count'] = diff
@@ -834,6 +864,9 @@ def api_get_updates_status():
         response_data[key] = status_payload
 
     return jsonify(response_data)
+
+# =========================================================
+
 @core_bp.route('/api/download', methods=['POST'])
 @login_required
 def start_dl():
@@ -887,6 +920,18 @@ def api_subscribe():
         def _instant_check(pre_fetched_val):
             print(f"[Instant Check] ⚡ 用户手动订阅 {key}，正在立即检查更新...")
             try:
+                # 0. [核心新增] 强力清除目录页缓存 (无论爬虫怎么想，物理删除缓存文件)
+                try:
+                    from managers import cache
+                    cache_file = cache._get_filename(toc_url)
+                    if os.path.exists(cache_file):
+                        # 检查一下文件最后修改时间，如果是1分钟内生成的，可能没必要删
+                        # 但为了保证“立即检查”的承诺，还是删了好
+                        os.remove(cache_file)
+                        print(f"[Instant Check] 已强制清理TOC缓存: {toc_url}")
+                except Exception as e:
+                    print(f"[Instant Check] 清理缓存失败(可能文件被占用): {e}")
+
                 # =========================================================
                 # 核心逻辑修正：对比基准应该是 [本地缓存TOC的最后一章]
                 # 而不是 [用户当前的阅读进度]
@@ -938,7 +983,13 @@ def api_subscribe():
                     remote_seq = parse_chapter_id(remote_title)
                     if remote_seq == -1 and isinstance(latest_data.get('id'), int):
                          remote_seq = latest_data['id']
-                    print(f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq}")
+                    
+                    # [核心修复] 决定入库的 ID
+                    # 如果能解析出序号(如 1704)，必须存序号，否则会导致前端计算出几亿的差值
+                    # 只有解析失败时，才存原始 ID
+                    id_to_save = remote_seq if remote_seq > 0 else remote_id;
+                    
+                    print(f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq} (原始ID: {remote_id})")
                 else:
                     return
 
@@ -960,13 +1011,15 @@ def api_subscribe():
                      print(f"[Check] 标题/ID 变动触发更新: {local_title} != {remote_title}")
 
                 if has_update:
-                     managers.update_sub_manager.update_status(key, remote_id, True)
-                     print(f"✅ 发现更新")
+                     # [修复] 传入 id_to_save 而不是 remote_id
+                     managers.update_sub_manager.update_status(key, id_to_save, True)
+                     print(f"✅ 发现更新 (存入ID: {id_to_save})")
                 else:
                      # 关键：如果没有更新，也要更新一下 update_sub_manager 里的 last_check_time 和 latest_id
                      # 这样前端可以显示“刚刚检查过”
-                     managers.update_sub_manager.update_status(key, remote_id, False)
-                     print(f"💤 无更新 (已同步状态)")
+                     # [修复] 传入 id_to_save 而不是 remote_id
+                     managers.update_sub_manager.update_status(key, id_to_save, False)
+                     print(f"💤 无更新 (已同步状态, 存入ID: {id_to_save})")
 
             except Exception as e:
                 import traceback

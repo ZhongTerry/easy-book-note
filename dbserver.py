@@ -106,22 +106,40 @@ def schedule_auto_check():
                             # === 爬取最新章节 ===
                             # 1. 获取目录
                             latest_chap = crawler_instance.get_latest_chapter(toc_url, no_cache=True)
+                            
                             if latest_chap:
-                                remote_id = latest_chap.get('id', 0)
+                                remote_title = latest_chap.get('title', '')
+                                
+                                # [核心修复] 优先解析自然序号 (和 core_bp.py 保持一致)
+                                remote_seq = parse_chapter_id(remote_title)
+                                raw_id = latest_chap.get('id', 0)
+                                if isinstance(raw_id, str) and not raw_id.isdigit():
+                                    raw_id = 0
+                                raw_id = int(raw_id)
+                                
                                 # 再次尝试解析
-                                if remote_id <= 0:
-                                    remote_id = parse_chapter_id(latest_chap.get('title', ''))
+                                if remote_seq == -1 and raw_id > 0:
+                                     # 仅当 raw_id 看起来像序号时才用它(比如 < 10000)
+                                     # 这里我们保持严谨：如果解析不出 remote_seq，就只能先信 raw_id
+                                     # 但为了防止 3亿Bug，我们优先信 remote_seq
+                                     remote_seq = raw_id
 
-                                if remote_id > local_id:
-                                    print(f"   🔥 [UPDATE] {key}: 基准{local_id} -> 远程{remote_id}")
-                                    # 更新状态
-                                    cursor.execute("UPDATE book_updates SET last_remote_id=?, has_update=1, updated_at=CURRENT_TIMESTAMP WHERE book_key=?", 
-                                                 (remote_id, key))
-                                    conn.commit()
-                                else:
-                                    # 无更新，也更新一下 last_remote_id 防止下次还要爬？
-                                    # 其实可以只 update updated_at
-                                    pass
+                                # 决策入库 ID
+                                id_to_save = remote_seq if remote_seq > 0 else raw_id
+                                
+                                # 调试打印
+                                # print(f"   [Check] {key}: Seq={remote_seq}, Raw={raw_id} -> Save={id_to_save}")
+
+                                has_u = False
+                                if id_to_save > local_id:
+                                    has_u = True
+                                    print(f"   🔥 [UPDATE] {key}: 本地{local_id} -> 远程{id_to_save}")
+                                
+                                # 无论有无更新，都刷新 last_remote_id，确保下次比较的基础是正确的
+                                # 否则如果数据库里已经是错的 3亿，这里不 update 回去，就永远是错的
+                                cursor.execute("UPDATE book_updates SET last_remote_id=?, has_update=?, updated_at=CURRENT_TIMESTAMP WHERE book_key=?", 
+                                             (id_to_save, 1 if has_u else 0, key))
+                                conn.commit()
                             
                             # 随机休眠
                             time.sleep(random.uniform(3, 8))

@@ -579,6 +579,13 @@ class UpdateRecordManager:
             rows = conn.execute("SELECT book_key FROM book_updates WHERE username=? AND has_update=1", (username,)).fetchall()
             return [r[0] for r in rows]
 
+    # [新增] 获取某用户所有已订阅的书 (用于 api_get_updates_status 确定检查范围)
+    def get_all_subscribed(self, username):
+        """获取某用户所有开启了自动追更的书"""
+        with get_db() as conn:
+            rows = conn.execute("SELECT book_key FROM book_updates WHERE username=?", (username,)).fetchall()
+            return [r[0] for r in rows]
+
     def get_all_tasks(self):
         """后台线程用：获取所有任务"""
         # 注意：这里可能是在 request 上下文之外调用的，所以不能用 get_db()，要手动连
