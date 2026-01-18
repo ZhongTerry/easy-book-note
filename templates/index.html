@@ -798,7 +798,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
             <button class="p-btn p-btn-primary" onclick="doAction('insert')">💾 保存</button>
             <button class="p-btn p-btn-primary" style="background:#0ea5e9; border-color:#0ea5e9;" onclick="doAction('find')">🔍 查库</button>
             
-            <button class="p-btn p-btn-outline" onclick="window.location.href='/search'">🌐 搜书</button>
+            <button class="p-btn p-btn-outline" onclick="window.open('/search', '_blank')">🌐 搜书</button>
             
             <!-- <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button> -->
             <button class="p-btn p-btn-outline" onclick="openHistory()">⏳ 历史</button>
@@ -806,7 +806,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
             
-            <button class="p-btn p-btn-danger" onclick="confirmDelete()">🗑️ 删除</button>
+            <!-- <button class="p-btn p-btn-danger" onclick="confirmDelete()">🗑️ 删除</button> -->
         </div>
 
         <div class="output">

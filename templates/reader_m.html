@@ -239,6 +239,25 @@
     opacity: 1;
     pointer-events: auto;
 }
+
+        /* [新增] 骨架屏 - 移动端适配 */
+        .sk-m-loader { padding: 30px 10px; display: none; margin-top: 40px; }
+        .sk-m-line { 
+            height: 18px; 
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); 
+            background-size: 200% 100%; 
+            margin-bottom: 24px; 
+            border-radius: 4px; 
+            animation: sk-loading 1.5s infinite; 
+        }
+        .sk-m-title { height: 36px; width: 60%; margin-bottom: 50px; }
+        
+        /* 夜间模式适配 */
+        body.theme-dark .sk-m-line { background: linear-gradient(90deg, #1e1e1e 25%, #2a2a2a 50%, #1e1e1e 75%); }
+        body.theme-sepia .sk-m-line { background: linear-gradient(90deg, #e8e6d9 25%, #dcdacb 50%, #e8e6d9 75%); }
+
+        @keyframes sk-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
     </style>
 </head>
 <body class="theme-white">
@@ -254,6 +273,21 @@
 
     <!-- 正文容器 -->
     <div id="read-viewport">
+        <!-- [新增] 移动端骨架屏 -->
+        <div id="mSkeleton" class="sk-m-loader">
+            <div class="sk-m-line sk-m-title"></div>
+            <div class="sk-m-line" style="width:100%"></div>
+            <div class="sk-m-line" style="width:96%"></div>
+            <div class="sk-m-line" style="width:92%"></div>
+            <div class="sk-m-line" style="width:98%"></div>
+            <div class="sk-m-line" style="width:94%"></div>
+            <div class="sk-m-line" style="width:90%"></div>
+            <div class="sk-m-line" style="width:97%"></div>
+            <div class="sk-m-line" style="width:95%"></div>
+            <div class="sk-m-line" style="width:93%"></div>
+            <div class="sk-m-line" style="width:80%"></div>
+        </div>
+
         <article id="content-body">
             <h1 id="chapter-title">{{ article.title }}</h1>
             <div id="article-text">
@@ -769,6 +803,101 @@
     
     // 初始化时调用
     checkSubscribeStatus();
+
+    // === [新增] 移动端 AJAX 无刷新翻页 ===
+    function setupMobileAjax() {
+        const nextBtn = document.querySelector('.page-btn.next');
+        bindAjax(nextBtn);
+        
+        const prevBtn = document.querySelector('.page-btn:not(.next)');
+        bindAjax(prevBtn);
+    }
+
+    function bindAjax(el) {
+        if(!el) return;
+        if(el.dataset.ajaxBound) return;
+        el.dataset.ajaxBound = "true";
+        el.addEventListener('click', (e) => {
+             e.preventDefault();
+             loadChapterMobile(el.getAttribute('href'));
+        });
+    }
+
+    async function loadChapterMobile(url) {
+         if(!url || url.includes('javascript:') || url.includes('#')) return;
+
+         // 1. 切换骨架屏
+         const bodyEl = document.getElementById('content-body');
+         const skEl = document.getElementById('mSkeleton');
+         const viewport = document.getElementById('read-viewport');
+
+         if(bodyEl) bodyEl.style.display = 'none';
+         if(skEl) skEl.style.display = 'block';
+         
+         // 滚回顶部
+         if(viewport) viewport.scrollTo(0,0);
+
+         try {
+             // 2. Fetch
+             const fetchUrl = url + (url.includes('?') ? '&' : '?') + 'mode=ajax';
+             const res = await fetch(fetchUrl);
+             if(!res.ok) throw new Error('Network error');
+             const json = await res.json();
+             
+             if(json.code === 0) {
+                 const data = json.data;
+                 
+                 // 3. Update DOM
+                 document.title = data.title;
+                 const h1 = document.getElementById('chapter-title');
+                 if(h1) h1.textContent = data.title;
+                 
+                 const textDiv = document.getElementById('article-text');
+                 if(textDiv) textDiv.innerHTML = data.content.map(p => `<p>${p}</p>`).join('');
+                 
+                 // Update Nav Buttons
+                 const navArea = document.querySelector('.page-nav-area');
+                 if(navArea) {
+                     let html = '';
+                     if(data.prev_url) {
+                         html += `<a href="/read?url=${encodeURIComponent(data.prev_url)}&key=${dbKey}" class="page-btn">上一章</a>`;
+                     }
+                     if(data.next_url) {
+                         html += `<a href="/read?url=${encodeURIComponent(data.next_url)}&key=${dbKey}" class="page-btn next">下一章</a>`;
+                     }
+                     navArea.innerHTML = html;
+                     setupMobileAjax(); // Re-bind
+                 }
+                 
+                 // Reset Progress & Scroll
+                 const progressSpan = document.getElementById('read-progress');
+                 if(progressSpan) progressSpan.innerText = '0%';
+                 
+                 history.pushState(null, '', url);
+                 
+                 if(window.speechSynthesis) window.speechSynthesis.cancel();
+                 
+                 if(data.next_url) {
+                    setTimeout(() => fetch('/api/prefetch', { 
+                        method: 'POST', 
+                        headers: {'Content-Type': 'application/json'}, 
+                        body: JSON.stringify({ url: data.next_url }) 
+                    }), 2000);
+                 }
+
+             } else {
+                 location.href = url;
+             }
+         } catch(e) {
+             console.error(e);
+             location.href = url;
+         } finally {
+             if(skEl) skEl.style.display = 'none';
+             if(bodyEl) bodyEl.style.display = 'block';
+         }
+    }
+    
+    document.addEventListener('DOMContentLoaded', setupMobileAjax);
 </script>
 
 <!-- 在设置面板 -> 功能区域添加按钮 -->

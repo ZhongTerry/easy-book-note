@@ -95,6 +95,26 @@
         .menu-item svg { width: 20px; height: 20px; margin-bottom: 4px; }
         .menu-item span { font-size: 11px; }
 
+        /* [新增] 骨架屏动画 - PC端适配 */
+        .skeleton-loader { display: none; padding: 10px 0; animation: fadein 0.3s; }
+        .sk-line { 
+            height: 20px; 
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); 
+            background-size: 200% 100%; 
+            margin-bottom: 28px; 
+            border-radius: 4px; 
+            animation: sk-loading 1.5s infinite; 
+        }
+        .sk-title { height: 48px; width: 60%; margin-bottom: 60px; border-radius: 8px; }
+        .sk-nav { display: flex; justify-content: space-between; margin-top: 80px; }
+        .sk-btn { width: 140px; height: 50px; border-radius: 25px; margin-bottom: 0; }
+        
+        body.dark-mode .sk-line { 
+            background: linear-gradient(90deg, #1e1e1e 25%, #252525 50%, #1e1e1e 75%); 
+        }
+
+        @keyframes sk-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
         /* === Modals === */
         .modal-overlay {
             position: fixed; left: 0; top: 0; width: 100%; height: 100%;
@@ -627,6 +647,23 @@ body.dark-mode #settingsModal input.p-input {
 </header>
 
 <div class="main-container">
+    <!-- [新增] 骨架屏容器 -->
+    <div id="skeletonBox" class="skeleton-loader">
+        <div class="sk-line sk-title"></div>
+        <div class="sk-line" style="width:100%"></div>
+        <div class="sk-line" style="width:95%"></div>
+        <div class="sk-line" style="width:98%"></div>
+        <div class="sk-line" style="width:92%"></div>
+        <div class="sk-line" style="width:96%"></div>
+        <div class="sk-line" style="width:90%"></div>
+        <div class="sk-line" style="width:99%"></div>
+        <div class="sk-line" style="width:94%"></div>
+        <div class="sk-nav">
+             <div class="sk-line sk-btn"></div>
+             <div class="sk-line sk-btn"></div>
+        </div>
+    </div>
+
     <div class="article-header">
         <h1 id="chapterTitle">{{ article.title }}</h1>
         <div class="article-meta">
@@ -1668,6 +1705,109 @@ body.dark-mode #settingsModal input.p-input {
         }
     }
     
+    /* === [新增] 高级：无刷新加载下一章 (骨架屏支持) === */
+    function setupAjaxNav(id) {
+        const el = document.getElementById(id);
+        if(!el) return;
+        if(el.dataset.ajaxBound) return;
+        el.dataset.ajaxBound = "true";
+        
+        el.addEventListener('click', (e) => {
+            if(!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                e.preventDefault();
+                loadChapter(el.href);
+            }
+        });
+    }
+
+    async function loadChapter(url) {
+        if(!url || url.includes('javascript:') || url.includes('#')) return;
+        
+        // 1. 展示骨架屏
+        const contentBox = document.querySelector('.article-header');
+        const bodyBox = document.querySelector('.content-body');
+        const navBox = document.querySelector('.bottom-nav');
+        const skBox = document.getElementById('skeletonBox');
+        
+        if(contentBox) contentBox.style.display = 'none';
+        if(bodyBox) bodyBox.style.display = 'none';
+        if(navBox) navBox.style.display = 'none';
+        if(skBox) skBox.style.display = 'block';
+        
+        window.scrollTo({ top: 0, behavior: 'auto' });
+
+        try {
+            // 2. 发起 AJAX 请求
+            const fetchUrl = url + (url.includes('?') ? '&' : '?') + 'mode=ajax';
+            const res = await fetch(fetchUrl);
+            if(!res.ok) throw new Error('Network response was not ok');
+            
+            const json = await res.json();
+            
+            if(json.code === 0) {
+                const data = json.data;
+                document.title = data.title + ' - Smart NoteDB';
+                
+                if(contentBox) {
+                     const h1 = contentBox.querySelector('h1');
+                     if(h1) h1.textContent = data.title;
+                     const meta = contentBox.querySelector('.article-meta');
+                     if(meta) {
+                         const wordCount = data.content.join('').length;
+                         meta.innerHTML = `<span>本章字数: ${wordCount}字</span> <span>来源: ${dbKey}</span>`;
+                     }
+                     contentBox.style.display = 'block';
+                }
+                
+                if(bodyBox) {
+                     bodyBox.innerHTML = data.content.map(line => `<p>${line}</p>`).join('');
+                     bodyBox.style.display = 'block';
+                     if(window.isSpeaking) window.speechSynthesis.cancel();
+                }
+
+                const nav = document.querySelector('.bottom-nav');
+                if(nav) {
+                    let html = '';
+                    if(data.prev_url) {
+                         const prevLink = `/read?url=${encodeURIComponent(data.prev_url)}&key=${dbKey}`;
+                         html += `<a id="link-prev" href="${prevLink}" class="nav-btn">上一章</a>`;
+                    } else {
+                         html += `<span class="nav-btn disabled">已是开头</span>`;
+                    }
+                    
+                    if(data.next_url) {
+                         const nextLink = `/read?url=${encodeURIComponent(data.next_url)}&key=${dbKey}`;
+                         html += `<a id="link-next" href="${nextLink}" class="nav-btn">下一章</a>`;
+                    } else {
+                         html += `<span class="nav-btn disabled" onclick="handleNoNextChapter()" style="cursor:pointer;" title="点击重新检查更新">已是末尾 🔄</span>`;
+                    }
+                    nav.innerHTML = html;
+                    nav.style.display = 'flex';
+                    setupAjaxNav('link-prev');
+                    setupAjaxNav('link-next');
+                }
+                
+                history.pushState(null, '', url);
+                
+                if(data.next_url) {
+                    setTimeout(() => fetch('/api/prefetch', { 
+                        method: 'POST', 
+                        headers: {'Content-Type': 'application/json'}, 
+                        body: JSON.stringify({ url: data.next_url }) 
+                    }), 2000);
+                }
+            } else { location.href = url; }
+        } catch(e) { console.error(e); location.href = url; } 
+        finally { if(skBox) skBox.style.display = 'none'; }
+    }
+    
+    document.addEventListener('DOMContentLoaded', () => {
+        setupAjaxNav('link-prev');
+        setupAjaxNav('link-next');
+    });
+
+    window.addEventListener('popstate', () => window.location.reload());
+
     document.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowLeft') document.getElementById('link-prev')?.click();
         if (e.key === 'ArrowRight') document.getElementById('link-next')?.click();

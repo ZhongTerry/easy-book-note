@@ -296,6 +296,23 @@ def read_mode():
             match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
             if match: current_chapter_id = int(match.group(1))
 
+        # [新增] AJAX 模式支持 (用于前端骨架屏无刷新加载)
+        if request.args.get('mode') == 'ajax':
+            return jsonify({
+                'code': 0,
+                'data': {
+                    'title': data.get('title'),
+                    'content': data.get('content'),
+                    'prev_url': data.get('prev') or data.get('prev_url'),
+                    'next_url': data.get('next') or data.get('next_url'),
+                    'book_name': data.get('book_name') or data.get('book_title') or '',
+                    # 尝试推断 toc_url，优先用 data 里的，没有则回退到 key 对应的链接
+                    'toc_url': data.get('toc_url') or (managers.db.find(k)['url'] if k and managers.db.find(k) else '')
+                },
+                'current_url': u,
+                'chapter_id': current_chapter_id
+            })
+
         # 6. 渲染页面
         ua = request.headers.get('User-Agent', '').lower()
         is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
