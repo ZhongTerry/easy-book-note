@@ -816,7 +816,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
             </div>
 
             <!-- 视图切换 (保留简单文本按钮，或者用 p-btn-sm) -->
-            <div style="text-align: right; margin-bottom: 10px;">
+            <div id="viewToggleBar" style="text-align: right; margin-bottom: 10px;">
                 <button class="p-btn p-btn-sm toggle-btn active" onclick="switchView('list')">☰ 列表</button>
                 <button class="p-btn p-btn-sm toggle-btn" onclick="switchView('grid')">☷ 网格</button>
             </div>
@@ -1399,7 +1399,11 @@ fetch('/api/me').then(r => r.json()).then(user => {
 setInterval(fetchUpdates, 600000); // 10分钟一次
 // ...
 
-            // 数据
+            // 数据：首页默认显示“历史”列表（最近 -> 最远）
+            loadBooks().then(fetchTags);
+            fetchUpdates();
+
+            // 仅填充上次阅读的 key/value（不触发列表刷新）
             fetch('/api/last_read').then(r=>r.json()).then(async d => {
                 if(d.key) {
                     document.getElementById('key').value = d.key;
@@ -1408,11 +1412,8 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
                         const vData = await vRes.json();
                         if(vData.status==='success') document.getElementById('value').value = vData.value;
                     } catch(e){}
-                    showMsg(`☁️ 同步到: ${d.key}`, 'success');
-                    doAction('find').then(fetchTags);
-                    fetchUpdates();
-                } else { doAction('list').then(fetchTags);fetchUpdates(); }
-            }).catch(() => doAction('list').then(fetchTags));
+                }
+            }).catch(()=>{});
 
             // 拖拽
             const vInput = document.getElementById('value');
@@ -1440,6 +1441,10 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
             } else if (action !== 'list' && action !== 'find' && !key) {
                 // 其他操作 (insert/remove) 依然必须有 key
                 return showMsg('请输入 Key', 'error');
+            }
+
+            if (action === 'list' || action === 'find') {
+                homeMode = 'books';
             }
 
             PureUI.loading.show(action === 'insert' ? '保存中...' : action === 'find' ? '查询中...' : '加载中...');
@@ -1471,11 +1476,16 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
                 if(btn && btn.tagName === 'BUTTON') btn.classList.remove('loading'); 
             }
         }
+        let homeMode = 'history';
+        let historyOrder = [];
+        let fullDataCache = null;
+
         // 格式化时间戳
 function formatTime(timestamp) {
     const date = new Date(timestamp * 1000);
     return `${date.getMonth()+1}-${date.getDate()} ${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`;
 }
+
 
 async function openHistory() {
     const res = await fetch('/api/history/list');
@@ -1753,11 +1763,12 @@ async function showActionSheet(key, url) {
     
 let lastTagHash = ''; // 用于缓存标签指纹
 function renderFilterBar() {
+    const sourceData = (homeMode === 'history' && fullDataCache) ? fullDataCache : currentData;
     // 🔥 性能优化：只在标签真正变化时才重渲染
     const newHash = JSON.stringify({
         tags: Object.keys(globalTags).sort(),
         filter: activeFilter,
-        dataKeys: currentData ? Object.keys(currentData).sort() : []
+        dataKeys: sourceData ? Object.keys(sourceData).sort() : []
     });
     
     if (newHash === lastTagHash) return; // 指纹相同，跳过渲染
@@ -1767,8 +1778,8 @@ function renderFilterBar() {
     const allUniqueTags = new Set();
     
     // 遍历当前所有书籍数据
-    if (currentData) {
-        Object.keys(currentData).forEach(key => {
+    if (sourceData) {
+        Object.keys(sourceData).forEach(key => {
             // 跳过系统键
             if (key.startsWith('@') || key.endsWith(':meta')) return;
 
@@ -1777,7 +1788,7 @@ function renderFilterBar() {
             uTags.forEach(t => allUniqueTags.add(t));
 
             // 2. [新增] 收集官方标签
-            const valObj = currentData[key];
+            const valObj = sourceData[key];
             if (typeof valObj === 'object' && valObj !== null && valObj.official_tags) {
                 valObj.official_tags.forEach(t => allUniqueTags.add(t));
             }
@@ -1797,9 +1808,19 @@ function renderFilterBar() {
     bar.innerHTML = html;
 }
 
-        function filterByTag(tag) { activeFilter = tag; renderFilterBar(); renderTable(currentData); }
+        function filterByTag(tag) {
+            activeFilter = tag;
+            if (homeMode === 'history' && fullDataCache) {
+                homeMode = 'books';
+                renderTable(fullDataCache);
+                return;
+            }
+            renderFilterBar();
+            renderTable(currentData);
+        }
 
         function switchView(view) {
+            if (homeMode === 'history') return;
             currentView = view;
             document.querySelectorAll('.toggle-btn').forEach(btn => {
                 if(btn.innerText.includes(view === 'list' ? '列表' : '网格')) btn.classList.add('active');
@@ -1841,13 +1862,32 @@ function renderFilterBar() {
     }
 }
 function renderTable(data) {
+    const filterBar = document.getElementById('filterBar');
+    const viewToggle = document.getElementById('viewToggleBar');
+    if (homeMode !== 'history') {
+        if (filterBar) filterBar.style.display = '';
+        if (viewToggle) viewToggle.style.display = '';
+    }
+
     currentData = data;
     const container = document.getElementById('tableContainer');
     let filteredKeys = Object.keys(data).filter(k => !k.startsWith('@') && !k.endsWith(':meta'));
-    renderFilterBar();
+
+    // 历史模式：按历史顺序渲染，跳过标签过滤
+    if (homeMode === 'history') {
+        activeFilter = 'all';
+        if (filterBar) filterBar.style.display = '';
+        if (viewToggle) viewToggle.style.display = 'none';
+        renderFilterBar();
+        if (historyOrder && historyOrder.length > 0) {
+            filteredKeys = historyOrder.filter(k => data[k]);
+        }
+    } else {
+        renderFilterBar();
+    }
 
     // === [核心修改] 过滤逻辑升级 ===
-    if (activeFilter !== 'all') {
+    if (homeMode !== 'history' && activeFilter !== 'all') {
         filteredKeys = filteredKeys.filter(k => {
             const valObj = data[k];
             
@@ -1863,7 +1903,7 @@ function renderTable(data) {
             return false;
         });
     }
-    if (activeFilter !== 'all') {
+    if (homeMode !== 'history' && activeFilter !== 'all') {
         filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
     }
     
@@ -1871,7 +1911,9 @@ function renderTable(data) {
         container.innerHTML = '<div style="text-align:center;padding:40px;color:#999">空空如也</div>'; 
         return; 
     }
-    filteredKeys.sort();
+    if (homeMode !== 'history') {
+        filteredKeys.sort();
+    }
 
     if (currentView === 'grid') return renderGrid(data, container, filteredKeys);
 
@@ -2158,11 +2200,63 @@ function restoreVersion(key, value) {
             }
         } catch(e) {}
 
-        const res = await fetch('/api/get_all');
-        const data = await res.json();
-        currentBooks = Object.entries(data).map(([k, v]) => ({ key: k, val: v }));
+        // 2. 默认展示历史列表（最近 -> 最远）
+        let historyKeys = [];
+        let historyList = [];
+        try {
+            const hisRes = await fetch('/api/history/list');
+            const hisJson = await hisRes.json();
+            const list = Array.isArray(hisJson.data) ? hisJson.data : [];
+            list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+            historyList = list;
+
+            const seen = new Set();
+            list.forEach(item => {
+                if (!item || !item.key) return;
+                if (seen.has(item.key)) return;
+                seen.add(item.key);
+                historyKeys.push(item.key);
+            });
+        } catch (e) {}
+
+        // 拉取完整数据，再按历史筛选
+        const res = await fetch('/list', { method: 'POST' });
+        const fullJson = await res.json();
+        const fullData = fullJson && fullJson.data ? fullJson.data : {};
+        fullDataCache = fullData;
+
+        if (historyKeys.length > 0) {
+            homeMode = 'history';
+            historyOrder = historyKeys;
+
+            const filtered = {};
+            historyKeys.forEach(k => {
+                if (fullData[k]) filtered[k] = fullData[k];
+            });
+
+            currentData = filtered;
+            renderTable(filtered);
+            return;
+        }
+
+        // 没有历史记录：只渲染“上一次阅读”
+        try {
+            const lastRes = await fetch('/api/last_read');
+            const lastJson = await lastRes.json();
+            if (lastJson && lastJson.key && fullData[lastJson.key]) {
+                homeMode = 'books';
+                const single = { [lastJson.key]: fullData[lastJson.key] };
+                currentData = single;
+                renderTable(single);
+                return;
+            }
+        } catch (e) {}
+
+        // 兜底：渲染完整书架
+        homeMode = 'books';
+        currentBooks = Object.entries(fullData).map(([k, v]) => ({ key: k, val: v }));
         renderBookshelf(currentBooks);
-        renderTable(currentBooks);
+        renderTable(fullData);
     }
         async function downloadBook(key, url, title) {
     // 1. 简单的权限检查 (可选，提升体验)
