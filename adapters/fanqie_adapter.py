@@ -18,6 +18,20 @@ class FanqieLocalAdapter:
     def can_handle(self, url):
         return "fanqienovel.com" in url or "fqnovel.com" in url
 
+    def detect_url_type(self, url):
+        """
+        混合判断URL类型
+        返回: 'toc' (目录页), 'chapter' (章节页), 'unknown'
+        """
+        # 番茄小说URL特征：
+        # 目录页: /page/12345
+        # 章节页: /reader/12345
+        if '/page/' in url:
+            return 'toc'
+        elif '/reader/' in url:
+            return 'chapter'
+        return 'unknown'
+
     def _get_item_id(self, url):
         # 匹配 reader/123456
         match = re.search(r'reader/(\d+)', url)
@@ -217,14 +231,28 @@ class FanqieLocalAdapter:
         # 3. 获取列表
         chapters = self._fetch_toc_list(book_id)
         
-        # 4. 获取书名 (尝试从微服务详情接口拿，或者默认)
-        book_title = "番茄小说"
-        # 这里的请求为了速度可以省略，或者单独加一个 get_detail 调用
+        # 4. [修复] 获取真实书名 (从微服务详情接口)
+        book_title = "番茄小说"  # 默认值
+        try:
+            resp = requests.get(f"{self.API_HOST}/get_detail", params={"book_id": book_id}, timeout=10)
+            json_data = resp.json()
+            if isinstance(json_data, str):
+                try: 
+                    json_data = json.loads(json_data)
+                except: 
+                    pass
+            
+            if json_data.get('code') == 0:
+                data = json_data.get('data', {})
+                book_title = data.get('book_name') or book_title
+        except Exception as e:
+            print(f"[FanqieLocal] 获取书名失败，使用默认值: {e}")
         
         return {
             'title': book_title,
             'manual_sort': True, # [核心修复] 开启手动模式，禁止 spider_core 修改/重排 ID
-            'chapters': chapters
+            'chapters': chapters,
+            'page_type': 'toc'  # [智能检测] 明确标记这是目录页
         }
 
     def run(self, crawler, url):
@@ -253,7 +281,10 @@ class FanqieLocalAdapter:
         except Exception as e:
             print(f"[FanqieLocal] 正文请求错误: {e}")
 
-        if not content_data: return None
+        # [关键修复] 即使内容为空，也要返回基本结构和 page_type 标记
+        # 避免被误判为目录页
+        if not content_data:
+            content_data = ['❗ 内容获取失败，请稍后重试']
 
         # 3. [核心功能] 计算上下文 (Prev/Next/Toc)
         # 我们需要 BookID 才能获取目录。
@@ -269,9 +300,26 @@ class FanqieLocalAdapter:
         next_url = None
         toc_url = None
         chapter_title = ""
+        book_name = "番茄小说"  # 默认值
         
         if book_id:
             toc_url = f"https://fanqienovel.com/page/{book_id}"
+            
+            # [修复] 获取真实书名
+            try:
+                resp = requests.get(f"{self.API_HOST}/get_detail", params={"book_id": book_id}, timeout=10)
+                json_data = resp.json()
+                if isinstance(json_data, str):
+                    try: 
+                        json_data = json.loads(json_data)
+                    except: 
+                        pass
+                
+                if json_data.get('code') == 0:
+                    data = json_data.get('data', {})
+                    book_name = data.get('book_name') or book_name
+            except Exception as e:
+                print(f"[FanqieLocal] 获取书名失败: {e}")
             
             # 获取全书目录列表
             toc_list = self._fetch_toc_list(book_id)
@@ -296,8 +344,9 @@ class FanqieLocalAdapter:
         return {
             'title': chapter_title,  # 现在我们有真标题了！
             'content': content_data,
-            'book_name': '番茄小说', # 如果需要准确书名，需调 detail 接口，暂且写死
+            'book_name': book_name,  # [修复] 使用真实书名
             'prev': prev_url,
             'next': next_url,
-            'toc_url': toc_url
+            'toc_url': toc_url,
+            'page_type': 'chapter'  # [智能检测] 明确标记这是章节页
         }

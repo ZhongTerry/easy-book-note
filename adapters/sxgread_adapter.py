@@ -12,6 +12,20 @@ class SxgreadAdapter:
     def can_handle(self, url):
         return "sxgread.com" in url
 
+    def detect_url_type(self, url):
+        """
+        混合判断URL类型
+        返回: 'toc' (目录页), 'chapter' (章节页), 'unknown'
+        """
+        # 书香阁URL特征：
+        # 目录页: /book/8/221/index.html
+        # 章节页: /book/8/221/276596.html (纯数字文件名)
+        if 'index.html' in url:
+            return 'toc'
+        elif re.search(r'/\d+\.html$', url):
+            return 'chapter'
+        return 'unknown'
+
     def get_book_name(self, soup):
         # 优先从 meta property="og:novel:book_name" 获取，这是最准的
         meta_name = soup.find('meta', property='og:novel:book_name')
@@ -84,7 +98,11 @@ class SxgreadAdapter:
             chapter_list.sort(key=lambda x: x['id'])
             
             print(f"[SxgreadAdapter] 成功通过 data-id 重排 {len(chapter_list)} 个章节")
-            return {'title': title, 'chapters': chapter_list}
+            return {
+                'title': title,
+                'chapters': chapter_list,
+                'page_type': 'toc'  # [智能检测] 明确标记这是目录页
+            }
             
         else:
             print("[SxgreadAdapter] 未找到 #newlist，尝试通用解析")
@@ -205,4 +223,5 @@ class SxgreadAdapter:
         if toc_match:
             meta['toc_url'] = urljoin(url, toc_match.group(1))
 
+        meta['page_type'] = 'chapter'  # [智能检测] 明确标记这是章节页
         return meta

@@ -10,6 +10,23 @@ class Xbqg77Adapter:
         # 只要 URL 包含 xbqg77.com，就由该插件接管
         return "xbqg77.com" in url
 
+    def detect_url_type(self, url):
+        """
+        混合判断URL类型
+        返回: 'toc' (目录页), 'chapter' (章节页), 'unknown'
+        """
+        # 新笔趣阁URL特征：
+        # 目录页: /52449/ (只有书ID)
+        # 章节页: /52449/1 或 /52449/1_2 (有章节ID)
+        path = url.rstrip('/').split('/')[-1]
+        # 如果路径最后是纯数字或包含下划线分页，是章节
+        if re.match(r'^\d+(_\d+)?$', path):
+            return 'chapter'
+        # 如果最后部分不是纯数字，可能是目录
+        elif not path or not path.isdigit():
+            return 'toc'
+        return 'unknown'
+
     def get_toc(self, crawler, toc_url):
         """解析目录逻辑"""
         html = crawler._fetch_page_smart(toc_url)
@@ -32,7 +49,11 @@ class Xbqg77Adapter:
                 if href and t:
                     chapters.append({'title': t, 'url': urljoin(toc_url, href)})
         
-        return {'title': title, 'chapters': chapters}
+        return {
+            'title': title,
+            'chapters': chapters,
+            'page_type': 'toc'  # [智能检测] 明确标记这是目录页
+        }
 
     def run(self, crawler, url):
         """解析正文逻辑（含分页缝合）"""
@@ -99,4 +120,5 @@ class Xbqg77Adapter:
                 break
 
         meta['content'] = combined_content
+        meta['page_type'] = 'chapter'  # [智能检测] 明确标记这是章节页
         return meta

@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全网搜书 - Smart NoteDB</title>
+    <link rel="stylesheet" href="/purecss/pure2.1.css">
+    <script src="/purecss/pure2.1.js"></script>
+    <link rel="icon" href="/static/icons/favicon.ico" type="image/x-icon">
+    <style>
+        /* 继承 index.html 的配色方案 */
+        body {
+            background: #f3f4f6;
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        
+        /* 顶部用户栏（与 index.html 一致）*/
+        #userBar {
+            background: rgba(255,255,255,0.9);
+            padding: 10px 20px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+        }
+        
+        /* 主容器（与 index.html 一致）*/
+        .container {
+            max-width: 900px;
+            margin: 80px auto 40px;
+            background-color: #ffffff;
+            padding: 40px;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px -10px rgba(0,0,0,0.08);
+            border: 1px solid #f1f5f9;
+        }
+        
+        h1 {
+            margin-top: 0;
+            color: #1f2937;
+            text-align: center;
+            font-size: 26px;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #6b7280;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+        
+        /* 搜索栏 */
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .search-box input {
+            flex: 1;
+        }
+        
+        /* 功能选项卡 */
+        .feature-tabs {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            flex-wrap: wrap;
+        }
+        
+        .feature-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+        
+        .feature-item input[type="checkbox"] {
+            cursor: pointer;
+        }
+        
+        /* 搜索历史 */
+        .history-section {
+            margin-bottom: 20px;
+        }
+        
+        .history-title {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .history-tags {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .history-tag {
+            padding: 4px 12px;
+            background: #f3f4f6;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #4b5563;
+            cursor: pointer;
+            transition: 0.2s;
+            border: 1px solid #e5e7eb;
+        }
+        
+        .history-tag:hover {
+            background: #e5e7eb;
+            border-color: #4f46e5;
+        }
+        
+        .clear-history {
+            font-size: 12px;
+            color: #ef4444;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        
+        /* 结果区域 */
+        .results-area {
+            min-height: 300px;
+        }
+        
+        .result-item {
+            padding: 16px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .result-item:hover {
+            border-color: #4f46e5;
+            box-shadow: 0 2px 8px rgba(79, 70, 229, 0.1);
+            transform: translateX(2px);
+        }
+        
+        .res-left {
+            flex: 1;
+        }
+        
+        .res-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 6px;
+        }
+        
+        .res-author {
+            color: #6b7280;
+            font-size: 13px;
+            margin-left: 8px;
+        }
+        
+        .res-meta {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            font-size: 12px;
+            color: #9ca3af;
+        }
+        
+        .source-tag {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .tag-baidu { background: #dbeafe; color: #1e40af; }
+        .tag-bing { background: #fef3c7; color: #92400e; }
+        .tag-360 { background: #d1fae5; color: #065f46; }
+        .tag-direct { background: #e0e7ff; color: #4338ca; }
+        
+        .res-url {
+            font-family: monospace;
+            color: #9ca3af;
+            font-size: 11px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 400px;
+        }
+        
+        .res-action {
+            color: #4f46e5;
+            font-weight: 600;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+        
+        /* 空状态 */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #9ca3af;
+        }
+        
+        .empty-state svg {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 15px;
+            opacity: 0.4;
+        }
+        
+        /* 统计信息 */
+        .stats-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            margin-bottom: 15px;
+            font-size: 13px;
+            color: #6b7280;
+        }
+        
+        /* 排序选项 */
+        .sort-options {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .sort-btn {
+            padding: 4px 10px;
+            font-size: 12px;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: 0.2s;
+            color: #6b7280;
+        }
+        
+        .sort-btn.active {
+            background: #4f46e5;
+            color: white;
+            border-color: #4f46e5;
+        }
+        
+        /* 移动端适配 */
+        @media (max-width: 640px) {
+            .container {
+                padding: 20px;
+                margin-top: 60px;
+            }
+            
+            h1 {
+                font-size: 20px;
+            }
+            
+            .search-box {
+                flex-direction: column;
+            }
+            
+            .feature-tabs {
+                display: none; /* 移动端隐藏高级选项 */
+            }
+            
+            .res-url {
+                max-width: 150px;
+            }
+            
+            .stats-bar {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部用户栏 -->
+    <div id="userBar">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <a href="/" style="text-decoration: none; color: #1f2937; font-weight: 600;">← 返回书架</a>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <span id="userName" style="font-size: 13px; color: #6b7280;">Loading...</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <h1>🔍 全网搜书</h1>
+        <p class="subtitle">聚合多个搜索引擎，一键找书</p>
+        
+        <!-- 搜索栏 -->
+        <div class="search-box">
+            <input 
+                type="text" 
+                id="searchInput" 
+                class="p-input" 
+                placeholder="输入书名或作者，如：凡人修仙传" 
+                autofocus
+                onkeydown="if(event.key==='Enter') doSearch()"
+            >
+            <button class="p-btn p-btn-primary" onclick="doSearch()">搜索</button>
+        </div>
+        
+        <!-- 功能选项 -->
+        <div class="feature-tabs">
+            <div class="feature-item">
+                <input type="checkbox" id="autoSave" checked>
+                <label for="autoSave">自动保存到书架</label>
+            </div>
+            <div class="feature-item">
+                <input type="checkbox" id="showUrl">
+                <label for="showUrl">显示源链接</label>
+            </div>
+            <div class="feature-item">
+                <span style="color: #4b5563;">搜索源数量: <strong id="sourceCount">3</strong></span>
+            </div>
+        </div>
+        
+        <!-- 搜索历史 -->
+        <div class="history-section" id="historySection">
+            <div class="history-title">
+                <span>最近搜索</span>
+                <span class="clear-history" onclick="clearHistory()">清空</span>
+            </div>
+            <div class="history-tags" id="historyTags">
+                <!-- 动态生成 -->
+            </div>
+        </div>
+        
+        <!-- 结果统计栏 -->
+        <div class="stats-bar" id="statsBar" style="display: none;">
+            <span>找到 <strong id="resultCount">0</strong> 个结果</span>
+            <div class="sort-options">
+                <span class="sort-btn active" onclick="sortResults('default')">默认排序</span>
+                <span class="sort-btn" onclick="sortResults('source')">按来源</span>
+            </div>
+        </div>
+        
+        <!-- 结果区域 -->
+        <div class="results-area">
+            <div id="resultsContainer" class="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="m21 21-4.35-4.35"/>
+                </svg>
+                <p style="font-size:14px; margin:0; color:#6b7280;">输入书名开始搜索</p>
+                <p style="font-size:12px; margin-top:8px; color:#9ca3af;">支持书名、作者名搜索</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_URL = window.location.origin;
+        let searchHistory = JSON.parse(localStorage.getItem('search_history') || '[]');
+        let currentResults = [];
+        
+        // 初始化
+        window.onload = function() {
+            renderHistory();
+            loadUserInfo();
+        };
+        
+        // 加载用户信息
+        async function loadUserInfo() {
+            try {
+                const res = await fetch('/api/me');
+                const user = await res.json();
+                if (user.username) {
+                    document.getElementById('userName').innerText = user.username;
+                }
+            } catch(e) {}
+        }
+        
+        // 渲染搜索历史
+        function renderHistory() {
+            const container = document.getElementById('historyTags');
+            if (searchHistory.length === 0) {
+                document.getElementById('historySection').style.display = 'none';
+                return;
+            }
+            
+            document.getElementById('historySection').style.display = 'block';
+            container.innerHTML = searchHistory.slice(0, 8).map(keyword => 
+                `<span class="history-tag" onclick="searchFromHistory('${keyword}')">${keyword}</span>`
+            ).join('');
+        }
+        
+        // 从历史搜索
+        function searchFromHistory(keyword) {
+            document.getElementById('searchInput').value = keyword;
+            doSearch();
+        }
+        
+        // 清空历史
+        function clearHistory() {
+            if (confirm('确定清空搜索历史吗？')) {
+                searchHistory = [];
+                localStorage.setItem('search_history', '[]');
+                renderHistory();
+            }
+        }
+        
+        // 保存搜索历史
+        function saveHistory(keyword) {
+            // 去重并前置
+            searchHistory = [keyword, ...searchHistory.filter(k => k !== keyword)].slice(0, 20);
+            localStorage.setItem('search_history', JSON.stringify(searchHistory));
+            renderHistory();
+        }
+        
+        // 执行搜索
+        async function doSearch() {
+            const keyword = document.getElementById('searchInput').value.trim();
+            if (!keyword) {
+                alert('请输入书名');
+                return;
+            }
+            
+            // 保存历史
+            saveHistory(keyword);
+            
+            const container = document.getElementById('resultsContainer');
+            const statsBar = document.getElementById('statsBar');
+            
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div style="width:50px; height:50px; margin:0 auto 15px; border:3px solid #f3f4f6; border-top-color:#4f46e5; border-radius:50%; animation:spin 1s linear infinite;"></div>
+                    <p style="font-size:14px; color:#4f46e5; font-weight:600;">🔍 正在搜索...</p>
+                </div>
+            `;
+            statsBar.style.display = 'none';
+            
+            try {
+                PureUI.loading.show('🌐 聚合搜索中...');
+                const res = await fetch(`${API_URL}/api/search_novel`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({keyword: keyword})
+                });
+                const json = await res.json();
+                
+                if (json.data && json.data.length > 0) {
+                    currentResults = json.data;
+                    renderResults(currentResults);
+                    statsBar.style.display = 'flex';
+                    document.getElementById('resultCount').innerText = currentResults.length;
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <p style="font-size:16px; color:#6b7280; margin-bottom:10px;">😢 未找到相关结果</p>
+                            <p style="font-size:13px; color:#9ca3af;">尝试：</p>
+                            <ul style="text-align:left; display:inline-block; color:#9ca3af; font-size:13px; margin-top:8px;">
+                                <li>简化关键词（如："凡人修仙传" → "凡人"）</li>
+                                <li>搜索作者名</li>
+                                <li>检查拼写是否正确</li>
+                            </ul>
+                        </div>
+                    `;
+                }
+            } catch(e) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <p style="font-size:16px; color:#ef4444; margin-bottom:10px;">❌ 搜索失败</p>
+                        <p style="font-size:13px; color:#9ca3af;">请检查网络连接或稍后重试</p>
+                    </div>
+                `;
+            } finally {
+                PureUI.loading.hide();
+            }
+        }
+        
+        // 渲染结果
+        function renderResults(results) {
+            const container = document.getElementById('resultsContainer');
+            const showUrl = document.getElementById('showUrl').checked;
+            
+            container.innerHTML = results.map(item => {
+                let tagClass = 'tag-360';
+                if (item.source.includes('Baidu')) tagClass = 'tag-baidu';
+                else if (item.source.includes('Bing')) tagClass = 'tag-bing';
+                else if (item.source.includes('书香') || item.source.includes('笔趣') || item.source.includes('Direct')) tagClass = 'tag-direct';
+                
+                const authorHtml = item.description ? `<span class="res-author">${item.description}</span>` : '';
+                const urlHtml = showUrl ? `<span class="res-url">${item.url}</span>` : '';
+                
+                return `
+                <div class="result-item" onclick="selectResult('${item.suggested_key}', '${item.url}', '${item.title.replace(/'/g, "\\'")}')">
+                    <div class="res-left">
+                        <div class="res-title">
+                            ${item.title}
+                            ${authorHtml}
+                        </div>
+                        <div class="res-meta">
+                            <span class="source-tag ${tagClass}">${item.source || 'Unknown'}</span>
+                            ${urlHtml}
+                        </div>
+                    </div>
+                    <div class="res-action">
+                        阅读 →
+                    </div>
+                </div>`;
+            }).join('');
+        }
+        
+        // 排序结果
+        function sortResults(type) {
+            document.querySelectorAll('.sort-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            if (type === 'source') {
+                currentResults.sort((a, b) => a.source.localeCompare(b.source));
+            } else {
+                // 默认排序（保持原始顺序）
+                currentResults.sort((a, b) => 0);
+            }
+            
+            renderResults(currentResults);
+        }
+        
+        // 选择结果
+        async function selectResult(key, url, title) {
+            const autoSave = document.getElementById('autoSave').checked;
+            
+            PureUI.loading.show('🔍 正在获取目录...');
+            
+            try {
+                // 1. 保存到书架
+                if (autoSave) {
+                    await fetch(`${API_URL}/insert`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ key: key, value: url, manual: true })
+                    });
+                }
+                
+                // 2. 获取目录，找到第一章
+                const tocRes = await fetch(`${API_URL}/toc?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}&api=1`);
+                const tocData = await tocRes.json();
+                
+                let firstChapterUrl = url; // 默认使用原始URL
+                
+                if (tocData && tocData.chapters && tocData.chapters.length > 0) {
+                    // 找到第一章
+                    firstChapterUrl = tocData.chapters[0].url;
+                    PureUI.loading.show('📖 正在打开第一章...');
+                } else {
+                    // 如果获取目录失败，直接用原始URL
+                    console.warn('无法获取目录，使用原始URL');
+                }
+                
+                // 3. 跳转到阅读页面
+                if (autoSave) {
+                    PureUI.toast('✅ 已保存到书架');
+                }
+                
+                setTimeout(() => {
+                    // [关键修复] 不保存时不传 key，避免历史记录不存在的 key
+                    if (autoSave) {
+                        window.location.href = `/read?url=${encodeURIComponent(firstChapterUrl)}&key=${encodeURIComponent(key)}`;
+                    } else {
+                        // 不保存时，只传 URL，不传 key
+                        window.location.href = `/read?url=${encodeURIComponent(firstChapterUrl)}`;
+                    }
+                }, 300);
+                
+            } catch(e) {
+                console.error('获取目录失败:', e);
+                // 失败则直接跳转原URL
+                PureUI.loading.hide();
+                if (autoSave) {
+                    PureUI.toast('已保存，正在跳转...', 'info');
+                }
+                setTimeout(() => {
+                    if (autoSave) {
+                        window.location.href = `/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`;
+                    } else {
+                        window.location.href = `/read?url=${encodeURIComponent(url)}`;
+                    }
+                }, 300);
+            }
+        }
+    </script>
+    
+    <style>
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</body>
+</html>

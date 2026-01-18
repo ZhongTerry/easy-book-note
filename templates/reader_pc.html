@@ -648,7 +648,11 @@ body.dark-mode #settingsModal input.p-input {
 
         {% if article.next %}
         <a id="link-next" href="/read?url={{ article.next }}&key={{ db_key }}" class="nav-btn">下一章</a>
-        {% else %}<span class="nav-btn disabled">已是末尾</span>{% endif %}
+        {% else %}
+        <span class="nav-btn disabled" onclick="handleNoNextChapter()" style="cursor:pointer;" title="点击重新检查更新">
+            已是末尾 🔄
+        </span>
+        {% endif %}
     </div>
 </div>
 
@@ -656,6 +660,12 @@ body.dark-mode #settingsModal input.p-input {
     <div class="menu-item" onclick="location.href='/'">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         <span>书架</span>
+    </div>
+    <div class="menu-item" id="saveToShelfBtn" onclick="saveToShelf()" title="将当前书籍保存到书架">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span>收藏</span>
     </div>
     <div class="menu-item" onclick="showModal('tocOverlay')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
@@ -846,6 +856,111 @@ body.dark-mode #settingsModal input.p-input {
     // 自动注入版本号
     const APP_VERSION = "{{ app_version }}";
     let isSubscribed = false;
+    
+    // [新增] 保存到��架功能
+    let isSaved = false;
+    
+    async function saveToShelf() {
+        const btn = document.getElementById('saveToShelfBtn');
+        
+        // 如果已经有 key，说明已在书架
+        if (dbKey) {
+            try {
+                // 检查是否真的存在于数据库
+                const checkRes = await fetch('/find', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ key: dbKey })
+                });
+                const checkData = await checkRes.json();
+                
+                if (checkData.status === 'success' && checkData.value) {
+                    // 已存在
+                    alert('✅ 该书籍已在书架中');
+                    btn.classList.add('saved');
+                    return;
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+        
+        // 需要获取目录 URL
+        if (!dbKey || !currentUrl) {
+            alert('❌ 缺少必要信息，无法保存');
+            return;
+        }
+        
+        btn.style.opacity = '0.5';
+        btn.style.pointerEvents = 'none';
+        
+        try {
+            // 获取目录 URL
+            let tocUrl = currentUrl;
+            
+            // 如果当前是章节页，尝试从 article.toc_url 获取
+            const tocData = await fetch(`/toc?url=${encodeURIComponent(currentUrl)}&key=${encodeURIComponent(dbKey || 'temp')}&api=1`);
+            const toc = await tocData.json();
+            
+            // 使用页面提供的目录链接或当前 URL
+            const tocLink = "{{ article.toc_url or '' }}";
+            if (tocLink) {
+                tocUrl = tocLink;
+            }
+            
+            // 调用快速保存 API
+            const res = await fetch('/api/quick_save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    key: dbKey,
+                    url: tocUrl
+                })
+            });
+            
+            const result = await res.json();
+            
+            if (result.status === 'success') {
+                alert('✅ ' + result.message);
+                btn.classList.add('saved');
+                isSaved = true;
+            } else {
+                alert('❌ ' + (result.message || '保存失败'));
+            }
+        } catch(e) {
+            console.error(e);
+            alert('❌ 保存失败：' + e.message);
+        } finally {
+            btn.style.opacity = '1';
+            btn.style.pointerEvents = 'auto';
+        }
+    }
+    
+    // 页面加载时检查是否已保存
+    async function checkIfSaved() {
+        if (!dbKey) return;
+        
+        try {
+            const res = await fetch('/find', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey })
+            });
+            const data = await res.json();
+            
+            if (data.status === 'success' && data.value) {
+                const btn = document.getElementById('saveToShelfBtn');
+                if (btn) {
+                    btn.classList.add('saved');
+                    btn.title = '已在书架中';
+                }
+                isSaved = true;
+            }
+        } catch(e) {
+            console.error(e);
+        }
+    }
+    
     async function checkSubPC() {
         try {
             const res = await fetch('/api/updates/status', {
@@ -1100,6 +1215,9 @@ body.dark-mode #settingsModal input.p-input {
         setInterval(sendHeartbeat, 60000); // 1分钟一次心跳
         reportWordCount();                 // 上报字数
         handlePrefetch();                  // 预加载下一章
+        
+        // 5. [新增] 检查是否已保存到书架
+        checkIfSaved();
     };
 
     // === 同步核心逻辑 (Check First, Save Later) ===
@@ -1513,6 +1631,42 @@ body.dark-mode #settingsModal input.p-input {
     }
 
     function showToast(m) { const x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(()=>x.className="", 3000); }
+    
+    // 🔥 处理"已是末尾"时自动重抓目录
+    async function handleNoNextChapter() {
+        if (confirm('📖 已是最后一章\n\n是否立即重新抓取目录检查更新？')) {
+            showToast('🔄 正在重新抓取目录...');
+            await loadTOC(true); // force=true 强制刷新
+            
+            // 等待1秒让目录加载完成
+            setTimeout(() => {
+                // 重新检查是否有下一章
+                const currentId = {{ chapter_id }};
+                const tocUrl = "{{ article.toc }}";
+                
+                fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key={{ db_key }}&api=1&force=true`)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.chapters) {
+                            // 找到当前章节的下一章
+                            const currentIndex = data.chapters.findIndex(c => 
+                                c.url === "{{ current_url }}" || c.id === currentId
+                            );
+                            
+                            if (currentIndex >= 0 && currentIndex < data.chapters.length - 1) {
+                                const nextChapter = data.chapters[currentIndex + 1];
+                                showToast('✅ 发现新章节！');
+                                setTimeout(() => {
+                                    window.location.href = `/read?url=${encodeURIComponent(nextChapter.url)}&key={{ db_key }}`;
+                                }, 1000);
+                            } else {
+                                showToast('💤 仍然是最新章节');
+                            }
+                        }
+                    });
+            }, 1500);
+        }
+    }
     
     document.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowLeft') document.getElementById('link-prev')?.click();

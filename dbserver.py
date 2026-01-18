@@ -161,5 +161,17 @@ def schedule_auto_check():
 
 # 在 main 中启动
 threading.Thread(target=schedule_auto_check, daemon=True).start()
+
 if __name__ == '__main__':
-    app.run(debug=False, port=5000, host='0.0.0.0')
+    # 🔥 从环境变量读取开发模式配置
+    # DEV_MODE=true 或 DEBUG=true 启用开发者模式（自动重载）
+    # 默认为生产模式（debug=False）
+    is_dev_mode = os.environ.get('DEV_MODE', '').lower() in ('true', '1', 'yes') or \
+                  os.environ.get('DEBUG', '').lower() in ('true', '1', 'yes')
+    
+    if is_dev_mode:
+        print("🔧 [Dev Mode] 开发者模式已启用（支持代码热重载）")
+        app.run(debug=True, port=5000, host='0.0.0.0')
+    else:
+        print("🚀 [Production Mode] 生产模式运行")
+        app.run(debug=False, port=5000, host='0.0.0.0')

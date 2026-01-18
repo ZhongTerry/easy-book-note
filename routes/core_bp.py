@@ -16,6 +16,71 @@ CLIENT_ID = os.environ.get('CLIENT_ID') or DEFAULT_CLIENT_ID
 CLIENT_SECRET = os.environ.get('CLIENT_SECRET') or DEFAULT_CLIENT_SECRET
 AUTH_SERVER = os.environ.get('SERVER', 'https://auth.ztrztr.top')
 REDIRECT_URI = os.environ.get('CALLBACK', 'https://book.ztrztr.top/callback')
+
+def detect_page_type(data):
+    """
+    智能检测页面类型（增强版：优先使用适配器标记）
+    返回: 'toc' (目录页), 'chapter' (章节页), 'unknown' (无法判断)
+    """
+    if not data or not isinstance(data, dict):
+        return 'unknown'
+    
+    # === [优先级1] 适配器明确标记 ===
+    if 'page_type' in data:
+        declared_type = data['page_type']
+        if declared_type in ('toc', 'chapter'):
+            print(f"[Smart Detect] 适配器声明类型: {declared_type}")
+            return declared_type
+    
+    # === [优先级2] 数据结构特征检测 ===
+    # 检查是否有 chapters 列表（典型的目录页特征）
+    chapters = data.get('chapters', [])
+    if isinstance(chapters, list) and len(chapters) > 3:  # 至少3章才算目录
+        print(f"[Smart Detect] 发现 {len(chapters)} 个章节 → 判定为目录页")
+        return 'toc'
+    
+    # 检查是否有 content（典型的章节页特征）
+    content = data.get('content')
+    
+    # 如果 content 是列表且包含有效内容
+    if isinstance(content, list):
+        # [优化] 过滤掉空字符串和失败信息
+        valid_lines = [line for line in content if line and '提取失败' not in line and '无法获取' not in line and '获取失败' not in line]
+        if len(valid_lines) > 3:  # [修复] 降低阈值，只要3行就认为是章节
+            total_length = sum(len(line) for line in valid_lines)
+            if total_length > 100:  # [修复] 降低阈值，100字符就够了
+                print(f"[Smart Detect] 发现 {len(valid_lines)} 行有效内容 (共{total_length}字符) → 判定为章节页")
+                return 'chapter'
+        # [修复] 如果只有1-2行，也可能是章节页（特别短的章节或失败信息）
+        # 不要直接判定为目录页，继续检查其他特征
+    
+    # 如果 content 是字符串
+    if isinstance(content, str):
+        if '提取失败' in content or '无法获取' in content or '获取失败' in content:
+            # [修复] 失败信息不一定是目录页，继续检查其他特征
+            print(f"[Smart Detect] 检测到失败信息，继续检查...")
+        elif len(content) > 100:  # [修复] 降低阈值
+            # 有足够长的内容，可能是章节页
+            print(f"[Smart Detect] 内容长度 {len(content)} → 判定为章节页")
+            return 'chapter'
+    
+    # 如果有 next_url, prev_url 等章节导航，很可能是章节页
+    # 但要排除指向 index.html 的情况（那是目录链接）
+    next_url = data.get('next_url') or data.get('next') or ''
+    prev_url = data.get('prev_url') or data.get('prev') or ''
+    
+    if (next_url and 'index.html' not in next_url) or (prev_url and 'index.html' not in prev_url):
+        print(f"[Smart Detect] 发现章节导航链接 → 判定为章节页")
+        return 'chapter'
+    
+    # [新增] 如果有 toc_url 字段，说明这是从章节页提取的
+    if data.get('toc_url'):
+        print(f"[Smart Detect] 发现 toc_url 字段 → 判定为章节页")
+        return 'chapter'
+    
+    print(f"[Smart Detect] 无法判断页面类型")
+    return 'unknown'
+
 def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
     """
     只通过标题识别真实序号。
@@ -103,6 +168,12 @@ def index():
     except Exception as e:
         return f"Error loading index: {str(e)}", 500
 
+@core_bp.route('/search')
+@login_required
+def search_page():
+    """独立搜索页面"""
+    return render_template("search.html")
+
 @core_bp.route('/read')
 @login_required
 def read_mode():
@@ -146,7 +217,15 @@ def read_mode():
         print(f"[Read Error] {e}")
         return f"解析发生错误: {str(e)}", 500
 
-    # 3. [核心修复] 必须先判断 data 是否存在
+    # 3. [智能检测] 如果获取的内容实际上是目录页，自动跳转到目录页
+    if data and not u.startswith('epub:'):
+        page_type = detect_page_type(data)
+        if page_type == 'toc':
+            print(f"[Smart Redirect] 检测到章节URL返回了目录内容，重定向到目录页: {u}")
+            # 重定向到目录页，保持 key 参数
+            return redirect(url_for('core.toc_page', url=u, key=k))
+    
+    # 4. [核心修复] 必须先判断 data 是否存在
     if not data:
         return render_template_string("""
             <!DOCTYPE html>
@@ -190,11 +269,22 @@ def read_mode():
             </body></html>
         """, url=u, key=k), 404
 
-    # 4. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
+    # 5. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
-        # 记录历史
+        # [优化] 记录历史前先检测页面类型，目录页不记录
         if k and data.get('title'):
-            managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
+            # 检测页面类型，只有章节页才记录历史
+            page_type = detect_page_type(data)
+            if page_type != 'toc':  # 只记录章节页，不记录目录页
+                # [关键修复] 检查 key 是否存在于数据库，避免记录不存在的 key
+                db_value = managers.db.find(k)
+                if db_value and db_value.get('status') == 'success':
+                    # key 存在，记录历史
+                    managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
+                else:
+                    print(f"[History] 跳过不存在的 key: {k}")
+            else:
+                print(f"[History] 跳过目录页历史记录: {data.get('title')}")
 
         # 计算 ID
         current_chapter_id = -1
@@ -206,7 +296,7 @@ def read_mode():
             match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
             if match: current_chapter_id = int(match.group(1))
 
-        # 5. 渲染页面
+        # 6. 渲染页面
         ua = request.headers.get('User-Agent', '').lower()
         is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
         
@@ -284,6 +374,21 @@ def toc_page():
         if data:
             managers.cache.set(u, data)
     
+    # [智能检测] 如果获取的内容实际上是章节页，自动跳转到阅读页
+    if data:
+        page_type = detect_page_type(data)
+        if page_type == 'chapter':
+            print(f"[Smart Redirect] 检测到目录URL返回了章节内容，重定向到阅读页: {u}")
+            # 如果是API调用，返回错误提示
+            if is_api:
+                return jsonify({
+                    "status": "redirect",
+                    "message": "该URL是章节页而非目录页",
+                    "redirect_url": url_for('core.read_mode', url=u, key=k)
+                })
+            # 否则直接重定向到阅读页
+            return redirect(url_for('core.read_mode', url=u, key=k))
+    
     if is_api:
         return jsonify(data if data else {"status": "error", "message": "无法获取目录"})
 
@@ -318,6 +423,27 @@ def insert():
         managers.db.add_version(key, final_value)
         
     return jsonify(res)
+
+@core_bp.route('/api/quick_save', methods=['POST'])
+@login_required
+def api_quick_save():
+    """
+    快速保存当前阅读的书籍到书架
+    用于搜索页未保存，但阅读时想保存的场景
+    """
+    key = request.json.get('key')
+    url = request.json.get('url')  # 目录 URL
+    
+    if not key or not url:
+        return jsonify({"status": "error", "message": "缺少参数"})
+    
+    # 保存到数据库
+    res = managers.db.insert(key, url)
+    
+    if res.get('status') == 'success':
+        return jsonify({"status": "success", "message": "已保存到书架"})
+    else:
+        return jsonify({"status": "error", "message": res.get('message', '保存失败')})
 
 import time
 @core_bp.route('/update', methods=['POST'])
@@ -364,20 +490,7 @@ def update():
         managers.db.add_version(key, final_value)
     
     return jsonify(res)
-# routes/core_bp.py
 
-@core_bp.route('/api/rename_key', methods=['POST'])
-@login_required
-def api_rename_key():
-    old_key = request.json.get('old_key')
-    new_key = request.json.get('new_key')
-    
-    if not old_key or not new_key:
-        return jsonify({"status": "error", "message": "参数不足"})
-    
-    # 调用刚才在 managers 里写的逻辑
-    res = managers.db.rename_key(old_key, new_key)
-    return jsonify(res)
 @core_bp.route('/api/switch_source', methods=['POST'])
 @login_required
 def api_switch_source():
@@ -1140,4 +1253,73 @@ def api_manual_check():
         })
     except Exception as e:
         print(f"[Manual Check Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
+@core_bp.route('/api/rename_key', methods=['POST'])
+@login_required
+def api_rename_key():
+    """重命名书签Key，同时迁移所有关联数据"""
+    data = request.json
+    old_key = data.get('old_key')
+    new_key = data.get('new_key')
+    
+    if not old_key or not new_key:
+        return jsonify({"status": "error", "msg": "参数不完整"})
+    
+    if old_key == new_key:
+        return jsonify({"status": "error", "msg": "新旧Key相同"})
+    
+    # 检查新Key是否已存在
+    existing_val = managers.db.get_val(new_key)
+    if existing_val:
+        return jsonify({"status": "error", "msg": f"Key [{new_key}] 已存在，请换一个名字"})
+    
+    try:
+        # 1. 迁移主数据
+        old_val = managers.db.get_val(old_key)
+        if not old_val:
+            return jsonify({"status": "error", "msg": "原Key不存在"})
+        
+        managers.db.insert(new_key, old_val)
+        managers.db.remove(old_key)
+        
+        # 2. 迁移标签
+        all_tags = managers.tag_manager.load()
+        if old_key in all_tags:
+            managers.tag_manager.update_tags(new_key, all_tags[old_key])
+            managers.tag_manager.update_tags(old_key, [])  # 清空旧的
+        
+        # 3. 迁移追更订阅（如果有）
+        try:
+            username = session.get('user', {}).get('username')
+            old_sub = managers.update_sub_manager.get_book_status(old_key)
+            if old_sub['subscribed']:
+                # 复制订阅数据到新Key
+                conn = managers.get_db()
+                conn.execute('''
+                    INSERT INTO book_updates (book_key, toc_url, last_local_id, last_remote_id, has_update, username)
+                    SELECT ?, toc_url, last_local_id, last_remote_id, has_update, username
+                    FROM book_updates WHERE book_key = ? AND username = ?
+                ''', (new_key, old_key, username))
+                # 删除旧的
+                conn.execute('DELETE FROM book_updates WHERE book_key = ? AND username = ?', (old_key, username))
+                conn.commit()
+        except Exception as e:
+            print(f"[Rename] 迁移追更失败（可忽略）: {e}")
+        
+        # 4. 迁移历史记录（最近阅读）
+        try:
+            history_data = managers.history_manager.load()
+            if 'records' in history_data:
+                for record in history_data['records']:
+                    if record.get('key') == old_key:
+                        record['key'] = new_key
+                managers.history_manager.save(history_data)
+        except Exception as e:
+            print(f"[Rename] 迁移历史失败（可忽略）: {e}")
+        
+        return jsonify({"status": "success", "msg": f"已重命名: {old_key} → {new_key}"})
+    
+    except Exception as e:
+        print(f"[Rename Error] {e}")
         return jsonify({"status": "error", "msg": str(e)})
