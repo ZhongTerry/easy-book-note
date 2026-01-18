@@ -117,12 +117,13 @@ def schedule_auto_check():
                                     raw_id = 0
                                 raw_id = int(raw_id)
                                 
-                                # 再次尝试解析
-                                if remote_seq == -1 and raw_id > 0:
-                                     # 仅当 raw_id 看起来像序号时才用它(比如 < 10000)
-                                     # 这里我们保持严谨：如果解析不出 remote_seq，就只能先信 raw_id
-                                     # 但为了防止 3亿Bug，我们优先信 remote_seq
+                                # 🔥 严格判断：只信小于 10000 的 raw_id（防止数据库 ID 被误认为章节号）
+                                if remote_seq == -1 and 0 < raw_id < 10000:
                                      remote_seq = raw_id
+                                elif remote_seq == -1:
+                                     # 如果解析不出章节号，且 raw_id 太大或为 0，直接跳过此次检查
+                                     print(f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}, raw_id={raw_id}")
+                                     continue
 
                                 # 决策入库 ID
                                 id_to_save = remote_seq if remote_seq > 0 else raw_id

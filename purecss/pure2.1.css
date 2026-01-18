@@ -179,6 +179,42 @@ input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:foc
 @keyframes p-spin { to { transform: rotate(360deg); } }
 @keyframes p-fade-in { from { opacity: 0; } to { opacity: 1; } }
 
+/* --- � 全局加载动画样式 --- */
+#p-loading {
+    display: none; /* 默认隐藏 */
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 99999; /* 最高层级 */
+}
+
+.p-loading-backdrop {
+    width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex; align-items: center; justify-content: center;
+    animation: p-fade-in 0.2s ease;
+}
+
+.p-loading-spinner {
+    background: white; padding: 30px 40px; border-radius: 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+    display: flex; flex-direction: column; align-items: center; gap: 15px;
+}
+
+.spinner {
+    width: 40px; height: 40px;
+    border: 3px solid #f3f4f6;
+    border-top-color: var(--p-primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.loading-text {
+    font-size: 14px; color: #6b7280; font-weight: 500;
+}
+
 /* --- 📱 移动端适配 (Mobile Responsive) --- */
 @media (max-width: 640px) {
     /* 1. 容器收缩 */

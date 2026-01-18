@@ -149,12 +149,46 @@ def read_mode():
     # 3. [核心修复] 必须先判断 data 是否存在
     if not data:
         return render_template_string("""
-            <div style="text-align:center; padding:50px;">
-                <h3>无法获取章节内容</h3>
-                <p>可能是源站连接超时，或该章节需要付费/登录。</p>
-                <a href="javascript:history.back()">返回</a>
-            </div>
-        """), 404
+            <!DOCTYPE html>
+            <html><head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>解析失败</title>
+                <style>
+                    body { font-family: -apple-system, sans-serif; text-align:center; padding:50px; background:#f9fafb; }
+                    .error-box { max-width:500px; margin:0 auto; background:white; padding:40px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1); }
+                    h2 { color:#ef4444; margin-bottom:15px; }
+                    p { color:#6b7280; line-height:1.6; margin-bottom:20px; }
+                    .tips { text-align:left; background:#fef3c7; padding:15px; border-radius:8px; margin-top:20px; font-size:14px; color:#92400e; }
+                    .btn { display:inline-block; padding:10px 20px; background:#4f46e5; color:white; text-decoration:none; border-radius:6px; margin-top:15px; }
+                    .btn:hover { background:#4338ca; }
+                    .debug { margin-top:20px; padding:15px; background:#f3f4f6; border-radius:8px; text-align:left; font-size:12px; color:#6b7280; overflow-wrap:break-word; }
+                </style>
+            </head><body>
+                <div class="error-box">
+                    <h2>🚫 内容提取失败</h2>
+                    <p>可能原因：</p>
+                    <ul style="text-align:left; color:#6b7280; line-height:1.8;">
+                        <li>源站连接超时或暂时不可用</li>
+                        <li>该章节需要登录或付费才能阅读</li>
+                        <li>网站结构变动，解析规则需要更新</li>
+                        <li>被反爬虫机制拦截</li>
+                    </ul>
+                    <div class="tips">
+                        <strong>💡 解决建议：</strong><br>
+                        1. 返回目录尝试其他章节<br>
+                        2. 稍后重试，或检查源站是否正常<br>
+                        3. 考虑更换书源（在搜索页重新搜索该书）
+                    </div>
+                    <a href="javascript:history.back()" class="btn">← 返回上一页</a>
+                    <div class="debug">
+                        <strong>调试信息：</strong><br>
+                        URL: {{ url }}<br>
+                        Key: {{ key }}
+                    </div>
+                </div>
+            </body></html>
+        """, url=u, key=k), 404
 
     # 4. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
@@ -1053,3 +1087,57 @@ def api_all_red_dots():
     username = session.get('user', {}).get('username')
     keys = managers.update_sub_manager.get_all_updates(username)
     return jsonify({"status": "success", "data": keys})
+
+@core_bp.route('/api/updates/manual_check', methods=['POST'])
+@login_required
+def api_manual_check():
+    """手动立即检查指定书籍更新"""
+    data = request.json
+    key = data.get('key')
+    toc_url = data.get('toc_url')
+    
+    if not key or not toc_url:
+        return jsonify({"status": "error", "msg": "参数不完整"})
+    
+    try:
+        # 强制清除缓存
+        from managers import cache
+        cache_file = cache._get_filename(toc_url)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+        
+        # 获取本地最后已知章节
+        local_seq = -1
+        cached_toc = managers.cache.get(toc_url)
+        if cached_toc and cached_toc.get('chapters'):
+            local_last = cached_toc['chapters'][-1]
+            local_seq = parse_chapter_id(local_last.get('title', ''))
+        
+        # 获取远程最新章节
+        latest_data = crawler.get_latest_chapter(toc_url, no_cache=True)
+        if not latest_data:
+            return jsonify({"status": "error", "msg": "无法获取远程数据"})
+        
+        remote_title = latest_data.get('title', '')
+        remote_seq = parse_chapter_id(remote_title)
+        raw_id = latest_data.get('id', 0)
+        
+        # 严格判断章节号
+        if remote_seq == -1 and 0 < raw_id < 10000:
+            remote_seq = raw_id
+        
+        id_to_save = remote_seq if remote_seq > 0 else raw_id
+        has_update = id_to_save > local_seq if local_seq > 0 else False
+        
+        # 更新数据库状态
+        managers.update_sub_manager.update_status(key, id_to_save, has_update)
+        
+        return jsonify({
+            "status": "success",
+            "has_update": has_update,
+            "latest_title": remote_title,
+            "latest_id": id_to_save
+        })
+    except Exception as e:
+        print(f"[Manual Check Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})

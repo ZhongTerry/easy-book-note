@@ -35,6 +35,31 @@ const PureUI = {
             try { document.execCommand('copy'); this.toast('已复制'); } catch(e){} document.body.removeChild(t);
         }
     },
+    // 🚀 全局加载动画
+    loading: {
+        show(msg = '加载中...') {
+            let el = document.getElementById('p-loading');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'p-loading';
+                el.innerHTML = `
+                    <div class="p-loading-backdrop">
+                        <div class="p-loading-spinner">
+                            <div class="spinner"></div>
+                            <div class="loading-text">${msg}</div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(el);
+            }
+            el.querySelector('.loading-text').innerText = msg;
+            el.style.display = 'flex';
+        },
+        hide() {
+            const el = document.getElementById('p-loading');
+            if (el) el.style.display = 'none';
+        }
+    },
     // 🚀 模态框优化版
     modal: {
         open(id) { 

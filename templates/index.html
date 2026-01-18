@@ -1114,6 +1114,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 
     // 生成菜单项 (图标 + 文字)
     const items = [
+    { icon: '🔖', text: '加入书单', click: `${closeCmd} openAddToListModal('${key}', '${title}')` },
         { icon: '🏷️', text: '编辑标签', click: `${closeCmd} openTagModal('${key}')` },
         { icon: '✏️', text: '重命名', click: `${closeCmd} renameKey('${key}')` },
         { icon: '🕒', text: '历史回退', click: `${closeCmd} openVersionModal('${key}')` },
@@ -1459,6 +1460,7 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
                 return showMsg('请输入 Key', 'error');
             }
 
+            PureUI.loading.show(action === 'insert' ? '保存中...' : action === 'find' ? '查询中...' : '加载中...');
             const btn = document.activeElement; if(btn && btn.tagName === 'BUTTON') btn.classList.add('loading');
             const payload = { key, value };
             if (action === 'insert' || action === 'update') {
@@ -1482,7 +1484,10 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
                     if(action === 'find' && Object.keys(result.data).length === 0) showMsg("未找到相关记录");
                 }
             } catch (err) { showMsg('网络错误', 'error'); } 
-            finally { if(btn && btn.tagName === 'BUTTON') btn.classList.remove('loading'); }
+            finally { 
+                PureUI.loading.hide();
+                if(btn && btn.tagName === 'BUTTON') btn.classList.remove('loading'); 
+            }
         }
         // 格式化时间戳
 function formatTime(timestamp) {
@@ -1611,11 +1616,18 @@ async function showActionSheet(key, url) {
             });
             const json = await res.json();
             const btn = document.getElementById('menuSubBtn');
+            const refreshBtn = document.getElementById('menuRefreshBtn');
             
             if (json.subscribed) {
                 btn.innerHTML = `🔕 取消自动追更`;
                 btn.onclick = () => toggleSubInMenu(key, false, url);
                 btn.style.color = "#d97706"; // 橙色
+                
+                // 🔥 显示"立即检查更新"按钮
+                if(refreshBtn) {
+                    refreshBtn.style.display = 'block';
+                    refreshBtn.onclick = () => manualCheckUpdate(key, url);
+                }
             } else {
                 btn.innerHTML = `🔔 开启自动追更`;
                 btn.onclick = () => toggleSubInMenu(key, true, url);
@@ -1725,7 +1737,50 @@ async function showActionSheet(key, url) {
             }
         } catch(e) { showMsg('网络错误', 'error'); }
     }
+    
+    // 🔥 新增：手动检查更新
+    async function manualCheckUpdate(key, url) {
+        window.closeActionSheet();
+        PureUI.loading.show('🔍 正在检查更新...');
+        
+        try {
+            const res = await fetch('/api/updates/manual_check', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: key, toc_url: url })
+            });
+            const json = await res.json();
+            
+            if (json.status === 'success') {
+                if (json.has_update) {
+                    showMsg(`🎉 发现更新！最新：${json.latest_title}`, 'success');
+                    redDotsSet.add(key);
+                    renderBookshelf(currentBooks);
+                } else {
+                    showMsg('✅ 已是最新章节', 'success');
+                }
+            } else {
+                showMsg(json.msg || '检查失败', 'error');
+            }
+        } catch(e) {
+            showMsg('网络错误', 'error');
+        } finally {
+            PureUI.loading.hide();
+        }
+    }
+    
+let lastTagHash = ''; // 用于缓存标签指纹
 function renderFilterBar() {
+    // 🔥 性能优化：只在标签真正变化时才重渲染
+    const newHash = JSON.stringify({
+        tags: Object.keys(globalTags).sort(),
+        filter: activeFilter,
+        dataKeys: currentData ? Object.keys(currentData).sort() : []
+    });
+    
+    if (newHash === lastTagHash) return; // 指纹相同，跳过渲染
+    lastTagHash = newHash;
+    
     const bar = document.getElementById('filterBar');
     const allUniqueTags = new Set();
     
@@ -2047,6 +2102,7 @@ function restoreVersion(key, value) {
             const k = document.getElementById('onlineSearchInput').value.trim();
             if(!k) return;
             
+            PureUI.loading.show('🔍 全网搜索中...');
             const div = document.getElementById('searchResults');
             div.innerHTML = '<div style="text-align:center; padding:40px; color:#666;">Trying hard to search...<br>🔍 全网聚合搜索中...</div>';
             
@@ -2095,6 +2151,8 @@ function restoreVersion(key, value) {
                 }
             } catch(e) {
                 div.innerHTML = '<div style="text-align:center; padding:40px; color:red;">搜索服务连接失败</div>';
+            } finally {
+                PureUI.loading.hide();
             }
         }
         async function loadBooks() {
