@@ -1506,11 +1506,13 @@ def resume_export():
     if not task_id:
         return jsonify({"success": False, "msg": "缺少任务ID"})
     
-    # 重新创建爬虫实例
-    with crawler.get_crawler_with_strategy(url) as crawler_instance:
-        managers.exporter.resume_export(task_id, crawler_instance)
+    # 直接使用全局 crawler 实例
+    success = managers.exporter.resume_export(task_id, crawler)
     
-    return jsonify({"success": True})
+    if success:
+        return jsonify({"success": True})
+    else:
+        return jsonify({"success": False, "msg": "任务不存在或状态错误"})
 
 @core_bp.route('/api/export/list')
 @login_required
@@ -1574,7 +1576,8 @@ def check_unfinished_export():
                 "task": {
                     "total": task['total'],
                     "current": task.get('current', 0),
-                    "format": task['format']
+                    "format": task['format'],
+                    "delay": task.get('delay', 0.5)  # 返回任务的延迟设置
                 }
             })
         else:

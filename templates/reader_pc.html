@@ -1788,6 +1788,10 @@ body.dark-mode #settingsModal input.p-input {
                 }
                 
                 history.pushState(null, '', url);
+                currentUrl = url; // 更新当前 URL
+                
+                // 自动保存进度到数据库
+                autoSyncProgress();
                 
                 if(data.next_url) {
                     setTimeout(() => fetch('/api/prefetch', { 

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -803,6 +803,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
             <!-- <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button> -->
             <button class="p-btn p-btn-outline" onclick="openHistory()">⏳ 历史</button>
             <button class="p-btn p-btn-outline" onclick="openExportHistory()">📦 导出</button>
+            <button class="p-btn p-btn-outline" style="color: #10b981; border-color: #10b981;" onclick="openDownloadsManager()">💾 下载</button>
             <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
@@ -1122,6 +1123,23 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
         
         <div style="padding:20px; max-height:500px; overflow-y:auto;" id="exportHistoryList">
+            <!-- JS 渲染列表 -->
+        </div>
+    </div>
+</div>
+
+<!-- 下载管理 Modal (Pro 专属) -->
+<div id="downloadsManagerModal" class="p-modal">
+    <div class="p-modal-content" style="max-width:700px; border-radius:12px;">
+        <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <h3 style="margin:0; font-size:18px; color:#333;">💾 下载管理</h3>
+                <div style="font-size:12px; color:#666; margin-top:4px;">管理已导出的书籍文件</div>
+            </div>
+            <span style="cursor:pointer; font-size:24px; color:#999; line-height:1;" onclick="PureUI.modal.close('downloadsManagerModal')">×</span>
+        </div>
+        
+        <div style="padding:20px; max-height:500px; overflow-y:auto;" id="downloadsList">
             <!-- JS 渲染列表 -->
         </div>
     </div>
@@ -1521,6 +1539,27 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
             if (e.key !== 'Enter') return;
             if (e.target.id === 'value') doAction('insert'); else if (e.target.id === 'key') doAction('find');
         }
+        
+        // 检查 URL 参数自动保存
+        (function checkAutoSave() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const autoSaveKey = urlParams.get('key');
+            const autoSaveUrl = urlParams.get('url');
+            
+            if (autoSaveKey) {
+                console.log('🔄 检测到 URL 参数，自动保存:', autoSaveKey);
+                document.getElementById('key').value = autoSaveKey;
+                if (autoSaveUrl) {
+                    document.getElementById('value').value = autoSaveUrl;
+                }
+                // 延迟执行以确保页面加载完成
+                setTimeout(() => {
+                    doAction('insert');
+                    // 清除 URL 参数
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                }, 500);
+            }
+        })();
 
         // 核心操作
         async function doAction(action) {
@@ -2834,6 +2873,8 @@ async function checkUpdate(key, url) {
                 text = `安全模式 (${delayNum}秒/章)`;
             }
             document.getElementById('exportSpeedText').textContent = text;
+            // 保存到 localStorage
+            localStorage.setItem('exportDelay', delay);
         }
         
         async function togglePause() {
@@ -2882,7 +2923,7 @@ async function checkUpdate(key, url) {
                 }
             } catch (e) {
                 console.error('暂停/恢复失败:', e);
-                PureUI.toast.error('操作失败，请重试');
+                PureUI.toast('error', '操作失败：' + e.message);
             }
         }
         
@@ -2909,6 +2950,11 @@ async function checkUpdate(key, url) {
             const labels = document.querySelectorAll('#exportModal label');
             labels.forEach(l => l.style.borderColor = '#e5e7eb');
             labels[0].style.borderColor = '#4f46e5';
+            
+            // 恢复保存的速度设置
+            const savedDelay = localStorage.getItem('exportDelay') || '0.5';
+            document.getElementById('exportDelaySlider').value = savedDelay;
+            updateSpeedText(savedDelay);
             
             // 检查是否有未完成的任务
             try {
@@ -2938,6 +2984,12 @@ async function checkUpdate(key, url) {
             
             const percent = Math.round((task.current / task.total) * 100);
             document.getElementById('exportProgressBar').style.width = percent + '%';
+            
+            // 显示任务的延迟设置
+            const taskDelay = task.delay || 0.5;
+            document.getElementById('exportDelaySlider').value = taskDelay;
+            updateSpeedText(taskDelay);
+            
             document.getElementById('exportStatusText').textContent = '⏸️ 检测到未完成的导出任务';
             document.getElementById('exportProgressText').textContent = `已完成 ${task.current}/${task.total} (${percent}%)`;
             
@@ -3152,11 +3204,26 @@ async function checkUpdate(key, url) {
                             
                             // 自动下载
                             PureUI.toast.success('导出完成，正在下载...');
-                            setTimeout(() => {
-                                window.location.href = `/api/export/download?task_id=${exportTaskId}`;
-                                setTimeout(() => {
-                                    PureUI.modal.close('exportModal');
-                                }, 1000);
+                            setTimeout(async () => {
+                                try {
+                                    const res = await fetch(`/api/export/download?task_id=${exportTaskId}`);
+                                    const blob = await res.blob();
+                                    const url = window.URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = task.filename || '导出文件.txt';
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    document.body.removeChild(a);
+                                    window.URL.revokeObjectURL(url);
+                                    
+                                    setTimeout(() => {
+                                        PureUI.modal.close('exportModal');
+                                    }, 500);
+                                } catch (e) {
+                                    console.error('下载失败:', e);
+                                    PureUI.toast('error', '下载失败，请手动下载');
+                                }
                             }, 500);
                         } else if (task.status === 'error') {
                             clearInterval(exportPollInterval);
@@ -3241,6 +3308,107 @@ async function checkUpdate(key, url) {
             } catch (e) {
                 console.error('获取导出历史失败:', e);
                 PureUI.toast.error('获取导出历史失败');
+            }
+        }
+        
+        // ==========================================
+        // 下载管理功能（Pro 专属）
+        // ==========================================
+        async function openDownloadsManager() {
+            try {
+                const res = await fetch('/api/pro/list_downloads');
+                const json = await res.json();
+                
+                if (json.success) {
+                    const list = document.getElementById('downloadsList');
+                    
+                    if (json.files.length === 0) {
+                        list.innerHTML = '<div style="text-align:center; color:#999; padding:40px;">暂无下载文件</div>';
+                    } else {
+                        list.innerHTML = json.files.map(file => {
+                            const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
+                            const date = new Date(file.modified * 1000).toLocaleString('zh-CN');
+                            const ext = file.filename.split('.').pop().toUpperCase();
+                            const icon = ext === 'EPUB' ? '' : '';
+                            
+                            return `
+                                <div style="border:1px solid #e5e7eb; border-radius:8px; padding:15px; margin-bottom:10px;">
+                                    <div style="display:flex; align-items:start; gap:12px;">
+                                        <div style="font-size:32px;">${icon}</div>
+                                        <div style="flex:1;">
+                                            <div style="font-weight:500; color:#333; margin-bottom:5px; word-break:break-all;">${file.filename}</div>
+                                            <div style="font-size:12px; color:#999;">
+                                                ${ext}  ${sizeInMB} MB  ${date}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div style="display:flex; gap:8px; margin-top:12px;">
+                                        <button onclick="downloadLocalFile('${file.filename}')" 
+                                            style="flex:1; padding:8px; border:none; background:#10b981; color:#fff; border-radius:6px; cursor:pointer; font-size:13px; font-weight:500;">
+                                             下载到本地
+                                        </button>
+                                        <button onclick="deleteLocalFile('${file.filename}')" 
+                                            style="padding:8px 16px; border:1px solid #ef4444; background:#fff; color:#ef4444; border-radius:6px; cursor:pointer; font-size:13px;">
+                                            
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                    
+                    PureUI.modal.open('downloadsManagerModal');
+                } else {
+                    PureUI.toast('error', json.msg || '获取文件列表失败');
+                }
+            } catch (e) {
+                console.error('获取下载列表失败:', e);
+                PureUI.toast('error', '获取下载列表失败：' + e.message);
+            }
+        }
+        
+        async function downloadLocalFile(filename) {
+            try {
+                const res = await fetch(`/api/pro/download_file?filename=${encodeURIComponent(filename)}`);
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                PureUI.toast('success', '开始下载');
+            } catch (e) {
+                console.error('下载失败:', e);
+                PureUI.toast('error', '下载失败：' + e.message);
+            }
+        }
+        
+        async function deleteLocalFile(filename) {
+            if (!confirm(`确定要删除 "${filename}" 吗？`)) return;
+            
+            try {
+                const res = await fetch('/api/pro/delete_file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename })
+                });
+                
+                const json = await res.json();
+                
+                if (json.success) {
+                    PureUI.toast('success', '删除成功');
+                    // 重新加载列表
+                    openDownloadsManager();
+                } else {
+                    PureUI.toast('error', json.msg || '删除失败');
+                }
+            } catch (e) {
+                console.error('删除失败:', e);
+                PureUI.toast('error', '删除失败：' + e.message);
             }
         }
     </script>

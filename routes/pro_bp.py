@@ -84,3 +84,79 @@ def api_pro_download_book():
 
     threading.Thread(target=download_task, args=(book_key, input_url)).start()
     return jsonify({"status": "success", "msg": "🚀 全本离线任务已启动，正在后台高速下载..."})
+
+# ==========================================
+# 下载管理功能（Pro 专属）
+# ==========================================
+@pro_bp.route('/api/pro/list_downloads', methods=['GET'])
+@pro_required
+def list_downloads():
+    """列出 downloads 文件夹中的所有文件"""
+    import os
+    from shared import DL_DIR
+    
+    try:
+        files = []
+        if os.path.exists(DL_DIR):
+            for filename in os.listdir(DL_DIR):
+                filepath = os.path.join(DL_DIR, filename)
+                if os.path.isfile(filepath):
+                    file_stat = os.stat(filepath)
+                    files.append({
+                        'filename': filename,
+                        'size': file_stat.st_size,
+                        'modified': file_stat.st_mtime
+                    })
+        
+        # 按修改时间倒序排列
+        files.sort(key=lambda x: x['modified'], reverse=True)
+        return jsonify({"success": True, "files": files})
+    
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)})
+
+@pro_bp.route('/api/pro/download_file', methods=['GET'])
+@pro_required
+def download_file():
+    from flask import send_from_directory
+    from shared import DL_DIR
+    
+    filename = request.args.get('filename')
+    if not filename:
+        return "Missing filename", 400
+    
+    # 安全检查：防止路径遍历攻击
+    import os
+    safe_filename = os.path.basename(filename)
+    filepath = os.path.join(DL_DIR, safe_filename)
+    
+    if not os.path.exists(filepath):
+        return "File not found", 404
+    
+    return send_from_directory(DL_DIR, safe_filename, as_attachment=True)
+
+@pro_bp.route('/api/pro/delete_file', methods=['POST'])
+@pro_required
+def delete_file():
+    """删除 downloads 文件夹中的指定文件"""
+    import os
+    from shared import DL_DIR
+    
+    data = request.get_json()
+    filename = data.get('filename')
+    
+    if not filename:
+        return jsonify({"success": False, "msg": "缺少文件名"})
+    
+    # 安全检查
+    safe_filename = os.path.basename(filename)
+    filepath = os.path.join(DL_DIR, safe_filename)
+    
+    if not os.path.exists(filepath):
+        return jsonify({"success": False, "msg": "文件不存在"})
+    
+    try:
+        os.remove(filepath)
+        return jsonify({"success": True, "msg": "删除成功"})
+    except Exception as e:
+        return jsonify({"success": False, "msg": str(e)})
