@@ -678,6 +678,287 @@ class DownloadManager:
         if data and data['content']: return data['content'], data.get('title', '')
         raise Exception("Empty")
     def get_status(self, tid): return self.downloads.get(tid)
+
+# ==========================================
+# 导出管理器 (TXT/EPUB) - 支持断点续传
+# ==========================================
+import threading
+class ExportManager:
+    def __init__(self):
+        self.exports = {}  # 内存中的活跃任务
+        self.task_file = os.path.join(USER_DATA_DIR, 'export_tasks.json')
+        self._load_tasks()
+        
+    def _load_tasks(self):
+        """加载持久化的任务"""
+        if os.path.exists(self.task_file):
+            try:
+                with open(self.task_file, 'r', encoding='utf-8') as f:
+                    saved_tasks = json.load(f)
+                    # 加载所有任务（包括已完成的，用于历史记录）
+                    for task_id, task in saved_tasks.items():
+                        if task.get('status') not in ['completed', 'error']:
+                            task['status'] = 'paused'  # 未完成的标记为暂停
+                        # 添加创建时间（如果没有）
+                        if 'created_at' not in task:
+                            task['created_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                        self.exports[task_id] = task
+            except Exception as e:
+                print(f"[ExportManager] 加载任务失败: {e}")
+    
+    def _save_task(self, task_id):
+        """保存单个任务到文件"""
+        try:
+            all_tasks = {}
+            if os.path.exists(self.task_file):
+                with open(self.task_file, 'r', encoding='utf-8') as f:
+                    all_tasks = json.load(f)
+            
+            all_tasks[task_id] = self.exports[task_id]
+            
+            with open(self.task_file, 'w', encoding='utf-8') as f:
+                json.dump(all_tasks, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[ExportManager] 保存任务失败: {e}")
+    
+    def find_unfinished_task(self, book_name):
+        """查找指定书籍的未完成任务"""
+        for task_id, task in self.exports.items():
+            if task.get('book_name') == book_name and task.get('status') == 'paused':
+                return task_id
+        return None
+    
+    def start_export(self, book_name, chapters, crawler_instance, export_format='txt', metadata=None, resume_task_id=None, delay=0.5):
+        """启动导出任务（支持续传）
+        
+        Args:
+            delay: 每个章节抓取后的延迟时间（秒），默认 0.5 秒，防止被封
+        """
+        if resume_task_id and resume_task_id in self.exports:
+            # 断点续传
+            task_id = resume_task_id
+            task = self.exports[task_id]
+            task['status'] = 'running'
+            task['delay'] = delay  # 更新延迟设置
+            print(f"[Export] 续传任务 {task_id}，已完成 {len(task.get('completed_chapters', []))} 章")
+        else:
+            # 新任务
+            task_id = hashlib.md5((book_name + str(time.time())).encode()).hexdigest()
+            safe_name = re.sub(r'[\\/*?:|<>]', '', book_name)
+            filename = f"{safe_name}.{export_format}"
+            
+            task = {
+                'book_name': book_name,
+                'total': len(chapters),
+                'current': 0,
+                'status': 'running',
+                'format': export_format,
+                'filename': filename,
+                'metadata': metadata or {},
+                'chapters': [{'name': c.get('name', f'第{i+1}章'), 'url': c['url']} for i, c in enumerate(chapters)],
+                'completed_chapters': [],  # 已完成的章节索引
+                'results': {},  # 已抓取的章节内容 {index: {title, content}}
+                'delay': delay,  # 抓取延迟（秒）
+                'paused': False,  # 暂停标志
+                'created_at': time.strftime('%Y-%m-%d %H:%M:%S')  # 创建时间
+            }
+            self.exports[task_id] = task
+        
+        self._save_task(task_id)
+        threading.Thread(target=self._export_worker, args=(task_id, crawler_instance)).start()
+        return task_id
+    
+    def pause_export(self, task_id):
+        """暂停导出任务"""
+        if task_id in self.exports:
+            self.exports[task_id]['paused'] = True
+            self.exports[task_id]['status'] = 'paused'
+            self._save_task(task_id)
+            return True
+        return False
+    
+    def resume_export(self, task_id, crawler_instance):
+        """恢复暂停的导出任务"""
+        if task_id in self.exports:
+            task = self.exports[task_id]
+            if task.get('status') == 'paused':
+                task['status'] = 'running'
+                task['paused'] = False
+                self._save_task(task_id)
+                threading.Thread(target=self._export_worker, args=(task_id, crawler_instance)).start()
+                return True
+        return False
+    
+    def _export_worker(self, task_id, crawler):
+        """导出工作线程（支持跳过已完成章节和暂停）"""
+        task = self.exports[task_id]
+        chapters = task['chapters']
+        completed = set(task.get('completed_chapters', []))
+        results = task.get('results', {})
+        delay = task.get('delay', 0.5)  # 获取延迟设置
+        
+        # 转换 results 的 key 为整数（JSON 保存后会变成字符串）
+        results = {int(k): v for k, v in results.items()}
+        
+        # 并发抓取未完成的章节（降低并发数到 3，更安全）
+        pending_chapters = [(i, c) for i, c in enumerate(chapters) if i not in completed]
+        
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            future_to_index = {
+                pool.submit(self._fetch_chapter, c['url'], crawler): i 
+                for i, c in pending_chapters
+            }
+            
+            for future in as_completed(future_to_index):
+                # 检查暂停标志
+                if task.get('paused'):
+                    print(f"[Export] 任务 {task_id} 已暂停")
+                    # 取消所有未完成的任务
+                    for f in future_to_index:
+                        f.cancel()
+                    break
+                
+                idx = future_to_index[future]
+                try:
+                    results[idx] = future.result()
+                    completed.add(idx)
+                except Exception as e:
+                    results[idx] = {
+                        'title': chapters[idx].get('name', f'第{idx+1}章'), 
+                        'content': f'抓取失败: {str(e)}'
+                    }
+                    completed.add(idx)
+                
+                # 更新进度
+                task['current'] = len(completed)
+                task['completed_chapters'] = list(completed)
+                task['results'] = results
+                
+                # 每完成一章添加延迟，防止被封
+                if delay > 0:
+                    import random
+                    actual_delay = delay * random.uniform(0.8, 1.2)  # 随机浮动 ±20%
+                    time.sleep(actual_delay)
+                
+                # 每完成 10 章保存一次
+                if len(completed) % 10 == 0:
+                    self._save_task(task_id)
+        
+        # 如果被暂停，不生成文件
+        if task.get('paused'):
+            self._save_task(task_id)
+            return
+        
+        # 生成文件
+        try:
+            # 按索引排序结果
+            sorted_results = [results[i] for i in range(len(chapters))]
+            
+            if task['format'] == 'txt':
+                self._generate_txt(task, sorted_results)
+            elif task['format'] == 'epub':
+                self._generate_epub(task, sorted_results)
+            
+            task['status'] = 'completed'
+            # 完成后清理 results 以节省空间
+            task.pop('results', None)
+        except Exception as e:
+            task['status'] = 'error'
+            task['error_msg'] = str(e)
+        
+        self._save_task(task_id)
+    
+    def _fetch_chapter(self, url, crawler):
+        """抓取单个章节"""
+        data = crawler.run(url)
+        if data and data.get('content'):
+            return {
+                'title': data.get('title', '无标题'),
+                'content': '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
+            }
+        raise Exception("章节内容为空")
+    
+    def _generate_txt(self, task, results):
+        """生成 TXT 文件"""
+        filepath = os.path.join(DL_DIR, task['filename'])
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"{task['book_name']}\n")
+            f.write("=" * 50 + "\n\n")
+            
+            for chapter in results:
+                if chapter:
+                    f.write(f"\n\n{'=' * 50}\n")
+                    f.write(f"{chapter['title']}\n")
+                    f.write(f"{'=' * 50}\n\n")
+                    f.write(chapter['content'])
+                    f.write("\n\n")
+    
+    def _generate_epub(self, task, results):
+        """生成 EPUB 文件（需要 ebooklib）"""
+        try:
+            from ebooklib import epub
+        except ImportError:
+            raise Exception("需要安装 ebooklib 库: pip install ebooklib")
+        
+        book = epub.EpubBook()
+        metadata = task.get('metadata', {})
+        
+        # 设置元数据
+        book.set_identifier(hashlib.md5(task['book_name'].encode()).hexdigest())
+        book.set_title(task['book_name'])
+        book.set_language(metadata.get('language', 'zh'))
+        
+        if metadata.get('author'):
+            book.add_author(metadata['author'])
+        
+        if metadata.get('description'):
+            book.add_metadata('DC', 'description', metadata['description'])
+        
+        # 添加封面（如果提供）
+        if metadata.get('cover_path') and os.path.exists(metadata['cover_path']):
+            with open(metadata['cover_path'], 'rb') as f:
+                book.set_cover('cover.jpg', f.read())
+        
+        # 创建章节
+        chapters_epub = []
+        spine = ['nav']
+        
+        for i, chapter_data in enumerate(results):
+            if not chapter_data:
+                continue
+                
+            chapter = epub.EpubHtml(
+                title=chapter_data['title'],
+                file_name=f'chapter_{i+1}.xhtml',
+                lang='zh'
+            )
+            
+            # 添加章节内容
+            content = f'<h1>{chapter_data["title"]}</h1>'
+            content += '<div>' + chapter_data['content'].replace('\n', '</p><p>') + '</div>'
+            chapter.content = content
+            
+            book.add_item(chapter)
+            chapters_epub.append(chapter)
+            spine.append(chapter)
+        
+        # 添加目录
+        book.toc = tuple(chapters_epub)
+        
+        # 添加导航文件
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        
+        # 设置 spine
+        book.spine = spine
+        
+        # 写入文件
+        filepath = os.path.join(DL_DIR, task['filename'])
+        epub.write_epub(filepath, book, {})
+    
+    def get_status(self, task_id):
+        """获取任务状态"""
+        return self.exports.get(task_id)
 class ClusterManager:
     def __init__(self):
         self.redis_url = os.environ.get('REDIS_URL')
@@ -984,6 +1265,7 @@ stats_manager = IsolatedStatsManager()
 history_manager = HistoryManager()
 update_manager = UpdateManager()
 update_sub_manager = UpdateRecordManager()
+exporter = ExportManager()
 
 # 注入到 shared 供装饰器使用
 shared.role_manager_instance = role_manager

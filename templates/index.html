@@ -802,6 +802,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
             
             <!-- <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button> -->
             <button class="p-btn p-btn-outline" onclick="openHistory()">⏳ 历史</button>
+            <button class="p-btn p-btn-outline" onclick="openExportHistory()">📦 导出</button>
             <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
@@ -1038,6 +1039,94 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
     </div>
 </div>
+
+<!-- 导出全书 Modal -->
+<div id="exportModal" class="p-modal">
+    <div class="p-modal-content" style="max-width:450px; border-radius:12px;">
+        <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0; font-size:18px; color:#333;">📦 导出全书</h3>
+            <span style="cursor:pointer; font-size:24px; color:#999; line-height:1;" onclick="PureUI.modal.close('exportModal')">×</span>
+        </div>
+        
+        <div style="padding:20px;">
+            <!-- 书名显示 -->
+            <div style="margin-bottom:15px; padding:10px; background:#f9fafb; border-radius:6px;">
+                <div style="font-size:12px; color:#666; margin-bottom:3px;">书名</div>
+                <div id="exportBookName" style="font-weight:500; color:#333;">-</div>
+            </div>
+            
+            <!-- 格式选择 -->
+            <div style="margin-bottom:20px;">
+                <div style="font-weight:500; margin-bottom:10px; color:#333;">选择格式</div>
+                <div style="display:flex; gap:10px;">
+                    <label style="flex:1; padding:12px; border:2px solid #e5e7eb; border-radius:8px; cursor:pointer; text-align:center; transition:all 0.2s;" onclick="selectExportFormat('txt', this)">
+                        <input type="radio" name="exportFormat" value="txt" checked style="display:none;">
+                        <div style="font-size:24px; margin-bottom:5px;">📄</div>
+                        <div style="font-weight:500;">TXT</div>
+                        <div style="font-size:11px; color:#666; margin-top:3px;">纯文本格式</div>
+                    </label>
+                    <label style="flex:1; padding:12px; border:2px solid #e5e7eb; border-radius:8px; cursor:pointer; text-align:center; transition:all 0.2s;" onclick="selectExportFormat('epub', this)">
+                        <input type="radio" name="exportFormat" value="epub" style="display:none;">
+                        <div style="font-size:24px; margin-bottom:5px;">📚</div>
+                        <div style="font-weight:500;">EPUB</div>
+                        <div style="font-size:11px; color:#666; margin-top:3px;">电子书格式</div>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- 速度控制 -->
+            <div style="margin-bottom:20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="font-weight:500; color:#333;">抓取速度</span>
+                    <span id="exportSpeedText" style="font-size:12px; color:#666;">中速 (0.5秒/章)</span>
+                </div>
+                <input type="range" id="exportDelaySlider" min="0.1" max="3.0" step="0.1" value="0.5" 
+                    style="width:100%; accent-color:#4f46e5;" 
+                    oninput="updateSpeedText(this.value)">
+                <div style="display:flex; justify-content:space-between; font-size:11px; color:#999; margin-top:4px;">
+                    <span>极速 (易被封)</span>
+                    <span>慢速 (更安全)</span>
+                </div>
+            </div>
+            
+            <!-- 进度区域 -->
+            <div id="exportProgressArea" style="display:none; margin-bottom:15px;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                    <span id="exportStatusText" style="color:#666; font-size:14px;">准备中...</span>
+                    <span id="exportProgressText" style="color:#666; font-size:14px;">0/0</span>
+                </div>
+                <div style="background:#e5e7eb; height:8px; border-radius:4px; overflow:hidden;">
+                    <div id="exportProgressBar" style="background:linear-gradient(90deg,#4f46e5,#7c3aed); height:100%; width:0%; transition:width 0.3s;"></div>
+                </div>
+            </div>
+            
+            <!-- 错误提示 -->
+            <div id="exportError" style="display:none; padding:12px; background:#fee2e2; border-radius:6px; color:#dc2626; font-size:14px; margin-bottom:15px;"></div>
+            
+            <!-- 操作按钮 -->
+            <div style="display:flex; gap:10px;">
+                <button id="exportCancelBtn" onclick="cancelExport()" style="flex:1; padding:12px; border:1px solid #e5e7eb; background:#fff; border-radius:8px; cursor:pointer; font-size:14px; font-weight:500; color:#666;">取消</button>
+                <button id="exportPauseBtn" onclick="togglePause()" style="display:none; flex:1; padding:12px; border:1px solid #fb923c; background:#fff; color:#fb923c; border-radius:8px; cursor:pointer; font-size:14px; font-weight:500;">⏸ 暂停</button>
+                <button id="exportStartBtn" onclick="startExportTask()" style="flex:1; padding:12px; border:none; background:#4f46e5; color:#fff; border-radius:8px; cursor:pointer; font-size:14px; font-weight:500;">开始导出</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 导出历史 Modal -->
+<div id="exportHistoryModal" class="p-modal">
+    <div class="p-modal-content" style="max-width:600px; border-radius:12px;">
+        <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0; font-size:18px; color:#333;">📦 导出记录</h3>
+            <span style="cursor:pointer; font-size:24px; color:#999; line-height:1;" onclick="PureUI.modal.close('exportHistoryModal')">×</span>
+        </div>
+        
+        <div style="padding:20px; max-height:500px; overflow-y:auto;" id="exportHistoryList">
+            <!-- JS 渲染列表 -->
+        </div>
+    </div>
+</div>
+
     <script>
         const APP_VERSION = "{{ app_version }}"; 
         var tmp = "{{ api_url }}"
@@ -1067,7 +1156,8 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         { icon: '🏷️', text: '编辑标签', click: `${closeCmd} openTagModal('${key}')` },
         { icon: '✏️', text: '重命名', click: `${closeCmd} renameKey('${key}')` },
         { icon: '🕒', text: '历史回退', click: `${closeCmd} openVersionModal('${key}')` },
-        { icon: '📥', text: '离线下载', click: `${closeCmd} downloadBook('${key}', '${value}', '${title}')` }
+        // { icon: '📥', text: '离线下载', click: `${closeCmd} downloadBook('${key}', '${value}', '${title}')` },
+        { icon: '📦', text: '导出全书', click: `${closeCmd} showExportModal('${key}', '${encodeURIComponent(value)}')` }
     ];
 
     if (isLink) {
@@ -1556,6 +1646,9 @@ async function showActionSheet(key, url) {
             </div>
              <div class="action-item" onclick="showTagModal('${key}')">
                 🏷️ 管理标签
+            </div>
+            <div class="action-item" onclick="showExportModal('${key}', '${encodeURIComponent(url)}')">
+                📦 导出全书
             </div>
         `;
         
@@ -2714,6 +2807,441 @@ async function checkUpdate(key, url) {
                 },
                 options: { responsive: true, maintainAspectRatio: false, plugins: {legend:{display:false}}, scales:{x:{display:false}, y:{display:false}} }
             });
+        }
+        
+        // ==========================================
+        // 导出功能
+        // ==========================================
+        let exportTaskId = null;
+        let exportPollInterval = null;
+        let exportCurrentKey = null;
+        let exportCurrentUrl = null;
+        let exportStartTime = null;
+        let exportLastUpdate = { time: 0, current: 0 };
+        let exportUnfinishedTask = null;
+        let exportIsPaused = false;
+        
+        function updateSpeedText(delay) {
+            const delayNum = parseFloat(delay);
+            let text;
+            if (delayNum <= 0.3) {
+                text = `极速 (${delayNum}秒/章)`;
+            } else if (delayNum <= 0.8) {
+                text = `中速 (${delayNum}秒/章)`;
+            } else if (delayNum <= 1.5) {
+                text = `慢速 (${delayNum}秒/章)`;
+            } else {
+                text = `安全模式 (${delayNum}秒/章)`;
+            }
+            document.getElementById('exportSpeedText').textContent = text;
+        }
+        
+        async function togglePause() {
+            if (!exportTaskId) return;
+            
+            const pauseBtn = document.getElementById('exportPauseBtn');
+            
+            try {
+                if (exportIsPaused) {
+                    // 恢复
+                    const res = await fetch('/api/export/resume', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            task_id: exportTaskId, 
+                            url: exportCurrentUrl,
+                            delay: parseFloat(document.getElementById('exportDelaySlider').value)
+                        })
+                    });
+                    
+                    const json = await res.json();
+                    if (json.success) {
+                        exportIsPaused = false;
+                        pauseBtn.textContent = '⏸ 暂停';
+                        document.getElementById('exportStatusText').textContent = '正在恢复...';
+                        pollExportStatus(); // 重新开始轮询
+                    }
+                } else {
+                    // 暂停
+                    const res = await fetch('/api/export/pause', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ task_id: exportTaskId })
+                    });
+                    
+                    const json = await res.json();
+                    if (json.success) {
+                        exportIsPaused = true;
+                        pauseBtn.textContent = '▶️ 继续';
+                        document.getElementById('exportStatusText').textContent = '⏸️ 已暂停';
+                        if (exportPollInterval) {
+                            clearInterval(exportPollInterval);
+                            exportPollInterval = null;
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('暂停/恢复失败:', e);
+                PureUI.toast.error('操作失败，请重试');
+            }
+        }
+        
+        async function showExportModal(key, encodedUrl) {
+            exportCurrentKey = key;
+            exportCurrentUrl = decodeURIComponent(encodedUrl);
+            exportStartTime = null;
+            exportLastUpdate = { time: 0, current: 0 };
+            exportUnfinishedTask = null;
+            
+            // 重置 Modal 状态
+            document.getElementById('exportBookName').textContent = key;
+            document.getElementById('exportProgressArea').style.display = 'none';
+            document.getElementById('exportError').style.display = 'none';
+            document.getElementById('exportStartBtn').disabled = false;
+            document.getElementById('exportStartBtn').style.opacity = '1';
+            document.getElementById('exportStartBtn').style.cursor = 'pointer';
+            document.getElementById('exportStartBtn').textContent = '开始导出';
+            document.getElementById('exportProgressBar').style.width = '0%';
+            document.getElementById('exportCancelBtn').textContent = '取消';
+            
+            // 重置格式选择（默认 TXT）
+            document.querySelector('input[name="exportFormat"][value="txt"]').checked = true;
+            const labels = document.querySelectorAll('#exportModal label');
+            labels.forEach(l => l.style.borderColor = '#e5e7eb');
+            labels[0].style.borderColor = '#4f46e5';
+            
+            // 检查是否有未完成的任务
+            try {
+                const res = await fetch('/api/export/check_unfinished', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ book_name: key })
+                });
+                
+                const json = await res.json();
+                
+                if (json.status === 'success' && json.has_unfinished) {
+                    exportUnfinishedTask = json;
+                    showResumePrompt(json.task);
+                }
+            } catch (e) {
+                console.error('检查未完成任务失败:', e);
+            }
+            
+            // 打开 Modal
+            PureUI.modal.open('exportModal');
+        }
+        
+        function showResumePrompt(task) {
+            const progressArea = document.getElementById('exportProgressArea');
+            progressArea.style.display = 'block';
+            
+            const percent = Math.round((task.current / task.total) * 100);
+            document.getElementById('exportProgressBar').style.width = percent + '%';
+            document.getElementById('exportStatusText').textContent = '⏸️ 检测到未完成的导出任务';
+            document.getElementById('exportProgressText').textContent = `已完成 ${task.current}/${task.total} (${percent}%)`;
+            
+            const startBtn = document.getElementById('exportStartBtn');
+            startBtn.textContent = '继续导出';
+            startBtn.style.background = '#059669';
+            
+            const cancelBtn = document.getElementById('exportCancelBtn');
+            cancelBtn.textContent = '放弃并重新开始';
+        }
+        
+        function selectExportFormat(format, labelElement) {
+            document.querySelectorAll('#exportModal label').forEach(l => l.style.borderColor = '#e5e7eb');
+            labelElement.style.borderColor = '#4f46e5';
+            document.querySelector(`input[name="exportFormat"][value="${format}"]`).checked = true;
+        }
+        
+        function cancelExport() {
+            if (exportPollInterval) {
+                clearInterval(exportPollInterval);
+                exportPollInterval = null;
+            }
+            
+            // 如果是在显示续传提示时点击"放弃"，清空未完成任务
+            if (exportUnfinishedTask) {
+                exportUnfinishedTask = null;
+                // 重置 UI 回到新建状态
+                document.getElementById('exportProgressArea').style.display = 'none';
+                document.getElementById('exportStartBtn').textContent = '开始导出';
+                document.getElementById('exportStartBtn').style.background = '#4f46e5';
+                document.getElementById('exportCancelBtn').textContent = '取消';
+                return; // 不关闭弹窗，让用户重新选择
+            }
+            
+            PureUI.modal.close('exportModal');
+        }
+        
+        function resetExport() {
+            if (!confirm('确定要重新开始吗？当前进度将会丢失。')) return;
+            
+            // 停止轮询
+            if (exportPollInterval) {
+                clearInterval(exportPollInterval);
+                exportPollInterval = null;
+            }
+            
+            // 重置状态
+            exportTaskId = null;
+            exportStartTime = null;
+            exportLastUpdate = { time: 0, current: 0 };
+            
+            // 重置 UI
+            document.getElementById('exportProgressArea').style.display = 'none';
+            document.getElementById('exportError').style.display = 'none';
+            document.getElementById('exportStartBtn').disabled = false;
+            document.getElementById('exportStartBtn').style.opacity = '1';
+            document.getElementById('exportStartBtn').style.cursor = 'pointer';
+            document.getElementById('exportStartBtn').textContent = '开始导出';
+            document.getElementById('exportProgressBar').style.width = '0%';
+            document.getElementById('exportCancelBtn').textContent = '取消';
+            
+            PureUI.toast.info('已重置，可以重新开始导出');
+        }
+        
+        async function startExportTask() {
+            const format = document.querySelector('input[name="exportFormat"]:checked').value;
+            const startBtn = document.getElementById('exportStartBtn');
+            const progressArea = document.getElementById('exportProgressArea');
+            const errorDiv = document.getElementById('exportError');
+            
+            // 禁用按钮
+            startBtn.disabled = true;
+            startBtn.style.opacity = '0.5';
+            startBtn.style.cursor = 'not-allowed';
+            
+            // 显示进度区域
+            progressArea.style.display = 'block';
+            errorDiv.style.display = 'none';
+            
+            // 判断是续传还是新建
+            const isResume = exportUnfinishedTask && exportUnfinishedTask.has_unfinished;
+            
+            if (isResume) {
+                document.getElementById('exportStatusText').textContent = '正在恢复导出...';
+            } else {
+                document.getElementById('exportStatusText').textContent = '正在启动导出...';
+                document.getElementById('exportProgressText').textContent = '0/0';
+            }
+            
+            try {
+                const requestBody = {
+                    key: exportCurrentKey,
+                    book_name: exportCurrentKey,
+                    format: format,
+                    delay: parseFloat(document.getElementById('exportDelaySlider').value)  // 添加延迟参数
+                };
+                
+                // 如果是续传，添加 resume_task_id
+                if (isResume) {
+                    requestBody.resume_task_id = exportUnfinishedTask.task_id;
+                }
+                
+                // 启动导出任务
+                const res = await fetch('/api/export/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const json = await res.json();
+                
+                if (json.status === 'success') {
+                    exportTaskId = json.task_id;
+                    exportUnfinishedTask = null; // 清空未完成任务标记
+                    pollExportStatus();
+                } else {
+                    throw new Error(json.msg || '启动失败');
+                }
+            } catch (e) {
+                errorDiv.textContent = '❌ ' + e.message;
+                errorDiv.style.display = 'block';
+                startBtn.disabled = false;
+                startBtn.style.opacity = '1';
+                startBtn.style.cursor = 'pointer';
+                if (!isResume) {
+                    progressArea.style.display = 'none';
+                }
+            }
+        }
+        
+        function pollExportStatus() {
+            if (!exportTaskId) return;
+            
+            exportPollInterval = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/export/status?task_id=${exportTaskId}`);
+                    const json = await res.json();
+                    
+                    if (json.status === 'success') {
+                        const task = json.task;
+                        const progress = task.total > 0 ? Math.round((task.current / task.total) * 100) : 0;
+                        
+                        // 更新进度条
+                        document.getElementById('exportProgressBar').style.width = progress + '%';
+                        
+                        // 计算剩余时间
+                        const currentTime = Date.now();
+                        if (!exportStartTime) {
+                            exportStartTime = currentTime;
+                            exportLastUpdate = { time: currentTime, current: task.current };
+                        }
+                        
+                        let timeInfo = `${task.current}/${task.total}`;
+                        
+                        // 如果已经抓取了至少 3 个章节，开始计算剩余时间
+                        if (task.current > 3 && task.status === 'running') {
+                            const elapsed = (currentTime - exportStartTime) / 1000; // 秒
+                            const speed = task.current / elapsed; // 章节/秒
+                            const remaining = task.total - task.current;
+                            const remainingTime = remaining / speed; // 秒
+                            
+                            // 格式化剩余时间
+                            if (remainingTime < 60) {
+                                timeInfo += ` (剩余 ${Math.ceil(remainingTime)} 秒)`;
+                            } else if (remainingTime < 3600) {
+                                timeInfo += ` (剩余 ${Math.ceil(remainingTime / 60)} 分钟)`;
+                            } else {
+                                const hours = Math.floor(remainingTime / 3600);
+                                const minutes = Math.ceil((remainingTime % 3600) / 60);
+                                timeInfo += ` (剩余 ${hours} 小时 ${minutes} 分钟)`;
+                            }
+                            
+                            // 显示速度
+                            const speedText = speed >= 1 ? `${speed.toFixed(1)} 章/秒` : `${(60 / speed).toFixed(1)} 秒/章`;
+                            document.getElementById('exportStatusText').textContent = `正在抓取 (${speedText})`;
+                        }
+                        
+                        document.getElementById('exportProgressText').textContent = timeInfo;
+                        
+                        if (task.status === 'running') {
+                            if (task.current <= 3) {
+                                document.getElementById('exportStatusText').textContent = '正在抓取章节...';
+                            }
+                            // 显示暂停按钮
+                            document.getElementById('exportPauseBtn').style.display = 'block';
+                            document.getElementById('exportPauseBtn').textContent = '⏸ 暂停';
+                            // 修改取消按钮为重新开始
+                            const cancelBtn = document.getElementById('exportCancelBtn');
+                            cancelBtn.textContent = '重新开始';
+                            cancelBtn.onclick = resetExport;
+                        } else if (task.status === 'paused') {
+                            clearInterval(exportPollInterval);
+                            exportPollInterval = null;
+                            
+                            document.getElementById('exportStatusText').textContent = '⏸️ 已暂停';
+                            document.getElementById('exportPauseBtn').textContent = '▶️ 继续';
+                            document.getElementById('exportCancelBtn').textContent = '取消';
+                            document.getElementById('exportCancelBtn').onclick = cancelExport;
+                        } else if (task.status === 'completed') {
+                            clearInterval(exportPollInterval);
+                            exportPollInterval = null;
+                            
+                            document.getElementById('exportStatusText').textContent = '✅ 导出完成！';
+                            document.getElementById('exportPauseBtn').style.display = 'none';
+                            document.getElementById('exportProgressText').textContent = '完成';
+                            document.getElementById('exportProgressBar').style.width = '100%';
+                            
+                            // 恢复取消按钮
+                            const cancelBtn = document.getElementById('exportCancelBtn');
+                            cancelBtn.textContent = '关闭';
+                            cancelBtn.onclick = cancelExport;
+                            
+                            // 自动下载
+                            PureUI.toast.success('导出完成，正在下载...');
+                            setTimeout(() => {
+                                window.location.href = `/api/export/download?task_id=${exportTaskId}`;
+                                setTimeout(() => {
+                                    PureUI.modal.close('exportModal');
+                                }, 1000);
+                            }, 500);
+                        } else if (task.status === 'error') {
+                            clearInterval(exportPollInterval);
+                            exportPollInterval = null;
+                            
+                            const errorDiv = document.getElementById('exportError');
+                            errorDiv.textContent = '❌ 导出失败：' + (task.error_msg || '未知错误');
+                            errorDiv.style.display = 'block';
+                            
+                            // 允许重新开始
+                            const startBtn = document.getElementById('exportStartBtn');
+                            startBtn.disabled = false;
+                            startBtn.style.opacity = '1';
+                            startBtn.style.cursor = 'pointer';
+                            startBtn.textContent = '重新开始';
+                            
+                            const cancelBtn = document.getElementById('exportCancelBtn');
+                            cancelBtn.textContent = '取消';
+                            cancelBtn.onclick = cancelExport;
+                        }
+                    }
+                } catch (e) {
+                    console.error('轮询失败:', e);
+                }
+            }, 1000); // 每秒轮询一次
+        }
+        
+        // ==========================================
+        // 导出历史记录
+        // ==========================================
+        async function openExportHistory() {
+            try {
+                const res = await fetch('/api/export/list');
+                const json = await res.json();
+                
+                if (json.success) {
+                    const list = document.getElementById('exportHistoryList');
+                    
+                    if (json.tasks.length === 0) {
+                        list.innerHTML = '<div style="text-align:center; color:#999; padding:40px;">暂无导出记录</div>';
+                    } else {
+                        list.innerHTML = json.tasks.map(task => {
+                            const statusIcon = task.status === 'completed' ? '✅' : '⏸️';
+                            const statusText = task.status === 'completed' ? '已完成' : '已暂停';
+                            const statusColor = task.status === 'completed' ? '#059669' : '#fb923c';
+                            
+                            const progress = task.total > 0 ? Math.round((task.current / task.total) * 100) : 0;
+                            
+                            return `
+                                <div style="border:1px solid #e5e7eb; border-radius:8px; padding:15px; margin-bottom:10px;">
+                                    <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:10px;">
+                                        <div style="flex:1;">
+                                            <div style="font-weight:500; color:#333; margin-bottom:5px;">${task.book_name}</div>
+                                            <div style="font-size:12px; color:#999;">
+                                                ${task.format.toUpperCase()} · ${task.current}/${task.total} 章 · ${progress}%
+                                            </div>
+                                        </div>
+                                        <span style="font-size:12px; color:${statusColor}; padding:4px 8px; background:${statusColor}15; border-radius:4px;">
+                                            ${statusIcon} ${statusText}
+                                        </span>
+                                    </div>
+                                    
+                                    ${task.status === 'completed' ? `
+                                        <div style="display:flex; gap:8px;">
+                                            <button onclick="window.location.href='/api/export/download?task_id=${task.task_id}'" 
+                                                style="flex:1; padding:8px; border:1px solid #4f46e5; background:#fff; color:#4f46e5; border-radius:6px; cursor:pointer; font-size:13px;">
+                                                📥 下载
+                                            </button>
+                                        </div>
+                                    ` : `
+                                        <div style="margin-top:10px; background:#f9fafb; padding:8px; border-radius:4px; font-size:12px; color:#666;">
+                                            💡 在书架中找到该书，点击导出全书按钮可继续
+                                        </div>
+                                    `}
+                                </div>
+                            `;
+                        }).join('');
+                    }
+                    
+                    PureUI.modal.open('exportHistoryModal');
+                }
+            } catch (e) {
+                console.error('获取导出历史失败:', e);
+                PureUI.toast.error('获取导出历史失败');
+            }
         }
     </script>
 </body>

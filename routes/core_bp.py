@@ -1340,3 +1340,246 @@ def api_rename_key():
     except Exception as e:
         print(f"[Rename Error] {e}")
         return jsonify({"status": "error", "msg": str(e)})
+
+# ==========================================
+# 导出 API
+# ==========================================
+@core_bp.route('/api/export/start', methods=['POST'])
+@login_required
+def start_export():
+    """启动导出任务"""
+    try:
+        data = request.json
+        toc_url = data.get('toc_url')
+        book_name = data.get('book_name')
+        export_format = data.get('format', 'txt')  # txt 或 epub
+        key = data.get('key', '')
+        
+        if not book_name:
+            return jsonify({"status": "error", "msg": "缺少书名"})
+        
+        # 如果没有提供 toc_url，尝试从 key 获取书籍信息
+        if not toc_url:
+            book_info = managers.db.find(key)
+            if book_info and book_info.get('status') == 'success':
+                book_data = book_info['data'].get(key, {})
+                toc_url = book_data.get('url')
+        
+        if not toc_url:
+            return jsonify({"status": "error", "msg": "无法获取书籍 URL"})
+        
+        print(f"[Export] 开始导出: {book_name}, URL: {toc_url}, 格式: {export_format}")
+        
+        # 获取目录信息
+        # 如果 toc_url 是章节页，爬虫会自动获取其目录页
+        toc = managers.cache.get(toc_url)
+        if not toc:
+            print(f"[Export] 缓存未命中，正在从网络获取目录...")
+            toc = crawler.get_toc(toc_url)
+            print(f"[Export] 爬虫返回结果: {type(toc)}, keys: {toc.keys() if isinstance(toc, dict) else 'N/A'}")
+        
+        if not toc:
+            return jsonify({"status": "error", "msg": "爬虫返回空数据，请检查网络或适配器状态"})
+        
+        if not isinstance(toc, dict):
+            return jsonify({"status": "error", "msg": f"爬虫返回数据格式错误，类型: {type(toc)}"})
+        
+        chapters = toc.get('chapters', [])
+        print(f"[Export] 第一次解析到章节数量: {len(chapters)}")
+        
+        # 如果没有 chapters 但有 toc_url，说明传入的是章节页，需要重新获取目录页
+        if not chapters and toc.get('toc_url'):
+            real_toc_url = toc.get('toc_url')
+            print(f"[Export] 检测到章节页，重定向到目录页: {real_toc_url}")
+            
+            # 从目录页重新获取
+            toc = managers.cache.get(real_toc_url) or crawler.get_toc(real_toc_url)
+            if toc:
+                chapters = toc.get('chapters', [])
+                print(f"[Export] 从目录页解析到章节数量: {len(chapters)}")
+        
+        if not chapters:
+            # 提供更详细的错误信息
+            error_msg = "目录中没有章节。"
+            
+            # 判断是否是番茄小说
+            if 'fanqie' in toc_url.lower():
+                error_msg += "\n\n您正在导出番茄小说，需要先启动番茄适配器服务。"
+                error_msg += "\n请运行: cd tools/fanqie_api && python app.py"
+            else:
+                error_msg += "\n\n可能原因："
+                error_msg += "\n1. 网络连接问题"
+                error_msg += "\n2. 源站反爬限制"
+                error_msg += "\n3. 页面结构变化"
+                
+            # 打印完整的 toc 结构以便调试
+            print(f"[Export Debug] TOC 完整内容: {toc}")
+            
+            return jsonify({"status": "error", "msg": error_msg})
+        
+        # 准备元数据（用于 EPUB）
+        book_info = managers.db.find(key)
+        metadata = {
+            'author': book_info.get('author', '未知作者') if book_info else '未知作者',
+            'description': book_info.get('intro', '') if book_info else '',
+            'language': 'zh'
+        }
+        
+        print(f"[Export] 启动导出任务，章节数: {len(chapters)}")
+        
+        # 检查是否是续传
+        resume_task_id = data.get('resume_task_id')
+        delay = data.get('delay', 0.5)  # 获取用户设置的延迟，默认 0.5 秒
+        
+        # 启动导出任务
+        task_id = managers.exporter.start_export(
+            book_name=book_name,
+            chapters=chapters,
+            crawler_instance=crawler,
+            export_format=export_format,
+            metadata=metadata,
+            resume_task_id=resume_task_id,
+            delay=delay
+        )
+        
+        return jsonify({"status": "success", "task_id": task_id})
+    
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[Export Start Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+        
+        return jsonify({"status": "success", "task_id": task_id})
+    
+    except Exception as e:
+        print(f"[Export Start Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
+@core_bp.route('/api/export/status')
+@login_required
+def export_status():
+    """查询导出状态"""
+    task_id = request.args.get('task_id')
+    if not task_id:
+        return jsonify({"status": "error", "msg": "缺少 task_id"})
+    
+    task = managers.exporter.get_status(task_id)
+    if not task:
+        return jsonify({"status": "error", "msg": "任务不存在"})
+    
+    return jsonify({
+        "status": "success",
+        "task": {
+            "book_name": task['book_name'],
+            "total": task['total'],
+            "current": task['current'],
+            "status": task['status'],
+            "format": task['format'],
+            "filename": task.get('filename', ''),
+            "error_msg": task.get('error_msg', '')
+        }
+    })
+
+@core_bp.route('/api/export/pause', methods=['POST'])
+@login_required
+def pause_export():
+    """暂停导出任务"""
+    data = request.get_json()
+    task_id = data.get('task_id')
+    
+    if not task_id:
+        return jsonify({"success": False, "msg": "缺少任务ID"})
+    
+    managers.exporter.pause_export(task_id)
+    return jsonify({"success": True})
+
+@core_bp.route('/api/export/resume', methods=['POST'])
+@login_required
+def resume_export():
+    """恢复暂停的导出任务"""
+    data = request.get_json()
+    task_id = data.get('task_id')
+    url = data.get('url')
+    delay = data.get('delay', 0.5)  # 获取用户设置的延迟
+    
+    if not task_id:
+        return jsonify({"success": False, "msg": "缺少任务ID"})
+    
+    # 重新创建爬虫实例
+    with crawler.get_crawler_with_strategy(url) as crawler_instance:
+        managers.exporter.resume_export(task_id, crawler_instance)
+    
+    return jsonify({"success": True})
+
+@core_bp.route('/api/export/list')
+@login_required
+def export_list():
+    """获取所有导出任务（包括已完成和未完成的）"""
+    tasks = []
+    for task_id, task in managers.exporter.exports.items():
+        # 只返回已完成或暂停的任务
+        if task['status'] in ['completed', 'paused']:
+            tasks.append({
+                'task_id': task_id,
+                'book_name': task['book_name'],
+                'format': task['format'],
+                'status': task['status'],
+                'total': task['total'],
+                'current': task.get('current', 0),
+                'filename': task.get('filename', ''),
+                'created_at': task.get('created_at', '')
+            })
+    
+    # 按创建时间倒序排列
+    tasks.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    return jsonify({"success": True, "tasks": tasks})
+
+@core_bp.route('/api/export/download')
+@login_required
+def export_download():
+    """下载导出文件"""
+    task_id = request.args.get('task_id')
+    if not task_id:
+        return "Missing task_id", 400
+    
+    task = managers.exporter.get_status(task_id)
+    if not task:
+        return "Task not found", 404
+    
+    if task['status'] != 'completed':
+        return "Export not completed", 400
+    
+    return send_from_directory(DL_DIR, task['filename'], as_attachment=True)
+
+@core_bp.route('/api/export/check_unfinished', methods=['POST'])
+@login_required
+def check_unfinished_export():
+    """检查是否有未完成的导出任务"""
+    try:
+        data = request.json
+        book_name = data.get('book_name')
+        
+        if not book_name:
+            return jsonify({"status": "error", "msg": "缺少书名"})
+        
+        task_id = managers.exporter.find_unfinished_task(book_name)
+        
+        if task_id:
+            task = managers.exporter.get_status(task_id)
+            return jsonify({
+                "status": "success",
+                "has_unfinished": True,
+                "task_id": task_id,
+                "task": {
+                    "total": task['total'],
+                    "current": task.get('current', 0),
+                    "format": task['format']
+                }
+            })
+        else:
+            return jsonify({"status": "success", "has_unfinished": False})
+    
+    except Exception as e:
+        print(f"[Export Check Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})
