@@ -600,7 +600,34 @@
                 });
                 const data = await res.json();
                 memos = data.data || [];
+                
+                // 同步已打开标签的数据：清除已保存内容的unsavedContent标记
+                openTabs.forEach(tab => {
+                    const memo = memos.find(m => m.id === tab.id);
+                    if (memo && tab.unsavedContent !== null) {
+                        // 如果未保存内容和最新数据库内容一致，清空标记
+                        if (tab.unsavedContent === memo.content) {
+                            tab.unsavedContent = null;
+                        }
+                    }
+                    // 更新标签标题（可能在其他地方改了）
+                    if (memo) {
+                        tab.title = memo.title;
+                    }
+                });
+                
+                // 如果当前激活的标签没有未保存内容，刷新编辑器显示
+                if (activeTabId !== null) {
+                    const activeTab = openTabs.find(t => t.id === activeTabId);
+                    const activeMemo = memos.find(m => m.id === activeTabId);
+                    if (activeTab && activeMemo && activeTab.unsavedContent === null) {
+                        document.getElementById('editor').value = activeMemo.content || '';
+                        updatePreview();
+                    }
+                }
+                
                 renderMemoList();
+                renderTabs();
             } catch (e) {
                 console.error('加载笔记失败:', e);
             }
@@ -672,7 +699,15 @@
             const memo = memos.find(m => m.id === memoId);
             
             if (tab && memo) {
-                // 优先显示未保存的内容，否则显示数据库内容
+                // 如果有未保存的内容，显示未保存的；否则从数据库读取最新内容
+                // 但每次切换时都重新同步数据库内容，避免显示过期数据
+                if (tab.unsavedContent !== null) {
+                    // 如果未保存内容和数据库内容一致，清空未保存标记
+                    if (tab.unsavedContent === memo.content) {
+                        tab.unsavedContent = null;
+                    }
+                }
+                
                 const content = tab.unsavedContent !== null ? tab.unsavedContent : (memo.content || '');
                 document.getElementById('editor').value = content;
                 updatePreview();
