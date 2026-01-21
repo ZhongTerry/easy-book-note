@@ -775,18 +775,16 @@
         
         // ==================== 会话恢复 ====================
         function saveSession() {
-            // 保存当前打开的标签页及其未保存内容
-            if (activeTabId !== null) {
-                const currentTab = openTabs.find(t => t.id === activeTabId);
-                if (currentTab) {
-                    currentTab.unsavedContent = document.getElementById('editor').value;
-                }
-            }
-            
-            localStorage.setItem('memoSession', JSON.stringify({
-                openTabs: openTabs,
+            // 只保存标签页ID和标题，不保存具体内容
+            const sessionData = {
+                openTabIds: openTabs.map(tab => ({
+                    id: tab.id,
+                    title: tab.title
+                })),
                 activeTabId: activeTabId
-            }));
+            };
+            
+            localStorage.setItem('memoSession', JSON.stringify(sessionData));
         }
         
         function restoreSession() {
@@ -795,20 +793,30 @@
             
             try {
                 const data = JSON.parse(session);
-                openTabs = data.openTabs || [];
+                const savedTabIds = data.openTabIds || [];
                 activeTabId = data.activeTabId;
+                
+                // 根据保存的ID重建标签页，从服务器获取最新内容
+                openTabs = [];
+                savedTabIds.forEach(savedTab => {
+                    const memo = memos.find(m => m.id === savedTab.id);
+                    if (memo) {
+                        openTabs.push({
+                            id: memo.id,
+                            title: memo.title,
+                            unsavedContent: null
+                        });
+                    }
+                });
                 
                 // 重新渲染标签页
                 renderTabs();
                 
-                // 恢复当前激活标签的内容
+                // 恢复当前激活标签的内容（从服务器数据）
                 if (activeTabId !== null) {
-                    const tab = openTabs.find(t => t.id === activeTabId);
                     const memo = memos.find(m => m.id === activeTabId);
-                    
-                    if (tab && memo) {
-                        const content = tab.unsavedContent !== null ? tab.unsavedContent : (memo.content || '');
-                        document.getElementById('editor').value = content;
+                    if (memo) {
+                        document.getElementById('editor').value = memo.content || '';
                         updatePreview();
                     }
                 }
