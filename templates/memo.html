@@ -304,9 +304,120 @@
             display: flex;
             gap: 5px;
         }
+        
+        /* Modal 弹窗样式 */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        .modal-box {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            min-width: 300px;
+            max-width: 500px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            animation: modalSlideIn 0.2s ease-out;
+        }
+        
+        @keyframes modalSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .modal-header {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #374151;
+        }
+        
+        .modal-body {
+            margin-bottom: 20px;
+        }
+        
+        .modal-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 14px;
+            outline: none;
+        }
+        
+        .modal-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .modal-message {
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        
+        .modal-btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .modal-btn-primary:hover {
+            background: #5568d3;
+        }
+        
+        .modal-btn-secondary {
+            background: #e5e7eb;
+            color: #374151;
+        }
+        
+        .modal-btn-secondary:hover {
+            background: #d1d5db;
+        }
     </style>
 </head>
 <body>
+    <!-- Modal 弹窗 -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal-box">
+            <div class="modal-header" id="modalHeader"></div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer" id="modalFooter"></div>
+        </div>
+    </div>
+    
     <!-- 自定义标题栏 -->
     <div class="title-bar">
         <div>📝 备忘录</div>
@@ -365,6 +476,101 @@
         let activeTabId = null;      // 当前激活的标签页ID
         let saveTimer = null;        // 自动保存定时器
         let currentSortMode = 'time'; // 排序模式
+        
+        // ==================== Modal 弹窗工具函数 ====================
+        function showModal(title, bodyHTML, buttons) {
+            return new Promise((resolve) => {
+                const overlay = document.getElementById('modalOverlay');
+                const header = document.getElementById('modalHeader');
+                const body = document.getElementById('modalBody');
+                const footer = document.getElementById('modalFooter');
+                
+                header.textContent = title;
+                body.innerHTML = bodyHTML;
+                footer.innerHTML = '';
+                
+                buttons.forEach(btn => {
+                    const button = document.createElement('button');
+                    button.className = `modal-btn ${btn.primary ? 'modal-btn-primary' : 'modal-btn-secondary'}`;
+                    button.textContent = btn.text;
+                    button.onclick = () => {
+                        overlay.classList.remove('show');
+                        resolve(btn.value);
+                    };
+                    footer.appendChild(button);
+                });
+                
+                overlay.classList.add('show');
+                
+                // 自动聚焦到输入框或第一个按钮
+                setTimeout(() => {
+                    const input = body.querySelector('input');
+                    if (input) {
+                        input.focus();
+                        input.select();
+                    } else {
+                        const firstBtn = footer.querySelector('.modal-btn-primary');
+                        if (firstBtn) firstBtn.focus();
+                    }
+                }, 100);
+                
+                // 点击遮罩层关闭
+                overlay.onclick = (e) => {
+                    if (e.target === overlay) {
+                        overlay.classList.remove('show');
+                        resolve(null);
+                    }
+                };
+                
+                // 支持 Enter 键确认
+                const handleKeydown = (e) => {
+                    if (e.key === 'Enter') {
+                        const primaryBtn = Array.from(footer.children).find(btn => 
+                            btn.classList.contains('modal-btn-primary')
+                        );
+                        if (primaryBtn) {
+                            primaryBtn.click();
+                            document.removeEventListener('keydown', handleKeydown);
+                        }
+                    } else if (e.key === 'Escape') {
+                        overlay.classList.remove('show');
+                        resolve(null);
+                        document.removeEventListener('keydown', handleKeydown);
+                    }
+                };
+                document.addEventListener('keydown', handleKeydown);
+            });
+        }
+        
+        async function showPrompt(title, defaultValue = '') {
+            const inputId = 'modalInput_' + Date.now();
+            const result = await showModal(
+                title,
+                `<input type="text" id="${inputId}" class="modal-input" value="${escapeHtml(defaultValue)}" placeholder="请输入...">`,
+                [
+                    { text: '取消', value: null, primary: false },
+                    { text: '确定', value: 'ok', primary: true }
+                ]
+            );
+            
+            if (result === 'ok') {
+                const input = document.getElementById(inputId);
+                return input ? input.value : null;
+            }
+            return null;
+        }
+        
+        async function showConfirm(message) {
+            const result = await showModal(
+                '确认操作',
+                `<div class="modal-message">${message}</div>`,
+                [
+                    { text: '取消', value: false, primary: false },
+                    { text: '确定', value: true, primary: true }
+                ]
+            );
+            return result === true;
+        }
         
         // ==================== 初始化 ====================
         async function init() {
@@ -616,7 +822,7 @@
         
         // ==================== 笔记操作 ====================
         async function newMemoFromTitle() {
-            const title = prompt('请输入笔记标题:', '新笔记');
+            const title = await showPrompt('请输入笔记标题', '新笔记');
             if (!title) return;
             
             try {
@@ -630,7 +836,9 @@
                 await loadAllMemos();
                 openMemoInTab(data.memo_id);
             } catch (e) {
-                alert('创建失败: ' + e.message);
+                await showModal('创建失败', `<div class="modal-message">${e.message}</div>`, [
+                    { text: '确定', value: true, primary: true }
+                ]);
             }
         }
         
@@ -638,7 +846,7 @@
             const memo = memos.find(m => m.id === memoId);
             if (!memo) return;
             
-            const newTitle = prompt('请输入新标题:', memo.title);
+            const newTitle = await showPrompt('请输入新标题', memo.title);
             if (!newTitle || newTitle === memo.title) return;
             
             try {
@@ -656,20 +864,25 @@
                 renderMemoList();
                 renderTabs();
             } catch (e) {
-                alert('重命名失败: ' + e.message);
+                await showModal('重命名失败', `<div class="modal-message">${e.message}</div>`, [
+                    { text: '确定', value: true, primary: true }
+                ]);
             }
         }
         
         async function renameCurrentMemo() {
             if (activeTabId === null) {
-                alert('请先选择一个笔记');
+                await showModal('提示', '<div class="modal-message">请先选择一个笔记</div>', [
+                    { text: '确定', value: true, primary: true }
+                ]);
                 return;
             }
             await renameMemo(activeTabId);
         }
         
         async function deleteMemo(memoId) {
-            if (!confirm('确定删除这条笔记吗？此操作不可恢复！')) return;
+            const confirmed = await showConfirm('确定删除这条笔记吗？此操作不可恢复！');
+            if (!confirmed) return;
             
             try {
                 await fetch(`/api/memos/${memoId}`, { method: 'DELETE' });
@@ -684,13 +897,17 @@
                 memos = memos.filter(m => m.id !== memoId);
                 renderMemoList();
             } catch (e) {
-                alert('删除失败: ' + e.message);
+                await showModal('删除失败', `<div class="modal-message">${e.message}</div>`, [
+                    { text: '确定', value: true, primary: true }
+                ]);
             }
         }
         
         async function togglePin() {
             if (activeTabId === null) {
-                alert('请先选择一个笔记');
+                await showModal('提示', '<div class="modal-message">请先选择一个笔记</div>', [
+                    { text: '确定', value: true, primary: true }
+                ]);
                 return;
             }
             
@@ -703,7 +920,9 @@
                 
                 renderMemoList();
             } catch (e) {
-                alert('操作失败: ' + e.message);
+                await showModal('操作失败', `<div class="modal-message">${e.message}</div>`, [
+                    { text: '确定', value: true, primary: true }
+                ]);
             }
         }
         
@@ -721,7 +940,7 @@
         }
         
         async function searchMemos() {
-            const keyword = prompt('请输入搜索关键词:');
+            const keyword = await showPrompt('请输入搜索关键词');
             if (!keyword) return;
             
             try {
@@ -735,17 +954,22 @@
                     renderMemoList();
                     
                     // 提示用户
-                    setTimeout(() => {
-                        if (confirm('找到 ' + data.data.length + ' 条结果，是否恢复完整列表？')) {
+                    setTimeout(async () => {
+                        const shouldRestore = await showConfirm(`找到 ${data.data.length} 条结果，是否恢复完整列表？`);
+                        if (shouldRestore) {
                             memos = originalMemos;
                             renderMemoList();
                         }
                     }, 100);
                 } else {
-                    alert('未找到匹配的笔记');
+                    await showModal('搜索结果', '<div class="modal-message">未找到匹配的笔记</div>', [
+                        { text: '确定', value: true, primary: true }
+                    ]);
                 }
             } catch (e) {
-                alert('搜索失败: ' + e.message);
+                await showModal('搜索失败', `<div class="modal-message">${e.message}</div>`, [
+                    { text: '确定', value: true, primary: true }
+                ]);
             }
         }
         

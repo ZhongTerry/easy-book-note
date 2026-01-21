@@ -91,9 +91,24 @@ const createTray = () => {
     tray = new Tray(path.join(__dirname, '../static/icon-192.png'));
     const contextMenu = Menu.buildFromTemplate([
         { label: '打开阅读器', click: () => mainWindow.show() },
+        { label: '打开备忘录', click: () => {
+            if (!memoWindow || memoWindow.isDestroyed()) {
+                createMemoWindow();
+            } else {
+                memoWindow.show();
+                memoWindow.focus();
+            }
+        }},
         { type: 'separator' },
         { label: '彻底退出', click: () => {
             isQuiting = true;
+            app.isQuitting = true;
+            if (memoWindow && !memoWindow.isDestroyed()) {
+                memoWindow.destroy();
+            }
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.destroy();
+            }
             app.quit();
         }}
     ]);
@@ -130,9 +145,9 @@ function createMemoWindow() {
     }
 
     memoWindow = new BrowserWindow({
-        width: 400,
+        width: 1000,
         height: 600,
-        alwaysOnTop: true,  // 始终置顶
+        // alwaysOnTop: true,  // 始终置顶
         frame: false,       // 无边框（自定义标题栏）
         transparent: true,  // 背景透明（实现圆角）
         resizable: true,
@@ -144,11 +159,11 @@ function createMemoWindow() {
         }
     });
 
-    memoWindow.loadURL('http://127.0.0.1:54321/memo');  // 独立的备忘录页面
+    memoWindow.loadURL('https://book.ztrztr.top/memo');  // 独立的备忘录页面
     
     // 窗口关闭时隐藏而不是销毁（快速唤出）
     memoWindow.on('close', (e) => {
-        if (!app.isQuitting) {
+        if (!isQuiting && !app.isQuitting) {
             e.preventDefault();
             memoWindow.hide();
         }
