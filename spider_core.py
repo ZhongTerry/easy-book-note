@@ -309,6 +309,64 @@ class SearchHelper:
         # print(f"[Search Cache] Miss, fetching: {keyword}")
         return self.search_bing(keyword)
 
+    def search_concurrent(self, keyword, callback=None):
+        """[异步版] 并发搜索"""
+        print(f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+
+        # 定义搜索源 (函数, 名称, 权重)
+        search_sources = [
+            (self._do_direct_source_search, "直连源", 0),
+            (self._do_so_search, "360搜索", 1),
+            # (self._do_bing_search, "Bing国际", 2)
+        ]
+
+        all_results = []
+        seen_urls = set()
+        completed_count = 0
+        total_sources = len(search_sources)
+
+        if callback: callback(0, f"正在初始化 {total_sources} 个搜索引擎...")
+
+        with ThreadPoolExecutor(max_workers=total_sources) as exe:
+            future_to_source = {
+                exe.submit(func, keyword): (name, weight)
+                for func, name, weight in search_sources
+            }
+
+            for future in as_completed(future_to_source):
+                name, weight = future_to_source[future]
+                new_items = []
+                try:
+                    if callback: callback(None, f"正在搜索 {name}...")
+                    results = future.result()
+
+                    if results:
+                        for item in results:
+                            clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
+                            if clean_url not in seen_urls:
+                                seen_urls.add(clean_url)
+                                item['_weight'] = weight
+                                new_items.append(item)
+                                all_results.append(item)
+
+                    msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
+                except Exception as e:
+                    print(f"[Search Error] {name}: {e}")
+                    msg = f"{name} 搜索失败"
+
+                completed_count += 1
+                progress = int((completed_count / total_sources) * 90)
+
+                if callback:
+                    callback(progress, msg, new_items if new_items else None)
+
+        if callback: callback(95, "正在聚合排序...")
+
+        all_results.sort(key=lambda x: (x.get('_weight', 99), -len(x.get('description', ''))))
+
+        if callback: callback(100, f"聚合完成，共 {len(all_results)} 条结果")
+        return all_results
+
     def _search_single_site(self, site, keyword):
         """搜索单个站点"""
         results = []
@@ -1308,7 +1366,135 @@ class SearchHelperOld:
     #     # 优先级 3: 百度搜索 (Baidu)
     #     # 最后兜底，收录全但可能有广告或验证码
     #     return self._do_baidu_search(keyword)
-    @lru_cache(maxsize=100) 
+
+    def search_concurrent(self, keyword, callback=None):
+        """[异步版] 并发搜索"""
+        print(f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+        
+        # 定义搜索源 (函数, 名称, 权重)
+        search_sources = [
+            (self._do_direct_source_search, "直连源", 0),
+            (self._do_so_search, "360搜索", 1),
+            # (self._do_bing_search, "Bing国际", 2)
+        ]
+
+        all_results = []
+        seen_urls = set()
+        completed_count = 0
+        total_sources = len(search_sources)
+        
+        if callback: callback(0, f"正在初始化 {total_sources} 个搜索引擎...")
+
+        with ThreadPoolExecutor(max_workers=total_sources) as exe:
+            # 提交任务
+            future_to_source = {
+                exe.submit(func, keyword): (name, weight) 
+                for func, name, weight in search_sources
+            }
+            
+            for future in as_completed(future_to_source):
+                name, weight = future_to_source[future]
+                new_items = []
+                try:
+                    if callback: callback(None, f"正在搜索 {name}...")
+                    results = future.result()
+                    
+                    if results:
+                        for item in results:
+                            clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
+                            # 简单去重
+                            if clean_url not in seen_urls:
+                                seen_urls.add(clean_url)
+                                # 注入权重以便后续排序
+                                item['_weight'] = weight
+                                new_items.append(item)
+                                all_results.append(item)
+                    
+                    msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
+                except Exception as e:
+                    print(f"[Search Error] {name}: {e}")
+                    msg = f"{name} 搜索失败"
+
+                completed_count += 1
+                progress = int((completed_count / total_sources) * 90) # 留10%给排序
+                
+                # 回调更新：进度、日志、增量结果
+                if callback: 
+                    callback(progress, msg, new_items if new_items else None)
+
+        if callback: callback(95, "正在聚合排序...")
+        
+        # 排序：权重 > 完整度
+        all_results.sort(key=lambda x: (x.get('_weight', 99), -len(x.get('description', ''))))
+        
+        if callback: callback(100, f"聚合完成，共 {len(all_results)} 条结果")
+        return all_results
+
+
+    def search_concurrent(self, keyword, callback=None):
+        """[异步版] 并发搜索"""
+        print(f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+        
+        # 定义搜索源 (函数, 名称, 权重)
+        search_sources = [
+            (self._do_direct_source_search, "直连源", 0),
+            (self._do_so_search, "360搜索", 1),
+            # (self._do_bing_search, "Bing国际", 2)
+        ]
+
+        all_results = []
+        seen_urls = set()
+        completed_count = 0
+        total_sources = len(search_sources)
+        
+        if callback: callback(0, f"正在初始化 {total_sources} 个搜索引擎...")
+
+        with ThreadPoolExecutor(max_workers=total_sources) as exe:
+            # 提交任务
+            future_to_source = {
+                exe.submit(func, keyword): (name, weight) 
+                for func, name, weight in search_sources
+            }
+            
+            for future in as_completed(future_to_source):
+                name, weight = future_to_source[future]
+                new_items = []
+                try:
+                    if callback: callback(None, f"正在搜索 {name}...")
+                    results = future.result()
+                    
+                    if results:
+                        for item in results:
+                            clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
+                            # 简单去重
+                            if clean_url not in seen_urls:
+                                seen_urls.add(clean_url)
+                                # 注入权重以便后续排序
+                                item['_weight'] = weight
+                                new_items.append(item)
+                                all_results.append(item)
+                    
+                    msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
+                except Exception as e:
+                    print(f"[Search Error] {name}: {e}")
+                    msg = f"{name} 搜索失败"
+
+                completed_count += 1
+                progress = int((completed_count / total_sources) * 90) # 留10%给排序
+                
+                # 回调更新：进度、日志、增量结果
+                if callback: 
+                    callback(progress, msg, new_items if new_items else None)
+
+        if callback: callback(95, "正在聚合排序...")
+        
+        # 排序：权重 > 完整度
+        all_results.sort(key=lambda x: (x.get('_weight', 99), -len(x.get('description', ''))))
+        
+        if callback: callback(100, f"聚合完成，共 {len(all_results)} 条结果")
+        return all_results
+
+    @lru_cache(maxsize=100)
     def search_bing_cached(self, keyword):
         """带缓存的搜索入口，避免重复联网"""
         print(f"[Search Cache] Miss, fetching: {keyword}")

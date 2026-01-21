@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>备忘录</title>
+    <link rel="stylesheet" href="/purecss/pure2.1.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            overflow: hidden;
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        /* 自定义标题栏 */
+        .title-bar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            -webkit-app-region: drag;
+            flex-shrink: 0;
+        }
+        
+        .title-bar button {
+            -webkit-app-region: no-drag;
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 12px;
+        }
+        
+        .title-bar button:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        /* 主容器 */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        /* 左侧抽屉 */
+        .drawer {
+            width: 250px;
+            background: #f9fafb;
+            border-right: 1px solid #e5e7eb;
+            display: flex;
+            flex-direction: column;
+            transition: margin-left 0.3s;
+        }
+        
+        .drawer.collapsed {
+            margin-left: -250px;
+        }
+        
+        .drawer-header {
+            padding: 12px 15px;
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .drawer-header h3 {
+            font-size: 14px;
+            color: #374151;
+            margin: 0;
+        }
+        
+        .sort-buttons {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .sort-buttons button {
+            background: transparent;
+            border: 1px solid #d1d5db;
+            padding: 2px 6px;
+            font-size: 11px;
+            border-radius: 3px;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        
+        .sort-buttons button.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .memo-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 5px;
+        }
+        
+        .memo-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid #e5e7eb;
+        }
+        
+        .memo-item:hover {
+            background: #f3f4f6;
+            border-color: #667eea;
+        }
+        
+        .memo-item.active {
+            background: #eef2ff;
+            border-color: #667eea;
+        }
+        
+        .memo-item-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: #111827;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .memo-item-time {
+            font-size: 11px;
+            color: #9ca3af;
+        }
+        
+        .memo-item-actions {
+            display: none;
+            margin-top: 8px;
+            gap: 5px;
+        }
+        
+        .memo-item:hover .memo-item-actions {
+            display: flex;
+        }
+        
+        .memo-item-actions button {
+            flex: 1;
+            padding: 4px;
+            font-size: 11px;
+            border: 1px solid #d1d5db;
+            background: white;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .memo-item-actions button:hover {
+            background: #f3f4f6;
+        }
+        
+        .memo-item-actions .delete-btn {
+            color: #dc2626;
+            border-color: #fecaca;
+        }
+        
+        .memo-item-actions .delete-btn:hover {
+            background: #fee2e2;
+        }
+        
+        /* 右侧内容区 */
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* 标签页区域容器 */
+        .tabs-container {
+            display: flex;
+            align-items: center;
+            background: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+            flex-shrink: 0;
+        }
+        
+        /* 抽屉切换按钮 */
+        .drawer-toggle {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            border-right: 1px solid #ddd;
+            flex-shrink: 0;
+        }
+        
+        .drawer-toggle:hover {
+            background: #5568d3;
+        }
+        
+        /* 标签页 */
+        .tabs {
+            display: flex;
+            flex: 1;
+            overflow-x: auto;
+        }
+        
+        .tab {
+            padding: 8px 15px;
+            cursor: pointer;
+            border-right: 1px solid #ddd;
+            white-space: nowrap;
+            transition: background 0.2s;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        .tab:hover { background: #e8e8e8; }
+        .tab.active { background: white; font-weight: bold; }
+        
+        .tab .close-btn {
+            color: #999;
+            font-weight: normal;
+            cursor: pointer;
+        }
+        
+        .tab .close-btn:hover {
+            color: #dc2626;
+        }
+        
+        /* 编辑器区域 */
+        .editor-container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        .editor {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            line-height: 1.6;
+            resize: none;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+        
+        .preview {
+            flex: 1;
+            padding: 15px;
+            border-left: 1px solid #ddd;
+            overflow-y: auto;
+            background: #fafafa;
+            display: none;
+        }
+        
+        .preview.show { display: block; }
+        .editor.half { flex: 0.5; }
+        
+        /* 底部工具栏 */
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 15px;
+            background: #f5f5f5;
+            border-top: 1px solid #ddd;
+            font-size: 12px;
+            color: #666;
+            flex-shrink: 0;
+        }
+        
+        .toolbar button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            margin-left: 5px;
+        }
+        
+        .toolbar button:hover {
+            background: #5568d3;
+        }
+        
+        .toolbar-actions {
+            display: flex;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 自定义标题栏 -->
+    <div class="title-bar">
+        <div>📝 备忘录</div>
+        <div>
+            <button onclick="togglePreview()">预览</button>
+            <button onclick="newMemoFromTitle()">＋ 新建</button>
+            <button onclick="window.close()">✕</button>
+        </div>
+    </div>
+    
+    <!-- 主容器 -->
+    <div class="main-container">
+        <!-- 左侧抽屉 -->
+        <div class="drawer" id="drawer">
+            <div class="drawer-header">
+                <h3>📋 所有笔记 (<span id="memoCount">0</span>)</h3>
+                <div class="sort-buttons">
+                    <button id="sortTime" class="active" onclick="sortMemos('time')">时间</button>
+                    <button id="sortName" onclick="sortMemos('name')">名称</button>
+                </div>
+            </div>
+            <div class="memo-list" id="memoList"></div>
+        </div>
+        
+        <!-- 右侧内容区 -->
+        <div class="content-area">
+            <!-- 标签页区域 -->
+            <div class="tabs-container">
+                <button class="drawer-toggle" onclick="toggleDrawer()">☰</button>
+                <div class="tabs" id="tabs"></div>
+            </div>
+            
+            <!-- 编辑器 -->
+            <div class="editor-container">
+                <textarea class="editor" id="editor" placeholder="从左侧打开笔记，或点击顶部「＋新建」..."></textarea>
+                <div class="preview" id="preview"></div>
+            </div>
+            
+            <!-- 底部工具栏 -->
+            <div class="toolbar">
+                <span id="status">就绪</span>
+                <div class="toolbar-actions">
+                    <button onclick="searchMemos()">🔍 搜索</button>
+                    <button onclick="togglePin()">📌 置顶</button>
+                    <button onclick="renameCurrentMemo()">✏️ 重命名</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        // ==================== 全局状态 ====================
+        let memos = [];              // 所有笔记列表
+        let openTabs = [];           // 当前打开的标签页 [{id, title, unsavedContent}]
+        let activeTabId = null;      // 当前激活的标签页ID
+        let saveTimer = null;        // 自动保存定时器
+        let currentSortMode = 'time'; // 排序模式
+        
+        // ==================== 初始化 ====================
+        async function init() {
+            await loadAllMemos();
+            restoreSession();  // 恢复上次会话
+            
+            // 监听编辑器输入
+            document.getElementById('editor').addEventListener('input', () => {
+                markTabAsUnsaved();
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(autoSave, 300);  // 300ms 防抖
+            });
+            
+            // 监听窗口关闭，保存会话
+            window.addEventListener('beforeunload', saveSession);
+        }
+        
+        // ==================== 数据加载 ====================
+        async function loadAllMemos() {
+            try {
+                const res = await fetch('/api/memos');
+                const data = await res.json();
+                memos = data.data || [];
+                renderMemoList();
+            } catch (e) {
+                console.error('加载笔记失败:', e);
+            }
+        }
+        
+        // ==================== 左侧列表渲染 ====================
+        function renderMemoList() {
+            const container = document.getElementById('memoList');
+            document.getElementById('memoCount').innerText = memos.length;
+            
+            // 排序
+            const sorted = [...memos].sort((a, b) => {
+                if (currentSortMode === 'time') {
+                    return new Date(b.updated_at) - new Date(a.updated_at);
+                } else {
+                    return a.title.localeCompare(b.title);
+                }
+            });
+            
+            container.innerHTML = sorted.map(m => `
+                <div class="memo-item ${activeTabId === m.id ? 'active' : ''}" 
+                     onclick="openMemoInTab(${m.id})">
+                    <div class="memo-item-title">
+                        ${m.is_pinned ? '📌' : '📄'} ${escapeHtml(m.title)}
+                    </div>
+                    <div class="memo-item-time">${formatTime(m.updated_at)}</div>
+                    <div class="memo-item-actions">
+                        <button onclick="event.stopPropagation(); renameMemo(${m.id})">重命名</button>
+                        <button class="delete-btn" onclick="event.stopPropagation(); deleteMemo(${m.id})">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        // ==================== 标签页管理 ====================
+        function openMemoInTab(memoId) {
+            // 如果已打开，切换到该标签
+            const existingTab = openTabs.find(t => t.id === memoId);
+            if (existingTab) {
+                switchToTab(memoId);
+                return;
+            }
+            
+            // 否则新建标签页
+            const memo = memos.find(m => m.id === memoId);
+            if (!memo) return;
+            
+            openTabs.push({
+                id: memo.id,
+                title: memo.title,
+                unsavedContent: null  // null表示没有未保存的内容
+            });
+            
+            renderTabs();
+            switchToTab(memoId);
+        }
+        
+        function switchToTab(memoId) {
+            // 保存当前标签的未保存内容
+            if (activeTabId !== null) {
+                const currentTab = openTabs.find(t => t.id === activeTabId);
+                if (currentTab) {
+                    currentTab.unsavedContent = document.getElementById('editor').value;
+                }
+            }
+            
+            activeTabId = memoId;
+            const tab = openTabs.find(t => t.id === memoId);
+            const memo = memos.find(m => m.id === memoId);
+            
+            if (tab && memo) {
+                // 优先显示未保存的内容，否则显示数据库内容
+                const content = tab.unsavedContent !== null ? tab.unsavedContent : (memo.content || '');
+                document.getElementById('editor').value = content;
+                updatePreview();
+            }
+            
+            renderTabs();
+            renderMemoList();
+            saveSession();  // 每次切换标签都保存会话
+        }
+        
+        function closeTab(memoId, event) {
+            if (event) event.stopPropagation();
+            
+            const tabIndex = openTabs.findIndex(t => t.id === memoId);
+            if (tabIndex === -1) return;
+            
+            // 如果关闭的是当前激活标签，切换到其他标签
+            if (activeTabId === memoId) {
+                if (openTabs.length > 1) {
+                    // 切换到前一个或后一个标签
+                    const nextIndex = tabIndex > 0 ? tabIndex - 1 : tabIndex + 1;
+                    const nextTab = openTabs[nextIndex];
+                    openTabs.splice(tabIndex, 1);
+                    switchToTab(nextTab.id);
+                } else {
+                    // 最后一个标签，清空编辑器
+                    openTabs = [];
+                    activeTabId = null;
+                    document.getElementById('editor').value = '';
+                    renderTabs();
+                }
+            } else {
+                openTabs.splice(tabIndex, 1);
+                renderTabs();
+            }
+            
+            saveSession();
+        }
+        
+        function renderTabs() {
+            const container = document.getElementById('tabs');
+            container.innerHTML = openTabs.map(tab => `
+                <div class="tab ${tab.id === activeTabId ? 'active' : ''}" 
+                     onclick="switchToTab(${tab.id})">
+                    <span>${escapeHtml(tab.title)}${tab.unsavedContent !== null ? '*' : ''}</span>
+                    <span class="close-btn" onclick="closeTab(${tab.id}, event)">×</span>
+                </div>
+            `).join('');
+        }
+        
+        function markTabAsUnsaved() {
+            const tab = openTabs.find(t => t.id === activeTabId);
+            const memo = memos.find(m => m.id === activeTabId);
+            if (tab && memo) {
+                const currentContent = document.getElementById('editor').value;
+                // 只有当内容与数据库不同时才标记为未保存
+                if (currentContent !== (memo.content || '')) {
+                    tab.unsavedContent = currentContent;
+                } else {
+                    tab.unsavedContent = null;
+                }
+                renderTabs();
+            }
+        }
+        
+        // ==================== 会话恢复 ====================
+        function saveSession() {
+            // 保存当前打开的标签页及其未保存内容
+            if (activeTabId !== null) {
+                const currentTab = openTabs.find(t => t.id === activeTabId);
+                if (currentTab) {
+                    currentTab.unsavedContent = document.getElementById('editor').value;
+                }
+            }
+            
+            localStorage.setItem('memoSession', JSON.stringify({
+                openTabs: openTabs,
+                activeTabId: activeTabId
+            }));
+        }
+        
+        function restoreSession() {
+            const session = localStorage.getItem('memoSession');
+            if (!session) return;
+            
+            try {
+                const data = JSON.parse(session);
+                openTabs = data.openTabs || [];
+                activeTabId = data.activeTabId;
+                
+                // 重新渲染标签页
+                renderTabs();
+                
+                // 恢复当前激活标签的内容
+                if (activeTabId !== null) {
+                    const tab = openTabs.find(t => t.id === activeTabId);
+                    const memo = memos.find(m => m.id === activeTabId);
+                    
+                    if (tab && memo) {
+                        const content = tab.unsavedContent !== null ? tab.unsavedContent : (memo.content || '');
+                        document.getElementById('editor').value = content;
+                        updatePreview();
+                    }
+                }
+            } catch (e) {
+                console.error('恢复会话失败:', e);
+            }
+        }
+        
+        // ==================== 自动保存 ====================
+        async function autoSave() {
+            if (activeTabId === null) return;
+            
+            const content = document.getElementById('editor').value;
+            const tab = openTabs.find(t => t.id === activeTabId);
+            const memo = memos.find(m => m.id === activeTabId);
+            
+            if (!tab || !memo) return;
+            
+            // 如果内容没有变化，不需要保存
+            if (content === (memo.content || '')) {
+                tab.unsavedContent = null;
+                renderTabs();
+                return;
+            }
+            
+            try {
+                document.getElementById('status').innerText = '保存中...';
+                
+                await fetch('/api/memos/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        id: activeTabId,
+                        content: content
+                    })
+                });
+                
+                // 保存成功后清除未保存标记
+                tab.unsavedContent = null;
+                memo.content = content;  // 更新本地缓存
+                renderTabs();
+                
+                document.getElementById('status').innerText = `✓ 已保存 ${new Date().toLocaleTimeString()}`;
+                setTimeout(() => {
+                    document.getElementById('status').innerText = '就绪';
+                }, 1500);
+            } catch (e) {
+                console.error('保存失败:', e);
+                document.getElementById('status').innerText = '✗ 保存失败';
+            }
+        }
+        
+        // ==================== 笔记操作 ====================
+        async function newMemoFromTitle() {
+            const title = prompt('请输入笔记标题:', '新笔记');
+            if (!title) return;
+            
+            try {
+                const res = await fetch('/api/memos/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ title: title, content: '' })
+                });
+                const data = await res.json();
+                
+                await loadAllMemos();
+                openMemoInTab(data.memo_id);
+            } catch (e) {
+                alert('创建失败: ' + e.message);
+            }
+        }
+        
+        async function renameMemo(memoId) {
+            const memo = memos.find(m => m.id === memoId);
+            if (!memo) return;
+            
+            const newTitle = prompt('请输入新标题:', memo.title);
+            if (!newTitle || newTitle === memo.title) return;
+            
+            try {
+                await fetch('/api/memos/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ id: memoId, title: newTitle })
+                });
+                
+                // 更新本地数据
+                memo.title = newTitle;
+                const tab = openTabs.find(t => t.id === memoId);
+                if (tab) tab.title = newTitle;
+                
+                renderMemoList();
+                renderTabs();
+            } catch (e) {
+                alert('重命名失败: ' + e.message);
+            }
+        }
+        
+        async function renameCurrentMemo() {
+            if (activeTabId === null) {
+                alert('请先选择一个笔记');
+                return;
+            }
+            await renameMemo(activeTabId);
+        }
+        
+        async function deleteMemo(memoId) {
+            if (!confirm('确定删除这条笔记吗？此操作不可恢复！')) return;
+            
+            try {
+                await fetch(`/api/memos/${memoId}`, { method: 'DELETE' });
+                
+                // 如果删除的笔记正在打开，关闭它
+                const tabIndex = openTabs.findIndex(t => t.id === memoId);
+                if (tabIndex !== -1) {
+                    closeTab(memoId);
+                }
+                
+                // 从列表中移除
+                memos = memos.filter(m => m.id !== memoId);
+                renderMemoList();
+            } catch (e) {
+                alert('删除失败: ' + e.message);
+            }
+        }
+        
+        async function togglePin() {
+            if (activeTabId === null) {
+                alert('请先选择一个笔记');
+                return;
+            }
+            
+            try {
+                await fetch(`/api/memos/${activeTabId}/pin`, { method: 'POST' });
+                
+                // 更新本地数据
+                const memo = memos.find(m => m.id === activeTabId);
+                if (memo) memo.is_pinned = !memo.is_pinned;
+                
+                renderMemoList();
+            } catch (e) {
+                alert('操作失败: ' + e.message);
+            }
+        }
+        
+        // ==================== UI 辅助函数 ====================
+        function toggleDrawer() {
+            const drawer = document.getElementById('drawer');
+            drawer.classList.toggle('collapsed');
+        }
+        
+        function sortMemos(mode) {
+            currentSortMode = mode;
+            document.getElementById('sortTime').classList.toggle('active', mode === 'time');
+            document.getElementById('sortName').classList.toggle('active', mode === 'name');
+            renderMemoList();
+        }
+        
+        async function searchMemos() {
+            const keyword = prompt('请输入搜索关键词:');
+            if (!keyword) return;
+            
+            try {
+                const res = await fetch(`/api/memos/search?q=${encodeURIComponent(keyword)}`);
+                const data = await res.json();
+                
+                if (data.data && data.data.length > 0) {
+                    // 临时显示搜索结果
+                    const originalMemos = memos;
+                    memos = data.data;
+                    renderMemoList();
+                    
+                    // 提示用户
+                    setTimeout(() => {
+                        if (confirm('找到 ' + data.data.length + ' 条结果，是否恢复完整列表？')) {
+                            memos = originalMemos;
+                            renderMemoList();
+                        }
+                    }, 100);
+                } else {
+                    alert('未找到匹配的笔记');
+                }
+            } catch (e) {
+                alert('搜索失败: ' + e.message);
+            }
+        }
+        
+        function togglePreview() {
+            const preview = document.getElementById('preview');
+            const editor = document.getElementById('editor');
+            
+            if (preview.classList.contains('show')) {
+                preview.classList.remove('show');
+                editor.classList.remove('half');
+            } else {
+                preview.classList.add('show');
+                editor.classList.add('half');
+                updatePreview();
+            }
+        }
+        
+        function updatePreview() {
+            const content = document.getElementById('editor').value;
+            try {
+                document.getElementById('preview').innerHTML = marked.parse(content);
+            } catch (e) {
+                document.getElementById('preview').innerHTML = '<p style="color: red;">Markdown 解析失败</p>';
+            }
+        }
+        
+        // ==================== 工具函数 ====================
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function formatTime(timestamp) {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            
+            if (diff < 60000) return '刚刚';
+            if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+            if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+            if (diff < 604800000) return Math.floor(diff / 86400000) + ' 天前';
+            
+            return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+        }
+        
+        // ==================== 启动 ====================
+        init();
+    </script>
+</body>
+</html>

@@ -448,7 +448,7 @@
             statsBar.style.display = 'none';
             
             try {
-                PureUI.loading.show('🌐 聚合搜索中...');
+                PureUI.loading.show('🔍 聚合搜索中...');
                 const res = await fetch(`${API_URL}/api/search_novel`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -456,23 +456,12 @@
                 });
                 const json = await res.json();
                 
-                if (json.data && json.data.length > 0) {
-                    currentResults = json.data;
-                    renderResults(currentResults);
-                    statsBar.style.display = 'flex';
-                    document.getElementById('resultCount').innerText = currentResults.length;
+                if (json.status === 'pending') {
+                    await pollSearchTask(json.task_id);
+                } else if (json.data) {
+                    handleSearchResults(json.data);
                 } else {
-                    container.innerHTML = `
-                        <div class="empty-state">
-                            <p style="font-size:16px; color:#6b7280; margin-bottom:10px;">😢 未找到相关结果</p>
-                            <p style="font-size:13px; color:#9ca3af;">尝试：</p>
-                            <ul style="text-align:left; display:inline-block; color:#9ca3af; font-size:13px; margin-top:8px;">
-                                <li>简化关键词（如："凡人修仙传" → "凡人"）</li>
-                                <li>搜索作者名</li>
-                                <li>检查拼写是否正确</li>
-                            </ul>
-                        </div>
-                    `;
+                    handleSearchResults([]);
                 }
             } catch(e) {
                 container.innerHTML = `
@@ -595,6 +584,87 @@
                     }
                 }, 300);
             }
+        }
+
+        async function pollSearchTask(taskId) {
+            let attempts = 0;
+            const maxAttempts = 60; 
+            
+            const poll = async () => {
+                if (attempts >= maxAttempts) {
+                    PureUI.loading.close();
+                    document.getElementById('resultsContainer').innerHTML = '<div class="empty-state"><p>搜索超时</p></div>';
+                    return;
+                }
+                
+                try {
+                    const res = await fetch(`${API_URL}/api/task_status/${taskId}`);
+                    const t = await res.json();
+                    
+                    if (t.status === 'completed') {
+                        PureUI.loading.hide();
+                        try {
+                            handleSearchResults(t.result); // Should be full result by now
+                        } catch (err) {
+                            console.error("Render error:", err);
+                             document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>渲染结果出错: ${err.message}</p></div>`;
+                        }
+                        return;
+                    } else if (t.status === 'failed') {
+                        PureUI.loading.hide();
+                        document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>搜索出错: ${t.error}</p></div>`;
+                        return;
+                    } else if (t.status === 'not_found') {
+                        PureUI.loading.hide();
+                         document.getElementById('resultsContainer').innerHTML = '<div class="empty-state"><p>任务已失效，请重试</p></div>';
+                        return;
+                    } else {
+                        // [New] Update Progress UI
+                        if (t.message) PureUI.loading.show(t.message);
+                        // [New] Render intermediate results if available
+                        if (t.result && t.result.length > 0) {
+                            handleSearchResults(t.result);
+                        }
+                        
+                        attempts++;
+                        setTimeout(poll, 1000);
+                    }
+                } catch(e) {
+                    // [Debug] Log exact error that causes retry
+                    console.error("Poll error (will retry):", e);
+                    attempts++;
+                    setTimeout(poll, 1000);
+                }
+            };
+            poll();
+        }
+
+        function handleSearchResults(data) {
+             console.log("Handling Search Results:", data);
+             if (!data) data = []; // Safety check
+             
+             const container = document.getElementById('resultsContainer');
+             const statsBar = document.getElementById('statsBar');
+             
+             if (data && data.length > 0) {
+                 currentResults = data;
+                 renderResults(currentResults);
+                 statsBar.style.display = 'flex';
+                 document.getElementById('resultCount').innerText = currentResults.length;
+             } else {
+                 statsBar.style.display = 'none'; // Hide stats if no results
+                 container.innerHTML = `
+                        <div class="empty-state">
+                            <p style="font-size:16px; color:#6b7280; margin-bottom:10px;">😢 未找到相关结果</p>
+                            <p style="font-size:13px; color:#9ca3af;">尝试：</p>
+                            <ul style="text-align:left; display:inline-block; color:#9ca3af; font-size:13px; margin-top:8px;">
+                                <li>简化关键词（如："凡人修仙传" → "凡人"）</li>
+                                <li>搜索作者名</li>
+                                <li>检查拼写是否正确</li>
+                            </ul>
+                        </div>
+                 `;
+             }
         }
     </script>
     

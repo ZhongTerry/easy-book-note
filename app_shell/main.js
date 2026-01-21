@@ -5,6 +5,7 @@ const fs = require('fs');
 let mainWindow = null;
 let tray = null;
 let isQuiting = false;
+let memoWindow = null;
 
 // --- [核心修改] 快捷键持久化配置 ---
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
@@ -120,10 +121,64 @@ ipcMain.on('update-shortcuts', (event, newSettings) => {
     console.log("快捷键已更新:", userSettings);
 });
 
+// 创建备忘录窗口
+function createMemoWindow() {
+    if (memoWindow && !memoWindow.isDestroyed()) {
+        memoWindow.show();
+        memoWindow.focus();
+        return;
+    }
+
+    memoWindow = new BrowserWindow({
+        width: 400,
+        height: 600,
+        alwaysOnTop: true,  // 始终置顶
+        frame: false,       // 无边框（自定义标题栏）
+        transparent: true,  // 背景透明（实现圆角）
+        resizable: true,
+        minimizable: true,
+        maximizable: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true
+        }
+    });
+
+    memoWindow.loadURL('http://127.0.0.1:54321/memo');  // 独立的备忘录页面
+    
+    // 窗口关闭时隐藏而不是销毁（快速唤出）
+    memoWindow.on('close', (e) => {
+        if (!app.isQuitting) {
+            e.preventDefault();
+            memoWindow.hide();
+        }
+    });
+}
+
+// 注册全局快捷键
+function registerMemoShortcut() {
+    const shortcut = userSettings.memoKey || 'Ctrl+Alt+N';
+    try {
+        globalShortcut.register(shortcut, () => {
+            if (!memoWindow || memoWindow.isDestroyed()) {
+                createMemoWindow();
+            } else if (memoWindow.isVisible()) {
+                memoWindow.hide();
+            } else {
+                memoWindow.show();
+                memoWindow.focus();
+            }
+        });
+    } catch (e) {
+        console.error("备忘录快捷键注册失败:", e);
+    }
+}
+
 app.whenReady().then(() => {
     createWindow();
     createTray();
     registerGlobalShortcuts();
+    registerMemoShortcut();  // 新增
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

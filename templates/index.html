@@ -1161,25 +1161,64 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         let allBooklists = {};
         let redDotsSet = new Set(); // [新增] 全局红点集合
         let pendingBook = { key: '', title: '' };
-        function openMoreMenu(key, value, title, isEpub, isLink) {
+    
+    // 🔥 重命名书签Key
+    async function renameKey(oldKey) {
+        // 关闭菜单
+        PureUI.modal.close('moreMenuModal');
+        
+        // 延迟执行 prompt，防止阻塞 UI 渲染导致 Modal 关不掉
+        setTimeout(async () => {
+             const newKey = prompt(`请输入 [${oldKey}] 的新名字 (修改Key):`, oldKey);
+             if (!newKey || newKey === oldKey) return;
+             
+             try {
+                 const res = await fetch('/api/rename_key', {
+                     method: 'POST',
+                     headers: {'Content-Type': 'application/json'},
+                     body: JSON.stringify({ old_key: oldKey, new_key: newKey })
+                 });
+                 const data = await res.json();
+                 if (data.status === 'success') {
+                     PureUI.notification.show('重命名成功', 'success');
+                     setTimeout(() => location.reload(), 500);
+                 } else {
+                     PureUI.notification.show(data.message || '重命名失败', 'error');
+                 }
+             } catch (e) {
+                 console.error(e);
+                 PureUI.notification.show('请求不可达', 'error');
+             }
+        }, 100);
+    }
+
+    function openMoreMenu(key, value, title, isEpub, isLink) {
     document.getElementById('moreMenuTitle').innerText = title;
     const container = document.getElementById('moreMenuItems');
     
+    // [修复] 转义单引号，防止 JS 语法错误导致点击无反应
+    const safeKey = key.replace(/'/g, "\\'");
+    const safeTitle = title.replace(/'/g, "\\'");
+    const safeVal = value.replace(/'/g, "\\'");
+
     let html = '';
     const closeCmd = "PureUI.modal.close('moreMenuModal');";
+    
+    // [修复] 使用 setTimeout 确保 Modal 完整关闭后再执行 UI 阻塞操作 (如 prompt)
+    const asyncAct = (script) => `${closeCmd} setTimeout(function(){ ${script} }, 100);`
 
     // 生成菜单项 (图标 + 文字)
     const items = [
-    { icon: '🔖', text: '加入书单', click: `${closeCmd} openAddToListModal('${key}', '${title}')` },
-        { icon: '🏷️', text: '编辑标签', click: `${closeCmd} openTagModal('${key}')` },
-        { icon: '✏️', text: '重命名', click: `${closeCmd} renameKey('${key}')` },
-        { icon: '🕒', text: '历史回退', click: `${closeCmd} openVersionModal('${key}')` },
-        // { icon: '📥', text: '离线下载', click: `${closeCmd} downloadBook('${key}', '${value}', '${title}')` },
-        { icon: '📦', text: '导出全书', click: `${closeCmd} showExportModal('${key}', '${encodeURIComponent(value)}')` }
+        { icon: '🔖', text: '加入书单', click: asyncAct(`openAddToListModal('${safeKey}', '${safeTitle}')`) },
+        { icon: '🏷️', text: '编辑标签', click: asyncAct(`openTagModal('${safeKey}')`) },
+        { icon: '✏️', text: '重命名', click: asyncAct(`renameKey('${safeKey}')`) },
+        { icon: '🕒', text: '历史回退', click: asyncAct(`openVersionModal('${safeKey}')`) },
+        // { icon: '📥', text: '离线下载', click: `${closeCmd} downloadBook('${safeKey}', '${safeVal}', '${safeTitle}')` },
+        { icon: '📦', text: '导出全书', click: asyncAct(`showExportModal('${safeKey}', '${encodeURIComponent(value)}')`) }
     ];
 
     if (isLink) {
-        items.push({ icon: '🔗', text: '复制源链接', click: `${closeCmd} PureUI.copy('${value}')` });
+        items.push({ icon: '🔗', text: '复制源链接', click: `${closeCmd} PureUI.copy('${safeVal}')` });
     }
 
     // 渲染普通项
@@ -1191,7 +1230,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 
     // 渲染删除项 (红色)
     html += `
-        <div class="action-item danger" onclick="document.getElementById('key').value='${key}'; ${closeCmd} confirmDelete()">
+        <div class="action-item danger" onclick="${asyncAct(`document.getElementById('key').value='${safeKey}'; confirmDelete()`)}">
             <span style="width:24px; display:inline-block;">🗑️</span> 删除书籍
         </div>`;
 
@@ -1572,7 +1611,7 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
                 return showMsg('请输入 Key', 'error');
             }
 
-            if (action === 'list' || action === 'find') {
+            if (action === 'list' || action === 'update') {
                 homeMode = 'books';
             }
 
@@ -1884,7 +1923,7 @@ async function showActionSheet(key, url) {
                     showMsg('✅ 已是最新章节', 'success');
                 }
             } else {
-                showMsg(json.msg || '检查失败', 'error');
+                showMsg(json.msg || '更新失败', 'error');
             }
         } catch(e) {
             showMsg('网络错误', 'error');
@@ -2572,16 +2611,19 @@ function renderUpdates() {
     });
 }
 
-// 3. 手动检查更新函数
-// index.html -> script -> checkUpdate
-
+// 3. 手动检查更新函数 (异步轮询版)
 async function checkUpdate(key, url) {
     const btn = document.getElementById(`upd-${key}`);
     if (!btn) return;
     
-    const originalHtml = btn.innerHTML;
-    // 视觉反馈：变为沙漏
-    btn.innerHTML = "⏳"; 
+    // 保存原始HTML以便恢复
+    if (!btn.hasAttribute('data-original-html')) {
+        btn.setAttribute('data-original-html', btn.innerHTML);
+    }
+    const originalHtml = btn.getAttribute('data-original-html');
+    
+    // 视觉反馈
+    btn.innerHTML = `<span style="display:inline-block;animation:spin 1s linear infinite">⏳</span>`; 
     btn.disabled = true;
 
     try {
@@ -2592,36 +2634,88 @@ async function checkUpdate(key, url) {
         });
         const json = await res.json();
         
-        if (json.status === 'success') {
-            const d = json.data;
-            
-            // 1. 更新全局缓存
-            updatesCache[key] = d;
-
-            // 2. 提示用户
-            let tip = `更新完成：${d.status_text}`;
-            if (d.unread_count > 0) tip += ` (+${d.unread_count})`;
-            showMsg(tip, "success");
-
-            // 3. [核心] 重绘列表，让封面红点立刻出现/消失
-            await doAction('find'); // 这会触发 renderTable，进而读取最新的 updatesCache 渲染红点
-            
-            // 4. 单独刷新按钮状态 (防止 doAction 重绘后按钮状态丢失)
-            setTimeout(() => renderUpdates(), 50);
-
+        if (json.status === 'pending') {
+            await pollUpdateTask(json.task_id, key, originalHtml);
         } else {
-            showMsg("更新失败: " + (json.msg || "未知错误"), "error");
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
+            handleUpdateSuccess(json, key, originalHtml);
         }
-    } catch(e) {
+    } catch (e) {
         console.error(e);
-        showMsg("网络请求错误", "error");
-        // 如果页面没刷新，还原按钮
-        if(document.body.contains(btn)) {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+        showMsg("请求失败", "error");
+    }
+}
+
+async function pollUpdateTask(taskId, key, originalHtml) {
+    const btn = document.getElementById(`upd-${key}`);
+    let attempts = 0;
+    const maxAttempts = 60; // 60秒超时
+
+    const poll = async () => {
+        if (attempts >= maxAttempts) {
+             showMsg("更新请求超时", "error");
+             if(btn) { btn.innerHTML = originalHtml; btn.disabled = false; }
+             return;
         }
+
+        try {
+            const res = await fetch(`/api/task_status/${taskId}`);
+            const t = await res.json();
+            
+            if (t.status === 'completed') {
+                try {
+                    handleUpdateSuccess(t.result, key, originalHtml);
+                } catch (err) {
+                    console.error("Render update error:", err);
+                    showMsg("结果渲染出错", "error");
+                    if(btn) { btn.innerHTML = originalHtml; btn.disabled = false; }
+                }
+                return;
+            } else if (t.status === 'failed') {
+                showMsg("更新失败: " + t.error, "error");
+                if(btn) { btn.innerHTML = originalHtml; btn.disabled = false; }
+                return;
+            } else if (t.status === 'not_found') {
+                showMsg("任务已丢失", "error");
+                if(btn) { btn.innerHTML = originalHtml; btn.disabled = false; }
+                return;
+            } else {
+                attempts++;
+                setTimeout(poll, 1000);
+            }
+        } catch(e) {
+            console.error(e);
+            attempts++;
+            setTimeout(poll, 1000);
+        }
+    };
+    poll();
+}
+
+async function handleUpdateSuccess(d_raw, key, originalHtml) {
+    const btn = document.getElementById(`upd-${key}`);
+    // d_raw 是 worker 返回的 {status, data, msg}
+    
+    if (d_raw.status === 'success') {
+        const d = d_raw.data;
+        
+        // 1. 更新全局缓存
+        updatesCache[key] = d;
+
+        // 2. 提示用户
+        let tip = `更新完成：${d.status_text}`;
+        if (d.unread_count > 0) tip += ` (+${d.unread_count})`;
+        showMsg(tip, "success");
+
+        // 3. [核心] 重绘列表
+        await doAction('find'); 
+        
+        // 4. 单独刷新按钮状态
+        setTimeout(() => renderUpdates(), 50);
+    } else {
+        showMsg("未检测到更新: " + (d_raw.msg || "暂无"), "info");
+        if(btn) { btn.innerHTML = originalHtml; btn.disabled = false; }
     }
 }
 // 记得在 renderTable 的最后调用一次 renderUpdates()，防止翻页/搜索后红点消失
@@ -3304,10 +3398,12 @@ async function checkUpdate(key, url) {
                     }
                     
                     PureUI.modal.open('exportHistoryModal');
+                } else {
+                    PureUI.toast('error', json.msg || '获取导出历史失败');
                 }
             } catch (e) {
                 console.error('获取导出历史失败:', e);
-                PureUI.toast.error('获取导出历史失败');
+                PureUI.toast('error', '获取导出历史失败：' + e.message);
             }
         }
         
@@ -3345,7 +3441,7 @@ async function checkUpdate(key, url) {
                                     
                                     <div style="display:flex; gap:8px; margin-top:12px;">
                                         <button onclick="downloadLocalFile('${file.filename}')" 
-                                            style="flex:1; padding:8px; border:none; background:#10b981; color:#fff; border-radius:6px; cursor:pointer; font-size:13px; font-weight:500;">
+                                            style="flex:1; padding:8px; border:1px solid #4f46e5; background:#fff; color:#4f46e5; border-radius:6px; cursor:pointer; font-size:13px;">
                                              下载到本地
                                         </button>
                                         <button onclick="deleteLocalFile('${file.filename}')" 

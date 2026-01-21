@@ -3,6 +3,7 @@ import json
 import sqlite3
 import hashlib
 import time
+import uuid
 import re
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1249,6 +1250,81 @@ class ClusterManager:
 
         return best_node
 
+
+class TaskManager:
+    def __init__(self):
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.tasks = {} # task_id -> {status, result, error, created_at, message}
+
+    def submit(self, func, *args, **kwargs):
+        task_id = str(uuid.uuid4())
+        self.tasks[task_id] = {
+            "status": "pending",
+            "progress": 0,
+            "result": None,
+            "error": None,
+            "message": "Waiting...",
+            "created_at": time.time()
+        }
+        # 将 update_callback 注入到 kwargs 中，供 func 调用
+        kwargs['_task_update_cb'] = self._create_updater(task_id)
+        self.executor.submit(self._worker, task_id, func, *args, **kwargs)
+        return task_id
+
+    def _create_updater(self, task_id):
+        def updater(progress=None, msg=None, result_delta=None):
+            if task_id in self.tasks:
+                if progress is not None: self.tasks[task_id]["progress"] = progress
+                if msg is not None: self.tasks[task_id]["message"] = msg
+                # Support intermediate results (list only for now)
+                if result_delta is not None:
+                     if self.tasks[task_id]["result"] is None: self.tasks[task_id]["result"] = []
+                     if isinstance(self.tasks[task_id]["result"], list) and isinstance(result_delta, list):
+                         self.tasks[task_id]["result"].extend(result_delta)
+        return updater
+
+    def _worker(self, task_id, func, *args, **kwargs):
+        print(f"[Task] Starting {task_id}")
+        callback = kwargs.pop('_task_update_cb', None)
+        try:
+            self.tasks[task_id]["status"] = "running"
+            
+            # Pass user_callback if the function accepts it
+            # We assume func signature might allow **kwargs or explicit 'callback'
+            # But to be safe, we only pass it if 'callback' is in kwargs, which we handle in submit wrapper?
+            # actually, let's just pass it as 'callback' arg if the user function expects it.
+            # However, for simplicity, I'll inject it into kwargs and let the target function `pop` it if it needs.
+            
+            # Re-inject for the function to use
+            kwargs['callback'] = callback
+            
+            # Execute
+            res = func(*args, **kwargs)
+            
+            # Only overwrite result if it's returned and task result is not managed incrementally
+            # Or assume the function returns the FINAL COMPLETE result.
+            self.tasks[task_id]["result"] = res
+            self.tasks[task_id]["status"] = "completed"
+            self.tasks[task_id]["progress"] = 100
+            print(f"[Task] Completed {task_id}")
+        except Exception as e:
+            print(f"[Task Error] {task_id}: {e}")
+            import traceback
+            traceback.print_exc()
+    def get_status(self, task_id):
+        # Debug: print keys if not found
+        if task_id not in self.tasks:
+             print(f"[TaskMgr] Checking {task_id} -> Not Found. Keys: {list(self.tasks.keys())}")
+        return self.tasks.get(task_id)
+
+    def cleanup(self):
+        # 简单清理超过1小时的任务
+        now = time.time()
+        to_del = [k for k,v in self.tasks.items() if now - v['created_at'] > 3600]
+        for k in to_del: del self.tasks[k]
+
+task_manager = TaskManager()
+
 # 实例化
 cluster_manager = ClusterManager()
 # ==========================================
@@ -1269,3 +1345,112 @@ exporter = ExportManager()
 
 # 注入到 shared 供装饰器使用
 shared.role_manager_instance = role_manager
+
+class MemoManager:
+    """桌面备忘录管理"""
+    
+    def __init__(self):
+        self._ensure_table()
+    
+    def _ensure_table(self):
+        """确保备忘录表存在"""
+        try:
+            with get_db() as conn:
+                conn.execute('''CREATE TABLE IF NOT EXISTS user_memos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '未命名备忘录',
+                    content TEXT,
+                    tags TEXT,  -- JSON 数组存储标签
+                    is_pinned BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )''')
+                
+                # 历史版本表（每次保存自动快照）
+                conn.execute('''CREATE TABLE IF NOT EXISTS memo_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    memo_id INTEGER NOT NULL,
+                    content TEXT,
+                    saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(memo_id) REFERENCES user_memos(id)
+                )''')
+                conn.commit()
+        except Exception as e:
+            print(f"[MemoManager] 建表失败: {e}")
+    
+    def get_all_memos(self, username):
+        """获取用户所有备忘录"""
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM user_memos WHERE username=? ORDER BY is_pinned DESC, updated_at DESC",
+                (username,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+    
+    def get_memo(self, memo_id):
+        """获取单条备忘录"""
+        with get_db() as conn:
+            row = conn.execute("SELECT * FROM user_memos WHERE id=?", (memo_id,)).fetchone()
+            return dict(row) if row else None
+    
+    def save_memo(self, username, memo_id=None, title=None, content=None, tags=None):
+        """保存备忘录（新建或更新）"""
+        with get_db() as conn:
+            if memo_id:
+                # 更新现有备忘录
+                conn.execute("""
+                    UPDATE user_memos 
+                    SET title=COALESCE(?, title), 
+                        content=COALESCE(?, content),
+                        tags=COALESCE(?, tags),
+                        updated_at=CURRENT_TIMESTAMP
+                    WHERE id=?
+                """, (title, content, tags, memo_id))
+                
+                # 保存历史版本
+                if content:
+                    conn.execute(
+                        "INSERT INTO memo_history (memo_id, content) VALUES (?, ?)",
+                        (memo_id, content)
+                    )
+            else:
+                # 新建备忘录
+                cursor = conn.execute("""
+                    INSERT INTO user_memos (username, title, content, tags)
+                    VALUES (?, ?, ?, ?)
+                """, (username, title or '新备忘录', content or '', tags or '[]'))
+                memo_id = cursor.lastrowid
+            
+            conn.commit()
+            return memo_id
+    
+    def delete_memo(self, memo_id):
+        """删除备忘录"""
+        with get_db() as conn:
+            conn.execute("DELETE FROM user_memos WHERE id=?", (memo_id,))
+            conn.execute("DELETE FROM memo_history WHERE memo_id=?", (memo_id,))
+            conn.commit()
+    
+    def toggle_pin(self, memo_id):
+        """置顶/取消置顶"""
+        with get_db() as conn:
+            conn.execute("""
+                UPDATE user_memos 
+                SET is_pinned = NOT is_pinned 
+                WHERE id=?
+            """, (memo_id,))
+            conn.commit()
+    
+    def search_memos(self, username, keyword):
+        """搜索备忘录"""
+        with get_db() as conn:
+            rows = conn.execute("""
+                SELECT * FROM user_memos 
+                WHERE username=? AND (title LIKE ? OR content LIKE ?)
+                ORDER BY updated_at DESC
+            """, (username, f'%{keyword}%', f'%{keyword}%')).fetchall()
+            return [dict(row) for row in rows]
+
+# 全局实例
+memo_manager = MemoManager()

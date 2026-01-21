@@ -150,7 +150,69 @@ def api_me():
     response.headers['Expires'] = '0'
     
     return response
+# ...existing code...
 
+@core_bp.route('/api/memos', methods=['GET'])
+@login_required
+def api_get_memos():
+    """获取所有备忘录"""
+    username = session.get('user', {}).get('username')
+    memos = managers.memo_manager.get_all_memos(username)
+    return jsonify({"status": "success", "data": memos})
+
+@core_bp.route('/api/memos/<int:memo_id>', methods=['GET'])
+@login_required
+def api_get_memo(memo_id):
+    """获取单条备忘录"""
+    memo = managers.memo_manager.get_memo(memo_id)
+    if memo:
+        return jsonify({"status": "success", "data": memo})
+    return jsonify({"status": "error", "message": "备忘录不存在"}), 404
+
+@core_bp.route('/api/memos/save', methods=['POST'])
+@login_required
+def api_save_memo():
+    """保存备忘录（支持实时自动保存）"""
+    username = session.get('user', {}).get('username')
+    data = request.json
+    
+    memo_id = managers.memo_manager.save_memo(
+        username=username,
+        memo_id=data.get('id'),
+        title=data.get('title'),
+        content=data.get('content'),
+        tags=data.get('tags')
+    )
+    
+    return jsonify({"status": "success", "memo_id": memo_id})
+
+@core_bp.route('/api/memos/<int:memo_id>', methods=['DELETE'])
+@login_required
+def api_delete_memo(memo_id):
+    """删除备忘录"""
+    managers.memo_manager.delete_memo(memo_id)
+    return jsonify({"status": "success"})
+
+@core_bp.route('/api/memos/<int:memo_id>/pin', methods=['POST'])
+@login_required
+def api_toggle_pin(memo_id):
+    """置顶/取消置顶"""
+    managers.memo_manager.toggle_pin(memo_id)
+    return jsonify({"status": "success"})
+
+@core_bp.route('/api/memos/search', methods=['GET'])
+@login_required
+def api_search_memos():
+    """搜索备忘录"""
+    username = session.get('user', {}).get('username')
+    keyword = request.args.get('q', '')
+    memos = managers.memo_manager.search_memos(username, keyword)
+    return jsonify({"status": "success", "data": memos})
+@core_bp.route('/memo', methods=['GET'])
+@login_required
+def memo_page():
+    """备忘录主页面"""
+    return render_template("memo.html")
 @core_bp.route('/')
 @login_required
 def index():
@@ -783,7 +845,11 @@ def api_resolve_head():
 
 @core_bp.route('/api/search_novel', methods=['POST'])
 @login_required
-def api_search(): return jsonify({"status": "success", "data": searcher.search_bing(request.json.get('keyword'))})
+def api_search():
+    keyword = request.json.get('keyword')
+    if not keyword: return jsonify({"status": "error"})
+    tid = managers.task_manager.submit(_worker_search, keyword)
+    return jsonify({"status": "pending", "task_id": tid})
 
 @core_bp.route('/api/upload_epub', methods=['POST'])
 @login_required
@@ -796,119 +862,131 @@ def api_upload_epub():
     managers.db.insert(k, v)
     return jsonify({"status": "success", "key": k, "value": v})
 # ... 引入 update_manager ...
-from managers import db, update_manager, booklist_manager
+from managers import db, update_manager, booklist_manager, task_manager
 
-# 1. 手动检查单本更新
+# === 异步任务 Worker 函数 ===
+
+def _worker_search(keyword, callback=None):
+    """后台搜索任务"""
+    # 如果有 callback (即来自 TaskManager 的 update_task), 传入 search_concurrent
+    if callback:
+         return searcher.search_concurrent(keyword, callback)
+    # 否则兼容旧调用
+    return searcher.search_bing(keyword)
+
+def _worker_check_update(book_key, current_url):
+    """后台检查更新任务"""
+    # === 1. 智能定位目录页 URL ===
+    toc_url = None
+    
+    # 优先从缓存的“当前阅读页”信息中找目录链接
+    cached_page = managers.cache.get(current_url)
+    if cached_page and cached_page.get('toc_url'): 
+        toc_url = cached_page['toc_url']
+    else:
+        # 缓存未命中目录链接，尝试爬取当前页获取
+        try:
+            page_data = crawler.run(current_url)
+            if page_data: 
+                toc_url = page_data.get('toc_url')
+                managers.cache.set(current_url, page_data)
+        except: pass
+
+    # 兜底猜测
+    if not toc_url: 
+        toc_url = current_url.rsplit('/', 1)[0] + '/'
+
+    # === 2. [核心] 强制清除目录缓存 ===
+    try:
+        from managers import cache
+        cache_file = cache._get_filename(toc_url)
+        if os.path.exists(cache_file):
+            os.remove(cache_file)
+            print(f"[Update] 强制刷新，已清理缓存: {toc_url}")
+    except Exception as e:
+        print(f"[Update] 清理缓存失败: {e}")
+
+    # === 3. 爬取最新目录和元数据 ===
+    toc_data = crawler.get_toc(toc_url)
+    
+    if toc_data and toc_data.get('chapters'):
+        # 获取最新章节对象
+        latest_chap = toc_data['chapters'][-1]
+        
+        # === 4. 更新数据库元数据 ===
+        update_payload = {}
+        if toc_data.get('cover'): update_payload['cover'] = toc_data['cover']
+        if toc_data.get('author'): update_payload['author'] = toc_data['author']
+        if toc_data.get('desc'): update_payload['desc'] = toc_data['desc']
+        if toc_data.get('tags'): update_payload['official_tags'] = toc_data['tags']
+        
+        if update_payload:
+            managers.db.update(book_key, update_payload)
+
+        # === 5. 更新追更管理器 ===
+        save_data = {
+            "latest_title": latest_chap.get('title') or latest_chap.get('name'),
+            "latest_url": latest_chap['url'],
+            "latest_id": latest_chap.get('id', -1),
+            "toc_url": toc_url
+        }
+        managers.update_manager.set_update(book_key, save_data)
+
+        # === 6. 计算进度差值 (返回给前端) ===
+        response_data = {
+            "latest_title": save_data['latest_title'],
+            "latest_url": save_data['latest_url'],
+            "unread_count": 0,
+            "status_text": "已最新"
+        }
+        
+        # A. 获取当前阅读章节 ID
+        current_id = parse_chapter_id(current_url)
+        if current_id <= 0:
+            match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
+            if match: current_id = int(match.group(1))
+        
+        latest_id = save_data['latest_id']
+        
+        # B. 执行比对
+        if latest_id > 0 and current_id > 0:
+            diff = latest_id - current_id
+            if diff > 0:
+                response_data["unread_count"] = diff
+                response_data["status_text"] = f"落后 {diff} 章"
+            else:
+                response_data["status_text"] = "已追平"
+        elif current_url != save_data['latest_url']:
+            response_data["unread_count"] = 1
+            response_data["status_text"] = "有新章节"
+
+        return {"status": "success", "data": response_data, "msg": "刷新成功"}
+    
+    return {"status": "failed", "msg": "未获取到目录"}
+
+# === API 路由 ===
+
+@core_bp.route('/api/task_status/<task_id>')
+@login_required
+def api_task_status(task_id):
+    t = managers.task_manager.get_status(task_id)
+    if t: return jsonify(t)
+    return jsonify({"status": "not_found"})
+
+# 1. 手动检查单本更新 (异步版)
 @core_bp.route('/api/check_update', methods=['POST'])
 @login_required
 def api_check_update():
-    # 前端传来的当前阅读 URL 和 Key
     current_url = request.json.get('url') 
     book_key = request.json.get('key')
     
     if not current_url: return jsonify({"status": "error", "msg": "No URL"})
+    
+    # 提交异步任务
+    tid = managers.task_manager.submit(_worker_check_update, book_key, current_url)
+    return jsonify({"status": "pending", "task_id": tid})
 
-    try:
-        # === 1. 智能定位目录页 URL ===
-        toc_url = None
-        
-        # 优先从缓存的“当前阅读页”信息中找目录链接
-        cached_page = managers.cache.get(current_url)
-        if cached_page and cached_page.get('toc_url'): 
-            toc_url = cached_page['toc_url']
-        else:
-            # 缓存未命中目录链接，尝试爬取当前页获取
-            try:
-                page_data = crawler.run(current_url)
-                if page_data: 
-                    toc_url = page_data.get('toc_url')
-                    managers.cache.set(current_url, page_data)
-            except: pass
 
-        # 兜底猜测
-        if not toc_url: 
-            toc_url = current_url.rsplit('/', 1)[0] + '/'
-
-        # === 2. [核心] 强制清除目录缓存 ===
-        # 确保触发爬虫联网获取最新数据（章节、封面、标签等）
-        try:
-            from managers import cache
-            cache_file = cache._get_filename(toc_url)
-            if os.path.exists(cache_file):
-                os.remove(cache_file)
-                print(f"[Update] 强制刷新，已清理缓存: {toc_url}")
-        except Exception as e:
-            print(f"[Update] 清理缓存失败: {e}")
-
-        # === 3. 爬取最新目录和元数据 ===
-        toc_data = crawler.get_toc(toc_url)
-        
-        if toc_data and toc_data.get('chapters'):
-            # 获取最新章节对象
-            latest_chap = toc_data['chapters'][-1]
-            
-            # === 4. 更新数据库元数据 (封面/作者/简介/标签) ===
-            update_payload = {}
-            if toc_data.get('cover'): update_payload['cover'] = toc_data['cover']
-            if toc_data.get('author'): update_payload['author'] = toc_data['author']
-            if toc_data.get('desc'): update_payload['desc'] = toc_data['desc']
-            # [新增] 保存官方标签
-            if toc_data.get('tags'): update_payload['official_tags'] = toc_data['tags']
-            
-            if update_payload:
-                print(f"[Update] 更新书籍元数据: {book_key} -> {list(update_payload.keys())}")
-                managers.db.update(book_key, update_payload)
-
-            # === 5. 更新追更管理器 (UpdateManager) ===
-            save_data = {
-                "latest_title": latest_chap.get('title') or latest_chap.get('name'),
-                "latest_url": latest_chap['url'],
-                "latest_id": latest_chap.get('id', -1),
-                "toc_url": toc_url
-            }
-            managers.update_manager.set_update(book_key, save_data)
-            
-            # === 6. 计算进度差值 (返回给前端) ===
-            
-            # A. 获取当前阅读章节 ID
-            current_id = parse_chapter_id(current_url)
-            if current_id <= 0:
-                match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
-                if match: current_id = int(match.group(1))
-            
-            latest_id = save_data['latest_id']
-            
-            # 构造返回数据
-            response_data = {
-                "latest_title": save_data['latest_title'],
-                "latest_url": save_data['latest_url'],
-                "unread_count": 0,
-                "status_text": "已最新"
-            }
-
-            # B. 执行比对
-            if latest_id > 0 and current_id > 0:
-                diff = latest_id - current_id
-                if diff > 0:
-                    response_data["unread_count"] = diff
-                    response_data["status_text"] = f"落后 {diff} 章"
-                else:
-                    response_data["status_text"] = "已追平"
-            elif current_url != save_data['latest_url']:
-                response_data["unread_count"] = 1
-                response_data["status_text"] = "有新章节"
-
-            return jsonify({
-                "status": "success", 
-                "msg": "刷新成功", 
-                "data": response_data 
-            })
-        else:
-            return jsonify({"status": "failed", "msg": "目录解析失败"})
-
-    except Exception as e:
-        print(f"Check Update Error: {e}")
-        return jsonify({"status": "error", "msg": str(e)})
 # 2. 获取所有更新状态 (用于前端渲染小红点)
 from spider_core import searcher, epub_handler, parse_chapter_id 
 
