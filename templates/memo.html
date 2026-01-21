@@ -73,6 +73,12 @@
             background: white;
             border-bottom: 1px solid #e5e7eb;
             display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .drawer-header-row {
+            display: flex;
             justify-content: space-between;
             align-items: center;
         }
@@ -81,6 +87,43 @@
             font-size: 14px;
             color: #374151;
             margin: 0;
+        }
+        
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 6px 10px;
+            gap: 5px;
+        }
+        
+        .search-box input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            outline: none;
+            font-size: 12px;
+            color: #374151;
+        }
+        
+        .search-box input::placeholder {
+            color: #9ca3af;
+        }
+        
+        .search-box button {
+            background: transparent;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            padding: 0;
+            font-size: 14px;
+            line-height: 1;
+        }
+        
+        .search-box button:hover {
+            color: #667eea;
         }
         
         .sort-buttons {
@@ -433,10 +476,17 @@
         <!-- 左侧抽屉 -->
         <div class="drawer" id="drawer">
             <div class="drawer-header">
-                <h3>📋 所有笔记 (<span id="memoCount">0</span>)</h3>
-                <div class="sort-buttons">
-                    <button id="sortTime" class="active" onclick="sortMemos('time')">时间</button>
-                    <button id="sortName" onclick="sortMemos('name')">名称</button>
+                <div class="drawer-header-row">
+                    <h3>📋 所有笔记 (<span id="memoCount">0</span>)</h3>
+                    <div class="sort-buttons">
+                        <button id="sortTime" class="active" onclick="sortMemos('time')">时间</button>
+                        <button id="sortName" onclick="sortMemos('name')">名称</button>
+                    </div>
+                </div>
+                <div class="search-box">
+                    <span>🔍</span>
+                    <input type="text" id="searchInput" placeholder="搜索笔记..." oninput="filterMemos()">
+                    <button onclick="clearSearch()" id="clearSearchBtn" style="display: none;">✕</button>
                 </div>
             </div>
             <div class="memo-list" id="memoList"></div>
@@ -460,7 +510,6 @@
             <div class="toolbar">
                 <span id="status">就绪</span>
                 <div class="toolbar-actions">
-                    <button onclick="searchMemos()">🔍 搜索</button>
                     <button onclick="togglePin()">📌 置顶</button>
                     <button onclick="renameCurrentMemo()">✏️ 重命名</button>
                 </div>
@@ -626,7 +675,7 @@
                     }
                 }
                 
-                renderMemoList();
+                filterMemos();  // 使用过滤函数重新渲染
                 renderTabs();
             } catch (e) {
                 console.error('加载笔记失败:', e);
@@ -635,31 +684,8 @@
         
         // ==================== 左侧列表渲染 ====================
         function renderMemoList() {
-            const container = document.getElementById('memoList');
-            document.getElementById('memoCount').innerText = memos.length;
-            
-            // 排序
-            const sorted = [...memos].sort((a, b) => {
-                if (currentSortMode === 'time') {
-                    return new Date(b.updated_at) - new Date(a.updated_at);
-                } else {
-                    return a.title.localeCompare(b.title);
-                }
-            });
-            
-            container.innerHTML = sorted.map(m => `
-                <div class="memo-item ${activeTabId === m.id ? 'active' : ''}" 
-                     onclick="openMemoInTab(${m.id})">
-                    <div class="memo-item-title">
-                        ${m.is_pinned ? '📌' : '📄'} ${escapeHtml(m.title)}
-                    </div>
-                    <div class="memo-item-time">${formatTime(m.updated_at)}</div>
-                    <div class="memo-item-actions">
-                        <button onclick="event.stopPropagation(); renameMemo(${m.id})">重命名</button>
-                        <button class="delete-btn" onclick="event.stopPropagation(); deleteMemo(${m.id})">删除</button>
-                    </div>
-                </div>
-            `).join('');
+            // 直接调用filterMemos，它会处理搜索过滤和排序
+            filterMemos();
         }
         
         // ==================== 标签页管理 ====================
@@ -988,38 +1014,55 @@
             renderMemoList();
         }
         
-        async function searchMemos() {
-            const keyword = await showPrompt('请输入搜索关键词');
-            if (!keyword) return;
+        // 即时搜索过滤
+        function filterMemos() {
+            const keyword = document.getElementById('searchInput').value.trim().toLowerCase();
+            const clearBtn = document.getElementById('clearSearchBtn');
             
-            try {
-                const res = await fetch(`/api/memos/search?q=${encodeURIComponent(keyword)}`);
-                const data = await res.json();
-                
-                if (data.data && data.data.length > 0) {
-                    // 临时显示搜索结果
-                    const originalMemos = memos;
-                    memos = data.data;
-                    renderMemoList();
-                    
-                    // 提示用户
-                    setTimeout(async () => {
-                        const shouldRestore = await showConfirm(`找到 ${data.data.length} 条结果，是否恢复完整列表？`);
-                        if (shouldRestore) {
-                            memos = originalMemos;
-                            renderMemoList();
-                        }
-                    }, 100);
+            // 显示/隐藏清除按钮
+            clearBtn.style.display = keyword ? 'block' : 'none';
+            
+            // 过滤笔记列表
+            const filtered = keyword 
+                ? memos.filter(m => 
+                    m.title.toLowerCase().includes(keyword) || 
+                    (m.content && m.content.toLowerCase().includes(keyword)) ||
+                    (m.tags && m.tags.toLowerCase().includes(keyword))
+                  )
+                : memos;
+            
+            // 渲染过滤后的列表
+            const container = document.getElementById('memoList');
+            document.getElementById('memoCount').innerText = filtered.length;
+            
+            // 排序
+            const sorted = [...filtered].sort((a, b) => {
+                if (currentSortMode === 'time') {
+                    return new Date(b.updated_at) - new Date(a.updated_at);
                 } else {
-                    await showModal('搜索结果', '<div class="modal-message">未找到匹配的笔记</div>', [
-                        { text: '确定', value: true, primary: true }
-                    ]);
+                    return a.title.localeCompare(b.title);
                 }
-            } catch (e) {
-                await showModal('搜索失败', `<div class="modal-message">${e.message}</div>`, [
-                    { text: '确定', value: true, primary: true }
-                ]);
-            }
+            });
+            
+            container.innerHTML = sorted.map(m => `
+                <div class="memo-item ${activeTabId === m.id ? 'active' : ''}" 
+                     onclick="openMemoInTab(${m.id})">
+                    <div class="memo-item-title">
+                        ${m.is_pinned ? '📌' : '📄'} ${escapeHtml(m.title)}
+                    </div>
+                    <div class="memo-item-time">${formatTime(m.updated_at)}</div>
+                    <div class="memo-item-actions">
+                        <button onclick="event.stopPropagation(); renameMemo(${m.id})">重命名</button>
+                        <button class="delete-btn" onclick="event.stopPropagation(); deleteMemo(${m.id})">删除</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        // 清除搜索
+        function clearSearch() {
+            document.getElementById('searchInput').value = '';
+            filterMemos();
         }
         
         function togglePreview() {
@@ -1054,6 +1097,7 @@
         
         function formatTime(timestamp) {
             if (!timestamp) return '';
+            // 后端返回的是UTC时间字符串，需要正确解析
             const date = new Date(timestamp);
             const now = new Date();
             const diff = now - date;
