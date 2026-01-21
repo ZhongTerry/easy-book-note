@@ -591,7 +591,13 @@
         // ==================== 数据加载 ====================
         async function loadAllMemos() {
             try {
-                const res = await fetch('/api/memos');
+                const res = await fetch('/api/memos', {
+                    cache: 'no-store',  // 强制禁用浏览器缓存
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
                 const data = await res.json();
                 memos = data.data || [];
                 renderMemoList();

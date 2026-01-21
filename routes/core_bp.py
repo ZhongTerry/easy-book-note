@@ -158,7 +158,12 @@ def api_get_memos():
     """获取所有备忘录"""
     username = session.get('user', {}).get('username')
     memos = managers.memo_manager.get_all_memos(username)
-    return jsonify({"status": "success", "data": memos})
+    response = jsonify({"status": "success", "data": memos})
+    # 禁用缓存
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @core_bp.route('/api/memos/<int:memo_id>', methods=['GET'])
 @login_required
@@ -166,7 +171,11 @@ def api_get_memo(memo_id):
     """获取单条备忘录"""
     memo = managers.memo_manager.get_memo(memo_id)
     if memo:
-        return jsonify({"status": "success", "data": memo})
+        response = jsonify({"status": "success", "data": memo})
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     return jsonify({"status": "error", "message": "备忘录不存在"}), 404
 
 @core_bp.route('/api/memos/save', methods=['POST'])
@@ -212,7 +221,13 @@ def api_search_memos():
 @login_required
 def memo_page():
     """备忘录主页面"""
-    return render_template("memo.html")
+    response = render_template("memo.html")
+    # 禁用 HTML 页面缓存
+    return response, 200, {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+    }
 @core_bp.route('/')
 @login_required
 def index():

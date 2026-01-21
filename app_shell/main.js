@@ -63,10 +63,10 @@ const createWindow = () => {
         autoHideMenuBar: true,
         icon: path.join(__dirname, '../static/icon-192.png'),
         webPreferences: {
-            // --- [关键修改] 必须启用 preload.js ---
             preload: path.join(__dirname, 'preload.js'), 
             nodeIntegration: false,
-            contextIsolation: true
+            contextIsolation: true,
+            partition: 'persist:notedb'  // 持久化 session，保存 Cookie 和登录状态
         }
     });
 
@@ -147,6 +147,7 @@ function createMemoWindow() {
     memoWindow = new BrowserWindow({
         width: 1000,
         height: 600,
+        show: false,        // 初始不显示，等内容加载完成
         // alwaysOnTop: true,  // 始终置顶
         frame: false,       // 无边框（自定义标题栏）
         transparent: true,  // 背景透明（实现圆角）
@@ -155,11 +156,18 @@ function createMemoWindow() {
         maximizable: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
-            contextIsolation: true
+            contextIsolation: true,
+            partition: 'persist:notedb'  // 使用相同的 partition，共享登录状态
         }
     });
 
-    memoWindow.loadURL('https://book.ztrztr.top/memo');  // 独立的备忘录页面
+    memoWindow.loadURL('https://book.ztrztr.top/memo');
+    
+    // 等内容加载完成后再显示，避免闪烁
+    memoWindow.once('ready-to-show', () => {
+        memoWindow.show();
+        memoWindow.focus();
+    });
     
     // 窗口关闭时隐藏而不是销毁（快速唤出）
     memoWindow.on('close', (e) => {
