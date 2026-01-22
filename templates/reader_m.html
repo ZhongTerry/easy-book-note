@@ -432,7 +432,7 @@
 <script>
     // 注入后端变量
     const dbKey = "{{ db_key }}";
-    const currentUrl = "{{ current_url }}";
+    let currentUrl = "{{ current_url }}"; // AJAX 翻页后需更新
     const tocUrl = "{{ article.toc_url }}";
     let localChapterId = parseInt("{{ chapter_id }}") || -1;
 
@@ -922,6 +922,8 @@
                  const progressSpan = document.getElementById('read-progress');
                  if(progressSpan) progressSpan.innerText = '0%';
                  
+                 // 更新当前 URL，保证后续 /update 使用最新章节
+                 currentUrl = url;
                  history.pushState(null, '', url);
                  
                  if(window.speechSynthesis) window.speechSynthesis.cancel();

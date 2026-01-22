@@ -976,7 +976,7 @@ body.dark-mode #settingsModal input.p-input {
     let localChapterId = parseInt("{{ chapter_id }}") || -1;
     const dbKey = "{{ db_key }}";
     // 从后端获取当前页面对应的 URL (通常是未编码或部分编码的)
-    const currentUrl = "{{ current_url }}";
+    let currentUrl = "{{ current_url }}"; // 允许 AJAX 导航后更新当前章节 URL
     // 自动注入版本号
     const APP_VERSION = "{{ app_version }}";
     let isSubscribed = false;
@@ -1871,8 +1871,9 @@ async function loadChapter(url) {
             // 4. 更新 DOM(分阶段渲染,避免闪烁)
             await updatePageContent(data);
             
-            // 5. 更新 URL
-            history.pushState({ url: url }, '', url);
+            // 5. 更新 URL & 当前章节状态，保证后续 /update 使用最新地址
+            currentUrl = url;
+            history.pushState({ url }, '', url);
             
             updateProgressBar(95);
             
