@@ -95,25 +95,91 @@
         .menu-item svg { width: 20px; height: 20px; margin-bottom: 4px; }
         .menu-item span { font-size: 11px; }
 
-        /* [新增] 骨架屏动画 - PC端适配 */
-        .skeleton-loader { display: none; padding: 10px 0; animation: fadein 0.3s; }
-        .sk-line { 
-            height: 20px; 
-            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); 
-            background-size: 200% 100%; 
-            margin-bottom: 28px; 
-            border-radius: 4px; 
-            animation: sk-loading 1.5s infinite; 
-        }
-        .sk-title { height: 48px; width: 60%; margin-bottom: 60px; border-radius: 8px; }
-        .sk-nav { display: flex; justify-content: space-between; margin-top: 80px; }
-        .sk-btn { width: 140px; height: 50px; border-radius: 25px; margin-bottom: 0; }
-        
-        body.dark-mode .sk-line { 
-            background: linear-gradient(90deg, #1e1e1e 25%, #252525 50%, #1e1e1e 75%); 
+        /* [新增] 骨架屏样式增强 === */
+        .skeleton-loader { 
+            display: none; 
+            padding: 80px 100px; 
+            animation: fadein 0.3s; 
         }
 
-        @keyframes sk-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+        .sk-header { 
+            margin-bottom: 50px; 
+        }
+
+        .sk-title { 
+            height: 48px; 
+            width: 60%; 
+            border-radius: 8px; 
+            margin-bottom: 15px; 
+        }
+
+        .sk-meta-group { 
+            display: flex; 
+            gap: 20px; 
+        }
+
+        .sk-meta { 
+            height: 16px; 
+            border-radius: 4px; 
+        }
+
+        .sk-content { 
+            margin-bottom: 100px; 
+        }
+
+        .sk-para { 
+            height: 22px; 
+            margin-bottom: 28px; 
+            border-radius: 4px; 
+        }
+
+        .sk-line { 
+            background: linear-gradient(90deg, #f0f0f0 25%, #e6e6e6 50%, #f0f0f0 75%); 
+            background-size: 200% 100%; 
+            animation: sk-loading 1.5s infinite; 
+        }
+
+        .sk-nav { 
+            display: flex; 
+            justify-content: center; 
+            gap: 30px; 
+            padding: 60px 0; 
+            border-top: 1px solid var(--border-color); 
+        }
+
+        .sk-btn { 
+            width: 220px; 
+            height: 56px; 
+            border-radius: 28px; 
+        }
+        
+        body.dark-mode .sk-line { 
+            background: linear-gradient(90deg, #2a2a2a 25%, #333333 50%, #2a2a2a 75%); 
+        }
+
+        @keyframes sk-loading { 
+            0% { background-position: 200% 0; } 
+            100% { background-position: -200% 0; } 
+        }
+
+        /* === 阅读进度条（固定在header下方） === */
+        #readingProgressBar {
+            position: fixed;
+            top: 60px; /* header 高度 */
+            left: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            z-index: 98; /* 低于 AJAX 进度条(999) 和 header(100) */
+            transition: width 0.1s ease-out;
+            opacity: 0.8;
+            pointer-events: none; /* 不阻挡点击 */
+        }
+        
+        body.dark-mode #readingProgressBar {
+            background: linear-gradient(90deg, #5c6bc0 0%, #7e57c2 100%);
+            opacity: 0.9;
+        }
 
         /* === Modals === */
         .modal-overlay {
@@ -124,7 +190,9 @@
         .modal-box {
             background: #fff; width: 90%; max-width: 420px; border-radius: 12px;
             padding: 24px; box-shadow: 0 15px 40px rgba(0,0,0,0.2);
-            max-height: 85vh; overflow-y: auto; position: relative;
+            max-height: 90vh; overflow-y: auto; position: relative;
+            display: flex;
+            flex-direction: column; /* 确保内部布局更稳定 */
         }
         .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; }
         .modal-title { font-size: 18px; font-weight: bold; margin: 0; }
@@ -646,21 +714,40 @@ body.dark-mode #settingsModal input.p-input {
     </div>
 </header>
 
+<!-- AJAX 加载进度条 -->
+<div id="ajaxProgressBar" style="position:fixed; top:0; left:0; height:3px; background:var(--accent); width:0; transition:width 0.3s; z-index:999;"></div>
+
+<!-- 阅读进度条 -->
+<div id="readingProgressBar"></div>
+
 <div class="main-container">
     <!-- [新增] 骨架屏容器 -->
     <div id="skeletonBox" class="skeleton-loader">
-        <div class="sk-line sk-title"></div>
-        <div class="sk-line" style="width:100%"></div>
-        <div class="sk-line" style="width:95%"></div>
-        <div class="sk-line" style="width:98%"></div>
-        <div class="sk-line" style="width:92%"></div>
-        <div class="sk-line" style="width:96%"></div>
-        <div class="sk-line" style="width:90%"></div>
-        <div class="sk-line" style="width:99%"></div>
-        <div class="sk-line" style="width:94%"></div>
+        <!-- 标题骨架 -->
+        <div class="sk-header">
+            <div class="sk-line sk-title"></div>
+            <div class="sk-meta-group">
+                <div class="sk-line sk-meta" style="width:120px"></div>
+                <div class="sk-line sk-meta" style="width:100px"></div>
+            </div>
+        </div>
+        
+        <!-- 正文骨架(模拟段落) -->
+        <div class="sk-content">
+            <div class="sk-line sk-para" style="width:100%"></div>
+            <div class="sk-line sk-para" style="width:98%"></div>
+            <div class="sk-line sk-para" style="width:95%"></div>
+            <div class="sk-line sk-para" style="width:100%"></div>
+            <div class="sk-line sk-para" style="width:92%"></div>
+            <div class="sk-line sk-para" style="width:97%"></div>
+            <div class="sk-line sk-para" style="width:100%"></div>
+            <div class="sk-line sk-para" style="width:88%"></div>
+        </div>
+        
+        <!-- 导航栏骨架 -->
         <div class="sk-nav">
-             <div class="sk-line sk-btn"></div>
-             <div class="sk-line sk-btn"></div>
+            <div class="sk-line sk-btn"></div>
+            <div class="sk-line sk-btn"></div>
         </div>
     </div>
 
@@ -886,7 +973,7 @@ body.dark-mode #settingsModal input.p-input {
 </div>
 
 <script>
-    const localChapterId = parseInt("{{ chapter_id }}") || -1;
+    let localChapterId = parseInt("{{ chapter_id }}") || -1;
     const dbKey = "{{ db_key }}";
     // 从后端获取当前页面对应的 URL (通常是未编码或部分编码的)
     const currentUrl = "{{ current_url }}";
@@ -1182,8 +1269,19 @@ body.dark-mode #settingsModal input.p-input {
     // 判断是否应该同步
     function shouldSync(remoteUrl, remoteMeta) {
         if (currentUrl.startsWith('epub:')) return false;
+        
+        console.log('[Sync Debug] 比对参数:', {
+            currentUrl,
+            remoteUrl,
+            remoteMeta,
+            localChapterId
+        });
+        
         // 1. URL 相同，直接跳过
-        if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) return false;
+        if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) {
+            console.log('[Sync] URL相同，无需同步');
+            return false;
+        }
 
         // 2. [核心] ID 比对 (整数比大小)
         // remoteMeta.chapter_id 是后端根据存入时的标题算出来的，绝对准确
@@ -1194,10 +1292,12 @@ body.dark-mode #settingsModal input.p-input {
                 return true;
             }
             // 远程 <= 本地，说明本地是最新的，无需提示
+            console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) <= 本地ID(${localChapterId}) -> 无需同步`);
             return false;
         }
 
         // 3. 兜底：如果没 ID，只能瞎猜 (URL 不同就提示)
+        console.log('[Sync] 缺少章节ID，使用URL比对（兜底）');
         return true; 
     }
     document.addEventListener('keydown', (e) => {
@@ -1268,6 +1368,8 @@ body.dark-mode #settingsModal input.p-input {
             });
             const d = await res.json();
             
+            console.log('[Sync Debug] 获取远程进度:', d);  // 调试日志
+            
             if (d.status === 'success' && d.value) {
                 // 传入 meta 数据进行智能对比
                 if (shouldSync(d.value, d.meta)) {
@@ -1320,7 +1422,10 @@ body.dark-mode #settingsModal input.p-input {
         if(!dbKey) return;
         
         // 获取当前标题 (用于后端计算真实ID)
-        const currentTitle = document.getElementById('chapterTitle').innerText;
+        const currentTitle = document.getElementById('chapterTitle')?.innerText || '';
+        
+        // [新增] 调试日志
+        console.log(`[Sync] 保存进度: 书籍=${dbKey}, URL=${currentUrl}, 标题="${currentTitle}", 本地ID=${localChapterId}`);
 
         fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
         
@@ -1367,7 +1472,6 @@ body.dark-mode #settingsModal input.p-input {
         } else if (savedFont) {
             // 普通字体，直接设置
             // 注意：如果 savedFont 是本地扫描的字体，下拉框里可能还没有这个选项
-            // 我们可以动态加一个“上次使用的”选项，防止显示空白
             if (![...selector.options].some(o => o.value === savedFont)) {
                 const opt = document.createElement('option');
                 opt.value = savedFont;
@@ -1643,12 +1747,16 @@ body.dark-mode #settingsModal input.p-input {
     function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
     function reportWordCount() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ words: document.getElementById('articleBody').innerText.length, book_key: dbKey }) }); }
 
-    // === 其他 ===
+    // === 其它 ===
     function handlePrefetch() {
         const next = document.getElementById('link-next');
         if(next && next.href) {
             const target = new URL(next.href).searchParams.get('url');
-            if(target) setTimeout(() => fetch('/api/prefetch', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ url: target }) }), 3000);
+            if(target) setTimeout(() => fetch('/api/prefetch', { 
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'}, 
+                body: JSON.stringify({ url: target }) 
+            }), 3000);
         }
     }
     function toggleTTS() {
@@ -1720,102 +1828,348 @@ body.dark-mode #settingsModal input.p-input {
         });
     }
 
-    async function loadChapter(url) {
-        if(!url || url.includes('javascript:') || url.includes('#')) return;
+    /* === AJAX 核心逻辑优化 === */
+async function loadChapter(url) {
+    if(!url || url.includes('javascript:') || url.includes('#')) return;
+    
+    // 1. 显示进度条和骨架屏
+    showProgressBar();
+    toggleSkeletonState(true);
+    
+    // 2. 滚动到顶部(使用 instant 避免看到旧内容)
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    
+    try {
+        // 3. 发起请求(增加超时处理)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
         
-        // 1. 展示骨架屏
-        const contentBox = document.querySelector('.article-header');
-        const bodyBox = document.querySelector('.content-body');
-        const navBox = document.querySelector('.bottom-nav');
-        const skBox = document.getElementById('skeletonBox');
+        updateProgressBar(30);
         
-        if(contentBox) contentBox.style.display = 'none';
-        if(bodyBox) bodyBox.style.display = 'none';
-        if(navBox) navBox.style.display = 'none';
-        if(skBox) skBox.style.display = 'block';
+        const fetchUrl = url + (url.includes('?') ? '&' : '?') + 'mode=ajax';
+        const res = await fetch(fetchUrl, { 
+            signal: controller.signal 
+        });
+        clearTimeout(timeoutId);
         
-        window.scrollTo({ top: 0, behavior: 'auto' });
-
-        try {
-            // 2. 发起 AJAX 请求
-            const fetchUrl = url + (url.includes('?') ? '&' : '?') + 'mode=ajax';
-            const res = await fetch(fetchUrl);
-            if(!res.ok) throw new Error('Network response was not ok');
+        if(!res.ok) throw new Error('Network response was not ok');
+        
+        updateProgressBar(60);
+        const json = await res.json();
+        
+        if(json.code === 0) {
+            const data = json.data;
             
-            const json = await res.json();
+            updateProgressBar(80);
             
-            if(json.code === 0) {
-                const data = json.data;
-                document.title = data.title + ' - Smart NoteDB';
-                
-                if(contentBox) {
-                     const h1 = contentBox.querySelector('h1');
-                     if(h1) h1.textContent = data.title;
-                     const meta = contentBox.querySelector('.article-meta');
-                     if(meta) {
-                         const wordCount = data.content.join('').length;
-                         meta.innerHTML = `<span>本章字数: ${wordCount}字</span> <span>来源: ${dbKey}</span>`;
-                     }
-                     contentBox.style.display = 'block';
-                }
-                
-                if(bodyBox) {
-                     bodyBox.innerHTML = data.content.map(line => `<p>${line}</p>`).join('');
-                     bodyBox.style.display = 'block';
-                     if(window.isSpeaking) window.speechSynthesis.cancel();
-                }
+            // [关键修复] 更新当前章节ID，确保远程进度检查正常工作
+            if(json.chapter_id !== undefined) {
+                localChapterId = parseInt(json.chapter_id) || -1;
+                console.log(`[AJAX] 更新章节ID: ${localChapterId}`);
+            }
+            
+            // 4. 更新 DOM(分阶段渲染,避免闪烁)
+            await updatePageContent(data);
+            
+            // 5. 更新 URL
+            history.pushState({ url: url }, '', url);
+            
+            updateProgressBar(95);
+            
+            // 6. 隐藏骨架屏
+            toggleSkeletonState(false);
+            
+            // 7. 重新绑定事件
+            rebindAjaxEvents();
+            
+            // 8. 自动保存进度
+            autoSyncProgress();
+            
+            // 9. 预加载下一章
+            if(data.next_url) {
+                setTimeout(() => prefetchChapter(data.next_url), 2000);
+            }
+            
+            // 10. 刷新目录高亮(如果目录已打开)
+            refreshTocHighlight();
+            
+            // 11. 隐藏进度条
+            hideProgressBar();
+            
+        } else {
+            throw new Error(json.msg || '加载失败');
+        }
+    } catch(e) {
+        console.error('AJAX 加载错误:', e);
+        hideProgressBar();
+        
+        if(e.name === 'AbortError') {
+            showToast('⏱️ 加载超时,正在跳转...');
+        } else {
+            showToast('❌ 加载失败,正在跳转...');
+        }
+        
+        // 降级为传统跳转
+        setTimeout(() => location.href = url, 1000);
+    }
+}
 
-                const nav = document.querySelector('.bottom-nav');
-                if(nav) {
-                    let html = '';
-                    if(data.prev_url) {
-                         const prevLink = `/read?url=${encodeURIComponent(data.prev_url)}&key=${dbKey}`;
-                         html += `<a id="link-prev" href="${prevLink}" class="nav-btn">上一章</a>`;
-                    } else {
-                         html += `<span class="nav-btn disabled">已是开头</span>`;
-                    }
-                    
-                    if(data.next_url) {
-                         const nextLink = `/read?url=${encodeURIComponent(data.next_url)}&key=${dbKey}`;
-                         html += `<a id="link-next" href="${nextLink}" class="nav-btn">下一章</a>`;
-                    } else {
-                         html += `<span class="nav-btn disabled" onclick="handleNoNextChapter()" style="cursor:pointer;" title="点击重新检查更新">已是末尾 🔄</span>`;
-                    }
-                    nav.innerHTML = html;
-                    nav.style.display = 'flex';
-                    setupAjaxNav('link-prev');
-                    setupAjaxNav('link-next');
-                }
-                
-                history.pushState(null, '', url);
-                currentUrl = url; // 更新当前 URL
-                
-                // 自动保存进度到数据库
-                autoSyncProgress();
-                
-                if(data.next_url) {
-                    setTimeout(() => fetch('/api/prefetch', { 
-                        method: 'POST', 
-                        headers: {'Content-Type': 'application/json'}, 
-                        body: JSON.stringify({ url: data.next_url }) 
-                    }), 2000);
-                }
-            } else { location.href = url; }
-        } catch(e) { console.error(e); location.href = url; } 
-        finally { if(skBox) skBox.style.display = 'none'; }
+/* 骨架屏状态切换 */
+function toggleSkeletonState(show) {
+    const skBox = document.getElementById('skeletonBox');
+    const contentBox = document.querySelector('.article-header');
+    const bodyBox = document.querySelector('.content-body');
+    const navBox = document.querySelector('.bottom-nav');
+    
+    if(show) {
+        skBox.style.display = 'block';
+        contentBox.style.display = 'none';
+        bodyBox.style.display = 'none';
+        navBox.style.display = 'none';
+        
+        // 停止朗读
+        if(window.isSpeaking && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+        }
+    } else {
+        skBox.style.display = 'none';
+        contentBox.style.display = 'block';
+        bodyBox.style.display = 'block';
+        navBox.style.display = 'flex';
+    }
+}
+
+/* 分阶段更新页面内容 */
+async function updatePageContent(data) {
+    // 1. 更新标题栏
+    document.title = data.title + ' - Smart NoteDB';
+    
+    // 2. 更新章节标题
+    const contentBox = document.querySelector('.article-header');
+    if(contentBox) {
+        const h1 = contentBox.querySelector('h1');
+        if(h1) h1.textContent = data.title;
+        
+        const meta = contentBox.querySelector('.article-meta');
+        if(meta) {
+            const wordCount = data.content.join('').length;
+            meta.innerHTML = `<span>本章字数: ${wordCount}字</span> <span>来源: ${dbKey}</span>`;
+        }
     }
     
+    // 3. 更新正文(使用 DocumentFragment 优化性能)
+    const bodyBox = document.querySelector('.content-body');
+    if(bodyBox) {
+        const fragment = document.createDocumentFragment();
+        data.content.forEach(line => {
+            const p = document.createElement('p');
+            p.textContent = line;
+            fragment.appendChild(p);
+        });
+        bodyBox.innerHTML = '';
+        bodyBox.appendChild(fragment);
+    }
+    
+    // 4. 更新导航按钮
+    const nav = document.querySelector('.bottom-nav');
+    if(nav) {
+        let html = '';
+        if(data.prev_url) {
+            const prevLink = `/read?url=${encodeURIComponent(data.prev_url)}&key=${dbKey}`;
+            html += `<a id="link-prev" href="${prevLink}" class="nav-btn">上一章</a>`;
+        } else {
+            html += `<span class="nav-btn disabled">已是开头</span>`;
+        }
+        
+        if(data.next_url) {
+            const nextLink = `/read?url=${encodeURIComponent(data.next_url)}&key=${dbKey}`;
+            html += `<a id="link-next" href="${nextLink}" class="nav-btn">下一章</a>`;
+        } else {
+            html += `<span class="nav-btn disabled" onclick="handleNoNextChapter()" style="cursor:pointer;" title="点击重新检查更新">已是末尾 🔄</span>`;
+        }
+        nav.innerHTML = html;
+    }
+    
+    // 5. 等待一帧,确保 DOM 更新完成
+    await new Promise(resolve => requestAnimationFrame(resolve));
+}
+
+/* 重新绑定 AJAX 事件 */
+function rebindAjaxEvents() {
+    setupAjaxNav('link-prev');
+    setupAjaxNav('link-next');
+}
+
+/* 预加载下一章 */
+function prefetchChapter(url) {
+    fetch('/api/prefetch', { 
+        method: 'POST', 
+        headers: {'Content-Type': 'application/json'}, 
+        body: JSON.stringify({ url: url }) 
+    }).catch(() => {}); // 静默失败
+}
+
+/* 进度条控制 */
+function showProgressBar() {
+    const bar = document.getElementById('ajaxProgressBar');
+    if(bar) bar.style.width = '0';
+}
+
+function updateProgressBar(percent) {
+    const bar = document.getElementById('ajaxProgressBar');
+    if(bar) bar.style.width = percent + '%';
+}
+
+function hideProgressBar() {
+    const bar = document.getElementById('ajaxProgressBar');
+    if(bar) {
+        bar.style.width = '100%';
+        setTimeout(() => { bar.style.width = '0'; }, 300);
+    }
+}
+
+/* 刷新目录高亮 */
+function refreshTocHighlight() {
+    const tocList = document.getElementById('tocList');
+    if(!tocList || tocList.innerHTML === '正在加载...') return;
+    
+    const items = tocList.querySelectorAll('.toc-item');
+    // 使用当前页面 URL 而不是初始 currentUrl
+    const currentPageUrl = window.location.href;
+    const normCurrent = normalizeUrl(currentPageUrl);
+    
+    items.forEach(item => {
+        const itemUrl = normalizeUrl(item.dataset.url || '');
+        if(itemUrl === normCurrent) {
+            item.classList.add('active');
+            item.classList.add('active-chap');
+            item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        } else {
+            item.classList.remove('active');
+            item.classList.remove('active-chap');
+        }
+    });
+}
+    
     document.addEventListener('DOMContentLoaded', () => {
+        const currentPath = window.location.href;
+    history.replaceState({ url: currentPath }, '', currentPath);
         setupAjaxNav('link-prev');
         setupAjaxNav('link-next');
+        
+        // 初始化阅读进度条
+        initReadingProgress();
+        
+        // [新增] 启动统计功能
+        startStatistics();
     });
+    
+    /* === 统计功能（与移动端保持一致） === */
+    function sendHeartbeat() {
+        fetch('/api/stats/heartbeat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ 
+                is_heartbeat: true, 
+                book_key: dbKey 
+            })
+        }).catch(() => {});
+    }
+    
+    function reportWordCount() {
+        const bodyEl = document.querySelector('.content-body');
+        if(bodyEl) {
+            const wordCount = bodyEl.innerText.length;
+            fetch('/api/stats/heartbeat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    words: wordCount, 
+                    book_key: dbKey 
+                })
+            }).catch(() => {});
+        }
+    }
+    
+    function startStatistics() {
+        // 初始上报
+        reportWordCount();
+        sendHeartbeat();
+        
+        // 每60秒发送心跳
+        setInterval(sendHeartbeat, 60000);
+        
+        // 每5分钟上报字数
+        setInterval(reportWordCount, 300000);
+    }
+    
+    /* 阅读进度条逻辑 */
+    function initReadingProgress() {
+        const progressBar = document.getElementById('readingProgressBar');
+        if(!progressBar) return;
+        
+        let ticking = false;
+        
+        function updateProgress() {
+            const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+            const docHeight = document.documentElement.scrollHeight - document.documentElement.clientHeight;
+            const progress = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
+            progressBar.style.width = progress + '%';
+            ticking = false;
+        }
+        
+        window.addEventListener('scroll', () => {
+            if(!ticking) {
+                window.requestAnimationFrame(updateProgress);
+                ticking = true;
+            }
+        });
+        
+        // 初始更新
+        updateProgress();
+    }
 
-    window.addEventListener('popstate', () => window.location.reload());
+    window.addEventListener('popstate', (event) => {
+    if(event.state && event.state.url) {
+        // 通过 AJAX 加载历史状态
+        loadChapter(event.state.url);
+    } else {
+        // 降级为刷新页面
+        location.reload();
+    }
+});
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowLeft') document.getElementById('link-prev')?.click();
-        if (e.key === 'ArrowRight') document.getElementById('link-next')?.click();
-        if (e.key === 'Escape') document.querySelectorAll('.modal-overlay').forEach(m => m.style.display='none');
+        // 忽略在输入框中的操作
+        if(['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+        
+        switch(e.key) {
+            case 'ArrowLeft':
+                e.preventDefault();
+                document.getElementById('link-prev')?.click();
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                document.getElementById('link-next')?.click();
+                break;
+            case 'Escape':
+                document.querySelectorAll('.modal-overlay').forEach(m => m.style.display='none');
+                break;
+            case 't':
+            case 'T':
+                if(!e.ctrlKey && !e.metaKey) {
+                    e.preventDefault();
+                    showModal('tocOverlay');
+                }
+                break;
+            case 's':
+            case 'S':
+                if(!e.ctrlKey && !e.metaKey) {
+                    e.preventDefault();
+                    showModal('settingModal');
+                }
+                break;
+        }
     });
 </script>
 

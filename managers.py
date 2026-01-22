@@ -358,6 +358,15 @@ class IsolatedDB:
             conn = get_db()
             row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
             
+            # [关键修复] 对于 :meta 结尾的 key，直接存储原始值，不要包装
+            if key.endswith(':meta'):
+                # value 已经是 JSON 字符串，直接存储
+                conn.execute("INSERT OR REPLACE INTO user_books (username, book_key, value) VALUES (?, ?, ?)", 
+                           (u, key, value))
+                conn.commit()
+                return {"status": "success", "message": f"Updated meta: {key}"}
+            
+            # 正常的书籍 key，使用包装逻辑
             current_data = {}
             if row and row[0]:
                 try: current_data = json.loads(row[0])
@@ -380,6 +389,17 @@ class IsolatedDB:
     # === 3. 核心读取逻辑 (自动解包 - 兼容旧接口) ===
     def get_val(self, key):
         """默认只返回 URL 字符串，保证旧代码不崩"""
+        # [关键修复] 对于 :meta 结尾的 key，直接返回原始值
+        if key.endswith(':meta'):
+            u = get_current_user()
+            try:
+                conn = get_db()
+                row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
+                return row[0] if row and row[0] else None
+            except:
+                return None
+        
+        # 正常的书籍 key，使用解包逻辑
         full = self.get_full_data(key)
         return full.get('url') if full else None
 

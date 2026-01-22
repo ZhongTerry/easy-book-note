@@ -95,6 +95,24 @@
         body.menu-active .top-menu { transform: translateY(0); }
         body.menu-active .bottom-menu { transform: translateY(0); }
 
+        /* === 阅读进度条（固定在页面最顶部） === */
+        #readingProgressBar {
+            position: fixed;
+            top: 0; /* 固定在页面最顶部 */
+            left: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent) 0%, #9c27b0 100%);
+            width: 0%;
+            z-index: 101; /* 高于 top-menu(100)，确保始终可见 */
+            transition: width 0.1s ease-out;
+            opacity: 0.85;
+            pointer-events: none; /* 不阻挡点击 */
+        }
+        
+        body.theme-dark #readingProgressBar {
+            opacity: 0.95;
+        }
+
         /* 功能按钮 */
         .func-grid { display: flex; height: 60px; justify-content: space-around; align-items: center; }
         .func-item {
@@ -262,6 +280,9 @@
 </head>
 <body class="theme-white">
 
+<!-- 阅读进度条 -->
+<div id="readingProgressBar"></div>
+
     <!-- 同步提示条 -->
     <div id="syncAlert" class="sync-alert">
         <span>📢 发现新进度</span>
@@ -302,6 +323,8 @@
                 {% endif %}
                 {% if article.next %}
                 <a href="/read?url={{ article.next }}&key={{ db_key }}" class="page-btn next">下一章</a>
+                {% else %}
+                <span class="page-btn" onclick="handleNoNextChapter()" style="cursor:pointer; opacity:0.6;" title="点击重新检查更新">已是末尾 🔄</span>
                 {% endif %}
             </div>
 
@@ -411,7 +434,7 @@
     const dbKey = "{{ db_key }}";
     const currentUrl = "{{ current_url }}";
     const tocUrl = "{{ article.toc_url }}";
-    const localChapterId = parseInt("{{ chapter_id }}") || -1;
+    let localChapterId = parseInt("{{ chapter_id }}") || -1;
 
     // === 核心状态 ===
     const viewport = document.getElementById('read-viewport');
@@ -563,10 +586,16 @@
 
     function autoSyncProgress() {
         if(!dbKey) return;
+        
+        const currentTitle = document.getElementById('chapter-title')?.innerText || '';
+        
+        // [新增] 调试日志
+        console.log(`[Sync] 保存进度: 书籍=${dbKey}, URL=${currentUrl}, 标题="${currentTitle}", 本地ID=${localChapterId}`);
+        
         fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
         fetch('/update', { 
             method: 'POST', headers: {'Content-Type': 'application/json'}, 
-            body: JSON.stringify({ key: dbKey, value: currentUrl, title: document.getElementById('chapter-title').innerText }) 
+            body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle }) 
         });
     }
 
@@ -743,6 +772,18 @@
             window.open(currentUrl, '_blank');
         }
     }
+    
+    // [新增] 处理"已是末尾"时重新检查更新
+    async function handleNoNextChapter() {
+        if (confirm('📖 已是最后一章\n\n是否立即重新抓取目录检查更新？')) {
+            showToast('🔄 正在重新抓取目录...');
+            await refreshTOC(); // 刷新目录
+            
+            setTimeout(() => {
+                showToast('✅ 目录已更新，请查看章节列表');
+            }, 1500);
+        }
+    }
 
     // [检查追更状态]
     async function checkSubscribeStatus() {
@@ -847,6 +888,12 @@
              if(json.code === 0) {
                  const data = json.data;
                  
+                 // [关键修复] 更新当前章节ID
+                 if(json.chapter_id !== undefined) {
+                     localChapterId = parseInt(json.chapter_id) || -1;
+                     console.log(`[AJAX] 更新章节ID: ${localChapterId}`);
+                 }
+                 
                  // 3. Update DOM
                  document.title = data.title;
                  const h1 = document.getElementById('chapter-title');
@@ -864,6 +911,8 @@
                      }
                      if(data.next_url) {
                          html += `<a href="/read?url=${encodeURIComponent(data.next_url)}&key=${dbKey}" class="page-btn next">下一章</a>`;
+                     } else {
+                         html += `<span class="page-btn" onclick="handleNoNextChapter()" style="cursor:pointer; opacity:0.6;" title="点击重新检查更新">已是末尾 🔄</span>`;
                      }
                      navArea.innerHTML = html;
                      setupMobileAjax(); // Re-bind
@@ -898,6 +947,33 @@
     }
     
     document.addEventListener('DOMContentLoaded', setupMobileAjax);
+    
+    /* === 阅读进度条逻辑 === */
+    (function initReadingProgress() {
+        const progressBar = document.getElementById('readingProgressBar');
+        const viewport = document.getElementById('read-viewport');
+        if(!progressBar || !viewport) return;
+        
+        let ticking = false;
+        
+        function updateProgress() {
+            const scrollTop = viewport.scrollTop;
+            const scrollHeight = viewport.scrollHeight - viewport.clientHeight;
+            const progress = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+            progressBar.style.width = progress + '%';
+            ticking = false;
+        }
+        
+        viewport.addEventListener('scroll', () => {
+            if(!ticking) {
+                requestAnimationFrame(updateProgress);
+                ticking = true;
+            }
+        });
+        
+        // 初始更新
+        updateProgress();
+    })();
 </script>
 
 <!-- 在设置面板 -> 功能区域添加按钮 -->

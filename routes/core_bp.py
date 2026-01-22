@@ -558,26 +558,45 @@ def update():
     # 2. 【核心修改点】计算并保存序号
     real_id = calculate_real_chapter_id(key, final_value, title)
     
+    # [新增] 调试日志：打印识别结果
+    print(f"[Sync Debug] 书籍={key}, 标题=\"{title}\", 识别ID={real_id}")
+    
     # 只有当 real_id 是有效正整数时才更新 meta
     # 如果返回 -1 (未识别)，这里直接跳过，数据库里旧的 meta 会保留
     if real_id > 0:
         try:
             import json
             # 获取旧 meta
-            old_meta_str = managers.db.get_val(f"{key}:meta")
+            meta_key = f"{key}:meta"
+            old_meta_str = managers.db.get_val(meta_key)
             meta = json.loads(old_meta_str) if old_meta_str else {}
             
             # 更新序号和时间戳
             meta['chapter_id'] = real_id
             meta['updated_at'] = int(time.time())
             
-            managers.db.update(f"{key}:meta", json.dumps(meta))
-            # print(f"[Sync] 识别成功：{title} -> ID {real_id}")
+            # [关键调试] 打印即将保存的内容
+            print(f"[Sync Debug] 准备保存 - Key='{meta_key}', Value='{json.dumps(meta)}'")
+            
+            save_result = managers.db.update(meta_key, json.dumps(meta))
+            
+            # [关键调试] 打印保存结果
+            print(f"[Sync Debug] 保存结果: {save_result}")
+            
+            # 验证保存是否成功（立即读回来检查）
+            verify_str = managers.db.get_val(meta_key)
+            if verify_str:
+                print(f"[Sync] ✅ 识别并保存成功：{title} -> ID {real_id}, 验证读取: {verify_str}")
+            else:
+                print(f"[Sync] ❌ 保存失败！无法读回数据")
+                
         except Exception as e:
             print(f"[Sync] Meta save error: {e}")
+            import traceback
+            traceback.print_exc()
     else:
         # 如果没识别到，打印一个日志方便调试，但不写库
-        print(f"[Sync] ⚠️ 章节识别失败，跳过 Meta 记录: {title}")
+        print(f"[Sync] ⚠️ 章节识别失败，跳过 Meta 记录: \"{title}\"")
 
     # 3. 历史版本 (仅手动)
     if is_manual and res.get('status') == 'success':
@@ -774,13 +793,24 @@ def get_val():
     
     if v:
         # 直接读取 meta，不再进行任何爬虫或解析
-        meta_str = managers.db.get_val(f"{key}:meta")
+        meta_key = f"{key}:meta"
+        meta_str = managers.db.get_val(meta_key)
         meta = {}
+        
+        # [关键调试] 打印读取的详细信息
+        print(f"[GetValue Debug] 书籍={key}")
+        print(f"[GetValue Debug] 读取Key='{meta_key}'")
+        print(f"[GetValue Debug] 读取结果='{meta_str}'")
+        
         if meta_str:
             try: 
                 import json
-                meta = json.loads(meta_str) 
-            except: pass
+                meta = json.loads(meta_str)
+                print(f"[GetValue Debug] 解析后meta={meta}")
+            except Exception as e:
+                print(f"[GetValue Error] 书籍={key}, meta解析失败: {e}")
+        else:
+            print(f"[GetValue Debug] meta_str为空或None")
         
         return jsonify({
             "status": "success", 
