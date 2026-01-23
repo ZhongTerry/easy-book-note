@@ -424,6 +424,10 @@
     <div class="drawer-overlay" id="sourceOverlay" onclick="closeSourceModal()"></div>
     <div class="source-modal" id="sourceModal">
         <div class="drawer-header">切换书源 <span onclick="closeSourceModal()" style="float:right;">×</span></div>
+        <div style="padding:12px 20px; display:flex; gap:8px; align-items:center; border-bottom:1px solid var(--border);">
+            <input id="sourceTitleInput" placeholder="书名识别错误？可手动输入" style="flex:1; height:34px; border:1px solid var(--border); border-radius:8px; padding:0 10px; font-size:12px; background:var(--menu-bg); color:var(--text);" />
+            <button class="p-btn p-btn-sm" onclick="openSourceModal(true)">重新搜索</button>
+        </div>
         <div class="drawer-list" id="sourceList">
             <div style="text-align:center; padding:20px; color:#999;">搜索中...</div>
         </div>
@@ -710,15 +714,27 @@
     // 换源
     // === 换源逻辑 (修复版) ===
     
-    function openSourceModal() {
+    function getManualSourceTitle() {
+        const input = document.getElementById('sourceTitleInput');
+        return input ? input.value.trim() : '';
+    }
+
+    function openSourceModal(force = false) {
         // 1. 纯 Class 操作：添加 .active
         document.getElementById('sourceOverlay').classList.add('active');
         document.getElementById('sourceModal').classList.add('active');
         
         // 2. 发起请求 (保持不变)
+        const manualTitle = getManualSourceTitle();
         fetch('/api/source/list', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ key: dbKey, url: currentUrl, title: document.getElementById('chapter-title').innerText })
+            body: JSON.stringify({
+                key: dbKey,
+                url: currentUrl,
+                title: document.getElementById('chapter-title').innerText,
+                manual_book_name: manualTitle,
+                force
+            })
         }).then(r=>r.json()).then(json => {
             const list = document.getElementById('sourceList');
             if(json.status==='success') {

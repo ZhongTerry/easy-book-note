@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="/purecss/pure2.1.css">
     <!-- 在 <head> 中添加 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <title>{{ article.title }} - Smart NoteDB</title>
@@ -210,6 +209,55 @@
             cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 6px;
         }
         .btn-action:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* === 换源手动书名输入 === */
+        .source-title-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin: 10px 0 15px 0;
+            padding: 10px;
+            border: 1px solid #eef2f7;
+            border-radius: 10px;
+            background: #f8fafc;
+        }
+        .source-title-input {
+            flex: 1;
+            height: 34px;
+            padding: 0 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 12px;
+            background: #fff;
+        }
+        .source-title-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+        }
+        .source-search-btn {
+            height: 34px;
+            padding: 0 12px;
+            border: 1px solid var(--accent);
+            background: var(--accent);
+            color: #fff;
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: 0.2s;
+        }
+        .source-search-btn:hover { filter: brightness(1.05); }
+
+        body.dark-mode .source-title-row {
+            background: #1f2937;
+            border-color: #374151;
+        }
+        body.dark-mode .source-title-input {
+            background: #111827;
+            border-color: #374151;
+            color: #e5e7eb;
+        }
 
         /* 目录内专用刷新按钮 */
         .btn-refresh-toc { background: #eef2ff; color: var(--accent); border: 1px solid var(--accent); padding: 4px 10px; border-radius: 4px; font-size: 12px; cursor: pointer; }
@@ -941,6 +989,10 @@ body.dark-mode #settingsModal input.p-input {
             <h3 class="modal-title">选择备选源</h3>
             <button onclick="document.getElementById('sourceModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
         </div>
+        <div class="source-title-row">
+            <input id="sourceTitleInput" class="p-input source-title-input" placeholder="书名识别错误？可手动输入" />
+            <button class="source-search-btn" onclick="loadSourceList(true)">重新搜索</button>
+        </div>
         <div id="sourceLoading" style="text-align:center; padding:20px; color:#999;">🔍 正在匹配可用源站...（预计 5~15 秒）</div>
         <div id="sourceList"></div>
     </div>
@@ -1628,27 +1680,75 @@ body.dark-mode #settingsModal input.p-input {
     // === 换源逻辑 ===
     let switchContext = {}; // 上下文
 
+    function getSourceTitleStorageKey() {
+        return `pc_manual_source_title_${dbKey || 'unknown'}`;
+    }
+    function saveManualSourceTitle(value) {
+        try {
+            const key = getSourceTitleStorageKey();
+            if (!key) return;
+            if (value) localStorage.setItem(key, value);
+            else localStorage.removeItem(key);
+        } catch (e) {}
+    }
+    function loadManualSourceTitle() {
+        try {
+            const input = document.getElementById('sourceTitleInput');
+            if (!input) return;
+            const saved = localStorage.getItem(getSourceTitleStorageKey());
+            if (saved && !input.value) input.value = saved;
+        } catch (e) {}
+    }
+    function bindManualSourceTitleInput() {
+        const input = document.getElementById('sourceTitleInput');
+        if (!input || input.dataset.bound) return;
+        input.dataset.bound = 'true';
+        input.addEventListener('input', () => {
+            const v = input.value.trim();
+            saveManualSourceTitle(v);
+        });
+    }
+    function initManualSourceTitle() {
+        loadManualSourceTitle();
+        bindManualSourceTitleInput();
+    }
+
+    function getManualSourceTitle() {
+        const input = document.getElementById('sourceTitleInput');
+        return input ? input.value.trim() : '';
+    }
+
     function triggerSourceModal() {
         document.getElementById('settingsModal').style.display = 'none';
         showModal('sourceModal');
+        initManualSourceTitle();
         loadSourceList();
     }
-    async function loadSourceList() {
+    async function loadSourceList(force = false) {
         const list = document.getElementById('sourceList');
         const loading = document.getElementById('sourceLoading');
         list.innerHTML = ''; loading.style.display = 'block';
         loading.innerText = '🔍 正在聚合全网搜索结果...';
+        const manualTitle = getManualSourceTitle();
+        saveManualSourceTitle(manualTitle);
         
         try {
             const res = await fetch('/api/source/list', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ key: dbKey, url: currentUrl, title: document.getElementById('chapterTitle').innerText })
+                body: JSON.stringify({
+                    key: dbKey,
+                    url: currentUrl,
+                    title: document.getElementById('chapterTitle').innerText,
+                    manual_book_name: manualTitle,
+                    force
+                })
             });
             const json = await res.json();
             loading.style.display = 'none';
             if (json.status === 'success') {
                 switchContext = json.match_info || {};
+                switchContext.current_title = switchContext.current_title || document.getElementById('chapterTitle').innerText;
                 list.innerHTML = json.data.map(src => {
                     let domain = '';
                     try { domain = new URL(src.url).hostname; } catch(e) { domain = src.url; }

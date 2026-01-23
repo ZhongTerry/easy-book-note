@@ -688,6 +688,8 @@ def api_source_list():
     current_url = request.json.get('url')
     book_key = request.json.get('key')
     frontend_title = request.json.get('title', '') # 章节标题
+    manual_book_name = (request.json.get('manual_book_name') or '').strip()
+    force = bool(request.json.get('force'))
     
     if not current_url: return jsonify({"status": "error", "msg": "参数错误"})
 
@@ -703,7 +705,11 @@ def api_source_list():
                 break
         if book_name: break
 
-    # 2. 【关键补丁】如果书单没找到，直接“现场爬取”当前阅读页提取书名
+    # 2. 手动书名优先 (避免现场爬取/命中缓存)
+    if manual_book_name:
+        book_name = manual_book_name
+
+    # 3. 【关键补丁】如果书单没找到，直接“现场爬取”当前阅读页提取书名
     if not book_name or re.match(r'^[a-zA-Z0-9_]+$', book_name):
         print(f"[Switch] 无法从本地获取书名，正在现场爬取源站: {current_url}")
         try:
@@ -737,7 +743,7 @@ def api_source_list():
     print(f"[Switch] 准备搜索新源，关键词: {book_name}")
     # 改为直接返回搜索结果，不做耗时的验证
     from spider_core import searcher
-    sources = searcher.search_bing_cached(book_name)
+    sources = searcher.search_bing(book_name) if force else searcher.search_bing_cached(book_name)
     
     if not sources:
         return jsonify({"status": "failed", "msg": "全网未找到相关书籍"})
