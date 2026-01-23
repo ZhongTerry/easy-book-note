@@ -133,7 +133,7 @@ def download_file():
     if not os.path.exists(filepath):
         return "File not found", 404
     
-    return send_from_directory(DL_DIR, safe_filename, as_attachment=True)
+    return send_from_directory(DL_DIR, safe_filename, as_attachment=True, conditional=False, max_age=0)
 
 @pro_bp.route('/api/pro/delete_file', methods=['POST'])
 @pro_required

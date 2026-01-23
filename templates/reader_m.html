@@ -6,6 +6,8 @@
     <title>{{ article.title }}</title>
     <meta name="theme-color" content="#ffffff" id="metaThemeColor">
     
+    <!-- 引入 PureCSS -->
+    <link rel="stylesheet" href="/purecss/pure2.1.css">
     <!-- 引入 Remix Icon -->
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
 
@@ -433,7 +435,7 @@
     // 注入后端变量
     const dbKey = "{{ db_key }}";
     let currentUrl = "{{ current_url }}"; // AJAX 翻页后需更新
-    const tocUrl = "{{ article.toc_url }}";
+    let tocUrl = "{{ article.toc_url }}";
     let localChapterId = parseInt("{{ chapter_id }}") || -1;
 
     // === 核心状态 ===
@@ -529,9 +531,10 @@
     
     function applyConfig() {
         document.documentElement.style.setProperty('--font-size', config.fontSize + 'px');
-        document.body.className = ''; 
+        document.body.classList.remove('theme-white', 'theme-sepia', 'theme-dark');
         document.body.classList.add(`theme-${config.theme}`);
         if(isMenuOpen) document.body.classList.add('menu-active');
+        else document.body.classList.remove('menu-active');
         const metaColors = {'white': '#ffffff', 'sepia': '#f6f1e1', 'dark': '#121212'};
         document.getElementById('metaThemeColor').content = metaColors[config.theme];
         localStorage.setItem('reader_v2_cfg', JSON.stringify(config));
@@ -631,8 +634,9 @@
             const data = await res.json();
             
             if(data && data.chapters) {
+                const normCurrent = normalizeUrl(currentUrl);
                 list.innerHTML = data.chapters.map(c => {
-                    const isCurrent = c.url === currentUrl; 
+                    const isCurrent = normalizeUrl(c.url) === normCurrent; 
                     const activeClass = isCurrent ? 'active' : '';
                     return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
                 }).join('');
@@ -681,9 +685,10 @@
                     const data = await res.json();
                     
                     if(data.chapters) {
+                        const normCurrent = normalizeUrl(currentUrl);
                         list.innerHTML = data.chapters.map(c => {
                             // 简单高亮当前章节
-                            const isCurrent = c.url === currentUrl; 
+                            const isCurrent = normalizeUrl(c.url) === normCurrent; 
                             const activeClass = isCurrent ? 'active' : '';
                             return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
                         }).join('');
@@ -760,7 +765,36 @@
 
     // 辅助
     function forceRefresh() { location.href += (location.href.includes('?')?'&':'?') + 'force=true'; }
-    function nativeShare() { if(navigator.share) navigator.share({title:document.title, url:location.href}); else showToast("已复制链接"); }
+    async function nativeShare() {
+        if(navigator.share) {
+            try { await navigator.share({title:document.title, url:location.href}); } catch (e) {}
+            return;
+        }
+        const ok = await copyText(location.href);
+        showToast(ok ? "已复制链接" : "复制失败");
+    }
+    async function copyText(text) {
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+        } catch (e) {}
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        } catch (e) {
+            return false;
+        }
+    }
     function showToast(m) { const t=document.getElementById('toast'); t.innerText=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),3000); }
     function updateTime() { const d=new Date(); document.getElementById('sys-time').innerText = `${d.getHours().toString().padStart(2,0)}:${d.getMinutes().toString().padStart(2,0)}`; }
     function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
@@ -815,7 +849,7 @@
         
         // 尝试获取当前目录 URL (如果没有 toc_url, 尝试用当前 URL)
         // 这里的 tocUrl 来自后端模板注入
-        const targetToc = "{{ article.toc_url }}" || currentUrl;
+        const targetToc = tocUrl || currentUrl;
         
         // 获取当前 ID: 尝试从 URL 正则，或者后端注入
         // 简单正则提取
@@ -921,10 +955,13 @@
                  // Reset Progress & Scroll
                  const progressSpan = document.getElementById('read-progress');
                  if(progressSpan) progressSpan.innerText = '0%';
+                 const progressBar = document.getElementById('readingProgressBar');
+                 if(progressBar) progressBar.style.width = '0%';
                  
-                 // 更新当前 URL，保证后续 /update 使用最新章节
-                 currentUrl = url;
-                 history.pushState(null, '', url);
+                 // 更新当前 URL 与 tocUrl，保证后续 /update 与目录使用最新章节
+                 if (json.current_url) currentUrl = json.current_url;
+                 if (data.toc_url) tocUrl = data.toc_url;
+                 history.pushState({ url }, '', url);
                  
                  if(window.speechSynthesis) window.speechSynthesis.cancel();
                  
@@ -935,6 +972,10 @@
                         body: JSON.stringify({ url: data.next_url }) 
                     }), 2000);
                  }
+
+                 // 统计与同步
+                 reportWordCount();
+                 autoSyncProgress();
 
              } else {
                  location.href = url;
@@ -948,7 +989,17 @@
          }
     }
     
-    document.addEventListener('DOMContentLoaded', setupMobileAjax);
+    document.addEventListener('DOMContentLoaded', () => {
+        setupMobileAjax();
+        history.replaceState({ url: location.href }, '', location.href);
+    });
+    window.addEventListener('popstate', (event) => {
+        if (event.state && event.state.url) {
+            loadChapterMobile(event.state.url);
+        } else {
+            location.reload();
+        }
+    });
     
     /* === 阅读进度条逻辑 === */
     (function initReadingProgress() {
@@ -977,19 +1028,5 @@
         updateProgress();
     })();
 </script>
-
-<!-- 在设置面板 -> 功能区域添加按钮 -->
-            <div class="opt-row">
-                <span>功能</span>
-                <div style="display:flex; gap:10px; font-size:12px; flex-wrap: wrap;"> 
-                    <button class="p-btn p-btn-sm" onclick="toggleTTS()" id="ttsBtn">🎧 朗读</button>
-                    <button class="p-btn p-btn-sm" onclick="openSourceModal()">⇄ 换源</button>
-                    <!-- [新增] 追更按钮 -->
-                    <button class="p-btn p-btn-sm" id="subBtn" onclick="toggleSubscribe()">🔔 追更</button>
-                    
-                    <button class="p-btn p-btn-sm" onclick="jumpToSource()" style="background:#f0f0f0; color:#666;">🔗 原文</button>
-                </div>
-            </div>
- 
 </body>
 </html>

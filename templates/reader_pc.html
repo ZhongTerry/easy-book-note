@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/purecss/pure2.1.css">
     <!-- 在 <head> 中添加 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <title>{{ article.title }} - Smart NoteDB</title>
@@ -1872,7 +1873,7 @@ async function loadChapter(url) {
             await updatePageContent(data);
             
             // 5. 更新 URL & 当前章节状态，保证后续 /update 使用最新地址
-            currentUrl = url;
+            if(json.current_url) currentUrl = json.current_url;
             history.pushState({ url }, '', url);
             
             updateProgressBar(95);
