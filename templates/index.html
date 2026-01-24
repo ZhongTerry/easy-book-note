@@ -2722,38 +2722,15 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
 // 在 renderTable 函数末尾加一行: renderUpdates();
         // === 替换 index.html 中的 selectResult 函数 ===
         async function selectResult(k, v) {
-            // 1. 先填入 Key
+            // 1. 填入 Key 和 Value
             document.getElementById('key').value = k;
+            document.getElementById('value').value = v;
             
-            // 2. Value 框显示加载状态，提升体验
-            const vInput = document.getElementById('value');
-            vInput.value = "正在智能解析第一章...";
-            vInput.classList.add('loading'); // 可选：你可以给这个类加点灰色样式
-            
-            // 3. 关闭模态框
+            // 2. 关闭模态框
             PureUI.modal.close('searchModal'); 
             
-            try {
-                // 4. 请求后端解析第一章
-                const res = await fetch(`${API_URL}/api/resolve_head`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ url: v })
-                });
-                const data = await res.json();
-                
-                if (data.status === 'success' && data.url) {
-                    vInput.value = data.url;
-                    showMsg(`✅ 已定位到第一章`, 'success');
-                } else {
-                    // 失败则回退到目录页
-                    vInput.value = v;
-                    showMsg(`⚠️ 解析第一章超时，已填入目录`, 'info');
-                }
-            } catch (e) {
-                console.error(e);
-                vInput.value = v; // 出错也回退
-            }
+            // 3. 提示用户 - 相信自动识别功能
+            showMsg(`✅ 已填入链接，请点击添加（将自动识别目录或章节）`, 'success');
         }
 
         async function handleDrop(e) {

@@ -1277,10 +1277,69 @@ class TaskManager:
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=5)
         self.tasks = {} # task_id -> {status, result, error, created_at, message}
+        self.redis_url = os.environ.get('REDIS_URL')
+        self.use_redis = False
+        self.r = None
+        if self.redis_url:
+            try:
+                self.r = redis.from_url(self.redis_url, decode_responses=True)
+                self.r.ping()
+                self.use_redis = True
+                print("✅ [TaskMgr] Redis 连接成功，任务状态持久化启用")
+            except Exception as e:
+                print(f"⚠️ [TaskMgr] Redis 连接失败 ({e})，降级为内存模式")
+        else:
+            print("ℹ️ [TaskMgr] 未配置 REDIS_URL，使用内存任务状态")
+
+    def _redis_key(self, task_id):
+        return f"task:{task_id}"
+
+    def _set_task(self, task_id, data, expire=3600):
+        if not self.use_redis:
+            self.tasks[task_id] = data
+            return
+        try:
+            payload = data.copy()
+            # 序列化 result
+            if 'result' in payload:
+                payload['result'] = json.dumps(payload['result'], ensure_ascii=False) if payload['result'] is not None else ''
+            self.r.hset(self._redis_key(task_id), mapping=payload)
+            self.r.expire(self._redis_key(task_id), expire)
+        except Exception as e:
+            print(f"[TaskMgr] Redis 写入失败: {e}")
+            self.tasks[task_id] = data
+
+    def _get_task(self, task_id):
+        if not self.use_redis:
+            return self.tasks.get(task_id)
+        try:
+            data = self.r.hgetall(self._redis_key(task_id))
+            if not data:
+                return None
+            # 反序列化 result
+            result = data.get('result', '')
+            if result:
+                try:
+                    data['result'] = json.loads(result)
+                except Exception:
+                    data['result'] = result
+            else:
+                data['result'] = None
+            # 类型修正
+            if 'progress' in data:
+                try: data['progress'] = int(data['progress'])
+                except: pass
+            if 'created_at' in data:
+                try: data['created_at'] = float(data['created_at'])
+                except: pass
+            return data
+        except Exception as e:
+            print(f"[TaskMgr] Redis 读取失败: {e}")
+            return self.tasks.get(task_id)
 
     def submit(self, func, *args, **kwargs):
         task_id = str(uuid.uuid4())
-        self.tasks[task_id] = {
+        task_data = {
             "status": "pending",
             "progress": 0,
             "result": None,
@@ -1288,6 +1347,7 @@ class TaskManager:
             "message": "Waiting...",
             "created_at": time.time()
         }
+        self._set_task(task_id, task_data)
         # 将 update_callback 注入到 kwargs 中，供 func 调用
         kwargs['_task_update_cb'] = self._create_updater(task_id)
         self.executor.submit(self._worker, task_id, func, *args, **kwargs)
@@ -1295,21 +1355,24 @@ class TaskManager:
 
     def _create_updater(self, task_id):
         def updater(progress=None, msg=None, result_delta=None):
-            if task_id in self.tasks:
-                if progress is not None: self.tasks[task_id]["progress"] = progress
-                if msg is not None: self.tasks[task_id]["message"] = msg
-                # Support intermediate results (list only for now)
-                if result_delta is not None:
-                     if self.tasks[task_id]["result"] is None: self.tasks[task_id]["result"] = []
-                     if isinstance(self.tasks[task_id]["result"], list) and isinstance(result_delta, list):
-                         self.tasks[task_id]["result"].extend(result_delta)
+            data = self._get_task(task_id) or {}
+            if progress is not None: data["progress"] = progress
+            if msg is not None: data["message"] = msg
+            # Support intermediate results (list only for now)
+            if result_delta is not None:
+                if data.get("result") is None: data["result"] = []
+                if isinstance(data.get("result"), list) and isinstance(result_delta, list):
+                    data["result"].extend(result_delta)
+            self._set_task(task_id, data)
         return updater
 
     def _worker(self, task_id, func, *args, **kwargs):
         print(f"[Task] Starting {task_id}")
         callback = kwargs.pop('_task_update_cb', None)
         try:
-            self.tasks[task_id]["status"] = "running"
+            data = self._get_task(task_id) or {}
+            data["status"] = "running"
+            self._set_task(task_id, data)
             
             # Pass user_callback if the function accepts it
             # We assume func signature might allow **kwargs or explicit 'callback'
@@ -1325,22 +1388,32 @@ class TaskManager:
             
             # Only overwrite result if it's returned and task result is not managed incrementally
             # Or assume the function returns the FINAL COMPLETE result.
-            self.tasks[task_id]["result"] = res
-            self.tasks[task_id]["status"] = "completed"
-            self.tasks[task_id]["progress"] = 100
+            data = self._get_task(task_id) or {}
+            data["result"] = res
+            data["status"] = "completed"
+            data["progress"] = 100
+            self._set_task(task_id, data)
             print(f"[Task] Completed {task_id}")
         except Exception as e:
             print(f"[Task Error] {task_id}: {e}")
             import traceback
             traceback.print_exc()
+            data = self._get_task(task_id) or {}
+            data["status"] = "failed"
+            data["error"] = str(e)
+            data["message"] = "Task failed"
+            self._set_task(task_id, data)
     def get_status(self, task_id):
         # Debug: print keys if not found
-        if task_id not in self.tasks:
-             print(f"[TaskMgr] Checking {task_id} -> Not Found. Keys: {list(self.tasks.keys())}")
-        return self.tasks.get(task_id)
+        t = self._get_task(task_id)
+        if not t:
+            print(f"[TaskMgr] Checking {task_id} -> Not Found")
+        return t
 
     def cleanup(self):
         # 简单清理超过1小时的任务
+        if self.use_redis:
+            return
         now = time.time()
         to_del = [k for k,v in self.tasks.items() if now - v['created_at'] > 3600]
         for k in to_del: del self.tasks[k]
