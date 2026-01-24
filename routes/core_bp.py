@@ -1790,3 +1790,91 @@ def api_latency_stats():
     except Exception as e:
         print(f"[Latency Stats Error] {e}")
         return jsonify({"status": "error", "msg": str(e)})
+
+@core_bp.route('/api/cluster/latency_update', methods=['POST'])
+@login_required
+def api_latency_update():
+    """手动更新节点延迟权重（管理员补救功能）"""
+    try:
+        # 权限检查
+        user_role = managers.role_manager.get_role(session.get('user', {}).get('username'))
+        if user_role not in ['admin', 'pro']:
+            return jsonify({"status": "error", "msg": "权限不足，需要管理员权限"})
+        
+        if not managers.cluster_manager.use_redis:
+            return jsonify({"status": "error", "msg": "未启用Redis集群模式"})
+        
+        data = request.json
+        domain = data.get('domain')
+        node_uuid = data.get('node_uuid')
+        latency_ms = data.get('latency_ms')
+        
+        if not all([domain, node_uuid, latency_ms is not None]):
+            return jsonify({"status": "error", "msg": "缺少必需参数"})
+        
+        # 验证延迟值合理性
+        try:
+            latency_ms = float(latency_ms)
+            if latency_ms < -1 or latency_ms > 60000:
+                return jsonify({"status": "error", "msg": "延迟值必须在-1到60000之间"})
+        except ValueError:
+            return jsonify({"status": "error", "msg": "延迟值必须是数字"})
+        
+        # 直接写入Redis（跳过EWMA平滑，管理员强制设置）
+        key = f"crawler:latency:{domain}"
+        managers.cluster_manager.r.hset(key, node_uuid, int(latency_ms))
+        managers.cluster_manager.r.expire(key, 7 * 86400)
+        
+        # 计算新的权重系数
+        coefficient = managers.cluster_manager._get_speed_coefficient(latency_ms)
+        
+        return jsonify({
+            "status": "success",
+            "msg": "权重已更新",
+            "new_coefficient": round(coefficient, 2)
+        })
+    
+    except Exception as e:
+        print(f"[Latency Update Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})
+
+@core_bp.route('/api/cluster/latency_reset', methods=['POST'])
+@login_required
+def api_latency_reset():
+    """重置某个域名或节点的权重数据"""
+    try:
+        # 权限检查
+        user_role = managers.role_manager.get_role(session.get('user', {}).get('username'))
+        if user_role not in ['admin', 'pro']:
+            return jsonify({"status": "error", "msg": "权限不足，需要管理员权限"})
+        
+        if not managers.cluster_manager.use_redis:
+            return jsonify({"status": "error", "msg": "未启用Redis集群模式"})
+        
+        data = request.json
+        domain = data.get('domain')
+        node_uuid = data.get('node_uuid')
+        
+        if domain:
+            key = f"crawler:latency:{domain}"
+            if node_uuid:
+                # 删除特定节点
+                managers.cluster_manager.r.hdel(key, node_uuid)
+                msg = f"已重置 {domain} 的节点 {node_uuid[:8]}"
+            else:
+                # 删除整个域名
+                managers.cluster_manager.r.delete(key)
+                msg = f"已重置 {domain} 的所有节点权重"
+        else:
+            # 删除所有权重数据
+            pattern = "crawler:latency:*"
+            keys = managers.cluster_manager.r.keys(pattern)
+            if keys:
+                managers.cluster_manager.r.delete(*keys)
+            msg = f"已重置所有权重数据（共 {len(keys)} 个域名）"
+        
+        return jsonify({"status": "success", "msg": msg})
+    
+    except Exception as e:
+        print(f"[Latency Reset Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})

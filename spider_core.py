@@ -24,14 +24,17 @@ from curl_cffi import requests as cffi_requests, CurlHttpVersion
 # spider_core.py
 
 def _remote_request(endpoint, payload):
+    """
+    远程爬取请求（带延迟自动记录）
+    返回: (data, worker_uuid, latency_ms) 或 None
+    """
     # 1. 检查 Redis 是否可用
-    # 既然是 Pull 模式，必须依赖 Redis 来解耦
-    sys_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
     try:
         from managers import cluster_manager
         if not cluster_manager.use_redis:
             return None # 没 Redis 只能跑本地
-    except: return None
+    except: 
+        return None
 
     # 2. 构造任务
     import uuid
@@ -49,31 +52,47 @@ def _remote_request(endpoint, payload):
     # 3. 写入队列 (LPUSH 左进)
     try:
         cluster_manager.r.lpush("crawler:queue:pending", json.dumps(task_package))
-        # print(f"[Cluster] 任务已入队: {task_id}")
     except Exception as e:
         print(f"[Cluster] Redis 写入失败: {e}")
         return None
 
-    # 4. 阻塞等待结果 (轮询 Redis)
-    # 最多等 25 秒 (留 5 秒给 Flask 超时)
+    # 4. 阻塞等待结果 (轮询 Redis) - 记录延迟
     start_time = time.time()
     result_key = f"crawler:result:{task_id}"
     
     while time.time() - start_time < 25:
         res = cluster_manager.r.get(result_key)
         if res:
-            # 拿到结果了！
-            cluster_manager.r.delete(result_key) # 读完即焚
+            # 计算延迟
+            latency_ms = int((time.time() - start_time) * 1000)
+            
+            # 删除结果（读完即焚）
+            cluster_manager.r.delete(result_key)
             json_res = json.loads(res)
             
             if json_res.get('status') == 'success':
-                return json_res.get('data')
+                data = json_res.get('data')
+                worker_uuid = json_res.get('worker_uuid', 'unknown')
+                
+                # [核心] 自动记录延迟到权重系统
+                url = payload.get('url', '')
+                if url and worker_uuid != 'unknown':
+                    cluster_manager.record_latency(url, worker_uuid, latency_ms)
+                    print(f"[Cluster] ✅ 任务完成 {task_id[:8]} 耗时{latency_ms}ms by {worker_uuid[:8]}")
+                
+                return data
             else:
-                return None # 远程报错
+                # 远程报错也记录（给一个惩罚性延迟）
+                worker_uuid = json_res.get('worker_uuid', 'unknown')
+                url = payload.get('url', '')
+                if url and worker_uuid != 'unknown':
+                    cluster_manager.record_latency(url, worker_uuid, -1)  # -1表示错误
+                    print(f"[Cluster] ❌ 任务失败 {task_id[:8]} by {worker_uuid[:8]}")
+                return None
         
         time.sleep(0.2) # 每 0.2 秒看一眼
 
-    print(f"[Cluster] ⚠️ 任务 {task_id} 等待超时 (无 Worker 接单)")
+    print(f"[Cluster] ⚠️ 任务 {task_id[:8]} 等待超时 (无 Worker 接单)")
     return None
 def parse_chapter_id(text):
     if not text: return -1

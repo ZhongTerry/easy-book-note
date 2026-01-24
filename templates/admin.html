@@ -79,6 +79,36 @@
             </div>
         </div>
     </div>
+
+    <!-- 自适应权重系统监控 -->
+    <div class="stats-card" style="margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3>⚖️ 自适应权重系统</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <span class="p-tag p-tag-blue" style="font-size: 11px;">EWMA α=0.15</span>
+                <button class="p-btn p-btn-sm p-btn-outline" onclick="openWeightResetModal()" style="font-size: 11px; padding: 4px 10px;">
+                    ⚠️ 重置权重
+                </button>
+            </div>
+        </div>
+        
+        <div id="weightSystemContent" style="min-height: 100px;">
+            <div style="text-align:center; color:#999; padding:30px;">
+                <div style="font-size:14px; margin-bottom:10px;">📊 加载权重数据中...</div>
+                <div style="font-size:12px; color:#ccc;">需要Redis集群模式支持</div>
+            </div>
+        </div>
+        
+        <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center;">
+            <div style="font-size: 12px; color: #666;">
+                <span style="color: #10b981;">●</span> 极快 &lt;500ms
+                <span style="color: #4f46e5; margin-left: 10px;">●</span> 正常 &lt;2s
+                <span style="color: #f59e0b; margin-left: 10px;">●</span> 较慢 &lt;5s
+                <span style="color: #ef4444; margin-left: 10px;">●</span> 很慢 &gt;5s
+            </div>
+            <button class="p-btn p-btn-sm p-btn-outline" onclick="loadLatencyStats()" style="font-size: 12px;">🔄 刷新</button>
+        </div>
+    </div>
     <!-- admin.html -->
 
 <!-- 在 grid-3 下方或者合适的位置插入 -->
@@ -421,16 +451,117 @@ async function pollSpeedResults() {
         }
     }
 
+    // --- 5. 权重系统监控 ---
+    async function loadLatencyStats() {
+        try {
+            const res = await fetch('/api/cluster/latency_stats');
+            const json = await res.json();
+            
+            if (json.status === 'error') {
+                document.getElementById('weightSystemContent').innerHTML = `
+                    <div style="text-align:center; color:#f59e0b; padding:30px;">
+                        <div style="font-size:14px; margin-bottom:10px;">⚠️ ${json.msg}</div>
+                        <div style="font-size:12px; color:#999;">请确保已配置REDIS_URL环境变量</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            const data = json.data;
+            const domains = Object.keys(data);
+            
+            if (domains.length === 0) {
+                document.getElementById('weightSystemContent').innerHTML = `
+                    <div style="text-align:center; color:#999; padding:30px;">
+                        <div style="font-size:14px; margin-bottom:10px;">📭 暂无权重数据</div>
+                        <div style="font-size:12px; color:#ccc;">等待节点开始爬取任务后会自动记录</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            // 渲染权重数据
+            let html = '<div style="display: grid; gap: 15px;">';
+            
+            for (const domain of domains.slice(0, 5)) { // 只显示前5个域名
+                const nodes = data[domain];
+                const nodeList = Object.entries(nodes);
+                
+                html += `
+                    <div style="background: #f9fafb; padding: 15px; border-radius: 8px; border-left: 3px solid #4f46e5;">
+                        <div style="font-weight: bold; margin-bottom: 10px; font-size: 13px; color: #374151;">
+                            🌐 ${domain}
+                        </div>
+                        <div style="display: grid; gap: 8px;">
+                `;
+                
+                for (const [nodeUuid, stats] of nodeList.slice(0, 3)) { // 每个域名最多显示3个节点
+                    const statusColor = 
+                        stats.latency_ms < 500 ? '#10b981' : 
+                        stats.latency_ms < 2000 ? '#4f46e5' : 
+                        stats.latency_ms < 5000 ? '#f59e0b' : '#ef4444';
+                    
+                    const nodeShortId = nodeUuid.substring(0, 8);
+                    
+                    html += `
+                        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="color: ${statusColor}; font-size: 16px;">●</span>
+                                <span style="color: #6b7280; font-family: monospace;">${nodeShortId}</span>
+                            </div>
+                            <div style="display: flex; gap: 12px; align-items: center;">
+                                <span style="color: ${statusColor}; font-weight: bold;">${Math.round(stats.latency_ms)}ms</span>
+                                <span style="color: #9ca3af;">×${stats.weight_coefficient}</span>
+                                <span class="p-badge" style="font-size: 10px; background: ${statusColor}20; color: ${statusColor}; border: 1px solid ${statusColor}40;">
+                                    ${stats.status}
+                                </span>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                if (nodeList.length > 3) {
+                    html += `<div style="font-size: 11px; color: #9ca3af; text-align: right;">还有 ${nodeList.length - 3} 个节点...</div>`;
+                }
+                
+                html += '</div></div>';
+            }
+            
+            if (domains.length > 5) {
+                html += `<div style="font-size: 12px; color: #9ca3af; text-align: center; padding-top: 5px;">
+                    还有 ${domains.length - 5} 个域名的权重数据未显示
+                </div>`;
+            }
+            
+            html += '</div>';
+            
+            document.getElementById('weightSystemContent').innerHTML = html;
+            
+        } catch(e) {
+            console.error('加载权重数据失败:', e);
+            document.getElementById('weightSystemContent').innerHTML = `
+                <div style="text-align:center; color:#ef4444; padding:30px;">
+                    <div style="font-size:14px; margin-bottom:10px;">❌ 加载失败</div>
+                    <div style="font-size:12px; color:#999;">${e.message}</div>
+                </div>
+            `;
+        }
+    }
+
     // 初始化
     window.onload = () => {
         initChart();
         loadUsers();
         loadSystemSummary();
         loadDashboardStats();
+        loadLatencyStats(); // 加载权重数据
         
         // 立即加载一次集群状态，然后每 3 秒刷新
         loadClusterStatus();
         setInterval(loadClusterStatus, 3000);
+        
+        // 每10秒刷新一次权重数据
+        setInterval(loadLatencyStats, 10000);
     };
 </script>
 </body>
