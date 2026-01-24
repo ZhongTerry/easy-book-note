@@ -296,6 +296,73 @@ async function pollSpeedResults() {
     </div>
 </div>
 
+<!-- 权重编辑模态框 -->
+<div id="weightEditModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 500px;">
+        <h3>✏️ 手动编辑权重</h3>
+        <div style="background: #fef3c7; border-left: 3px solid #f59e0b; padding: 12px; margin-bottom: 20px; border-radius: 4px; font-size: 13px;">
+            ⚠️ <b>警告</b>：手动修改会覆盖EWMA自动计算的值，请谨慎操作
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-size: 13px; font-weight: bold;">域名</label>
+            <input type="text" id="editDomain" class="p-input" readonly style="background: #f9fafb;">
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-size: 13px; font-weight: bold;">节点UUID</label>
+            <input type="text" id="editNodeUuid" class="p-input" readonly style="background: #f9fafb; font-family: monospace;">
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; font-size: 13px; font-weight: bold;">
+                延迟时间（毫秒）
+                <span style="font-weight: normal; color: #666; font-size: 11px;">提示：-1=错误节点, 100-5000=正常范围</span>
+            </label>
+            <input type="number" id="editLatency" class="p-input" min="-1" max="60000" step="10" placeholder="输入延迟时间" oninput="updateWeightPreview()">
+        </div>
+        
+        <div style="margin-bottom: 20px; padding: 10px; background: #f0f9ff; border-radius: 4px; font-size: 12px;">
+            <div style="margin-bottom: 5px;"><b>权重系数预览：</b></div>
+            <div id="weightPreview" style="font-size: 24px; font-weight: bold; color: #4f46e5;">-</div>
+            <div style="margin-top: 5px; color: #666;">延迟越低，权重越高（范围：0.1 - 3.0）</div>
+        </div>
+        
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+            <button class="p-btn p-btn-outline" onclick="PureUI.modal.close('weightEditModal')">取消</button>
+            <button class="p-btn p-btn-primary" onclick="saveWeightEdit()">💾 保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 权重重置模态框 -->
+<div id="weightResetModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 450px;">
+        <h3>⚠️ 重置权重数据</h3>
+        <div style="background: #fee2e2; border-left: 3px solid #ef4444; padding: 12px; margin-bottom: 20px; border-radius: 4px; font-size: 13px;">
+            <b>危险操作</b>：此操作将删除权重数据，系统会重新学习
+        </div>
+        
+        <div style="margin-bottom: 20px;">
+            <label style="display: block; margin-bottom: 10px; font-size: 13px; font-weight: bold;">选择重置范围</label>
+            <select id="resetScope" class="p-input" style="width: 100%;" onchange="updateResetDomainInput()">
+                <option value="all">重置所有域名的权重</option>
+                <option value="domain">重置指定域名的权重</option>
+            </select>
+        </div>
+        
+        <div id="resetDomainInput" style="margin-bottom: 20px; display: none;">
+            <label style="display: block; margin-bottom: 5px; font-size: 13px; font-weight: bold;">域名</label>
+            <input type="text" id="resetDomain" class="p-input" placeholder="例如：www.biquge.com">
+        </div>
+        
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+            <button class="p-btn p-btn-outline" onclick="PureUI.modal.close('weightResetModal')">取消</button>
+            <button class="p-btn p-btn-danger" onclick="confirmWeightReset()">🗑️ 确认重置</button>
+        </div>
+    </div>
+</div>
+
 <script>
     // --- 1. 全站核心指标 ---
     async function loadSystemSummary() {
@@ -515,6 +582,11 @@ async function pollSpeedResults() {
                                 <span class="p-badge" style="font-size: 10px; background: ${statusColor}20; color: ${statusColor}; border: 1px solid ${statusColor}40;">
                                     ${stats.status}
                                 </span>
+                                <button class="p-btn p-btn-outline" style="padding: 2px 8px; font-size: 11px;" 
+                                    onclick="editNodeWeight('${domain}', '${nodeUuid}', ${stats.latency_ms})" 
+                                    title="手动编辑权重">
+                                    ✏️
+                                </button>
                             </div>
                         </div>
                     `;
@@ -563,6 +635,138 @@ async function pollSpeedResults() {
         // 每10秒刷新一次权重数据
         setInterval(loadLatencyStats, 10000);
     };
+
+    // --- 权重编辑功能 ---
+    
+    // 打开权重编辑模态框
+    function editNodeWeight(domain, nodeUuid, currentLatency) {
+        document.getElementById('editDomain').value = domain;
+        document.getElementById('editNodeUuid').value = nodeUuid;
+        document.getElementById('editLatency').value = currentLatency;
+        updateWeightPreview();
+        PureUI.modal.open('weightEditModal');
+    }
+
+    // 更新权重系数预览
+    function updateWeightPreview() {
+        const latency = parseFloat(document.getElementById('editLatency').value);
+        if (isNaN(latency) || latency < -1) {
+            document.getElementById('weightPreview').innerText = '-';
+            return;
+        }
+        
+        // 使用和后端相同的计算逻辑
+        let coefficient;
+        if (latency === -1) {
+            coefficient = 0.1;
+        } else {
+            coefficient = Math.max(0.1, Math.min(3.0, 1000.0 / Math.max(latency, 100)));
+        }
+        
+        document.getElementById('weightPreview').innerText = coefficient.toFixed(3);
+        document.getElementById('weightPreview').style.color = 
+            coefficient >= 2.0 ? '#10b981' : 
+            coefficient >= 1.0 ? '#4f46e5' : 
+            coefficient >= 0.5 ? '#f59e0b' : '#ef4444';
+    }
+
+    // 保存权重编辑
+    async function saveWeightEdit() {
+        const domain = document.getElementById('editDomain').value;
+        const nodeUuid = document.getElementById('editNodeUuid').value;
+        const latencyMs = parseFloat(document.getElementById('editLatency').value);
+        
+        if (!domain || !nodeUuid || isNaN(latencyMs)) {
+            alert('❌ 请填写完整的信息');
+            return;
+        }
+        
+        if (latencyMs < -1 || latencyMs > 60000) {
+            alert('❌ 延迟时间必须在 -1 到 60000 之间');
+            return;
+        }
+        
+        try {
+            const res = await fetch('/api/cluster/latency_update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ domain, node_uuid: nodeUuid, latency_ms: latencyMs })
+            });
+            
+            const data = await res.json();
+            
+            if (res.ok && data.success) {
+                alert('✅ 权重已更新！');
+                PureUI.modal.close('weightEditModal');
+                loadLatencyStats(); // 刷新权重数据显示
+            } else {
+                alert('❌ 更新失败：' + (data.message || '未知错误'));
+            }
+        } catch(e) {
+            console.error(e);
+            alert('❌ 网络错误：' + e.message);
+        }
+    }
+
+    // 打开权重重置模态框
+    function openWeightResetModal() {
+        document.getElementById('resetScope').value = 'all';
+        document.getElementById('resetDomainInput').style.display = 'none';
+        document.getElementById('resetDomain').value = '';
+        PureUI.modal.open('weightResetModal');
+    }
+
+    // 更新重置域名输入框的显示
+    function updateResetDomainInput() {
+        const scope = document.getElementById('resetScope').value;
+        if (scope === 'domain') {
+            document.getElementById('resetDomainInput').style.display = 'block';
+        } else {
+            document.getElementById('resetDomainInput').style.display = 'none';
+            document.getElementById('resetDomain').value = '';
+        }
+    }
+
+    // 确认重置权重
+    async function confirmWeightReset() {
+        const scope = document.getElementById('resetScope').value;
+        const domain = document.getElementById('resetDomain').value;
+        
+        if (scope === 'domain' && !domain) {
+            alert('❌ 请输入要重置的域名');
+            return;
+        }
+        
+        const confirmMsg = scope === 'all' 
+            ? '⚠️ 确认重置所有域名的权重数据吗？\n此操作不可恢复！' 
+            : `⚠️ 确认重置域名 ${domain} 的权重数据吗？\n此操作不可恢复！`;
+        
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+        
+        try {
+            const payload = scope === 'all' ? {} : { domain };
+            const res = await fetch('/api/cluster/latency_reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            const data = await res.json();
+            
+            if (res.ok && data.success) {
+                alert('✅ 权重已重置！系统将重新学习');
+                PureUI.modal.close('weightResetModal');
+                loadLatencyStats(); // 刷新权重数据显示
+            } else {
+                alert('❌ 重置失败：' + (data.message || '未知错误'));
+            }
+        } catch(e) {
+            console.error(e);
+            alert('❌ 网络错误：' + e.message);
+        }
+    }
 </script>
 </body>
 </html>
