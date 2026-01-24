@@ -695,12 +695,12 @@ async function pollSpeedResults() {
             
             const data = await res.json();
             
-            if (res.ok && data.success) {
+            if (res.ok && data.status === 'success') {
                 alert('✅ 权重已更新！');
                 PureUI.modal.close('weightEditModal');
                 loadLatencyStats(); // 刷新权重数据显示
             } else {
-                alert('❌ 更新失败：' + (data.message || '未知错误'));
+                alert('❌ 更新失败：' + (data.msg || '未知错误'));
             }
         } catch(e) {
             console.error(e);
@@ -755,12 +755,12 @@ async function pollSpeedResults() {
             
             const data = await res.json();
             
-            if (res.ok && data.success) {
+            if (res.ok && data.status === 'success') {
                 alert('✅ 权重已重置！系统将重新学习');
                 PureUI.modal.close('weightResetModal');
                 loadLatencyStats(); // 刷新权重数据显示
             } else {
-                alert('❌ 重置失败：' + (data.message || '未知错误'));
+                alert('❌ 重置失败：' + (data.msg || '未知错误'));
             }
         } catch(e) {
             console.error(e);
