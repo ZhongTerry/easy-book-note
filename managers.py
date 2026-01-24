@@ -823,49 +823,57 @@ class ExportManager:
         # 转换 results 的 key 为整数（JSON 保存后会变成字符串）
         results = {int(k): v for k, v in results.items()}
         
-        # 并发抓取未完成的章节（降低并发数到 3，更安全）
-        pending_chapters = [(i, c) for i, c in enumerate(chapters) if i not in completed]
+        # [新增] 尝试集群并行爬取
+        use_cluster = cluster_manager.use_redis and len(cluster_manager.get_active_nodes()) > 0
         
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            future_to_index = {
-                pool.submit(self._fetch_chapter, c['url'], crawler): i 
-                for i, c in pending_chapters
-            }
+        if use_cluster:
+            print(f"[Export] 🚀 启用集群并行爬取模式（{len(cluster_manager.get_active_nodes())} 个节点在线）")
+            results = self._cluster_parallel_fetch(task_id, chapters, completed, results, delay)
+        else:
+            print(f"[Export] 🐢 使用本地并发模式（集群不可用）")
+            # 原有的本地并发逻辑
+            pending_chapters = [(i, c) for i, c in enumerate(chapters) if i not in completed]
             
-            for future in as_completed(future_to_index):
-                # 检查暂停标志
-                if task.get('paused'):
-                    print(f"[Export] 任务 {task_id} 已暂停")
-                    # 取消所有未完成的任务
-                    for f in future_to_index:
-                        f.cancel()
-                    break
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                future_to_index = {
+                    pool.submit(self._fetch_chapter, c['url'], crawler): i 
+                    for i, c in pending_chapters
+                }
                 
-                idx = future_to_index[future]
-                try:
-                    results[idx] = future.result()
-                    completed.add(idx)
-                except Exception as e:
-                    results[idx] = {
-                        'title': chapters[idx].get('name', f'第{idx+1}章'), 
-                        'content': f'抓取失败: {str(e)}'
-                    }
-                    completed.add(idx)
-                
-                # 更新进度
-                task['current'] = len(completed)
-                task['completed_chapters'] = list(completed)
-                task['results'] = results
-                
-                # 每完成一章添加延迟，防止被封
-                if delay > 0:
-                    import random
-                    actual_delay = delay * random.uniform(0.8, 1.2)  # 随机浮动 ±20%
-                    time.sleep(actual_delay)
-                
-                # 每完成 10 章保存一次
-                if len(completed) % 10 == 0:
-                    self._save_task(task_id)
+                for future in as_completed(future_to_index):
+                    # 检查暂停标志
+                    if task.get('paused'):
+                        print(f"[Export] 任务 {task_id} 已暂停")
+                        # 取消所有未完成的任务
+                        for f in future_to_index:
+                            f.cancel()
+                        break
+                    
+                    idx = future_to_index[future]
+                    try:
+                        results[idx] = future.result()
+                        completed.add(idx)
+                    except Exception as e:
+                        results[idx] = {
+                            'title': chapters[idx].get('name', f'第{idx+1}章'), 
+                            'content': f'抓取失败: {str(e)}'
+                        }
+                        completed.add(idx)
+                    
+                    # 更新进度
+                    task['current'] = len(completed)
+                    task['completed_chapters'] = list(completed)
+                    task['results'] = results
+                    
+                    # 每完成一章添加延迟，防止被封
+                    if delay > 0:
+                        import random
+                        actual_delay = delay * random.uniform(0.8, 1.2)  # 随机浮动 ±20%
+                        time.sleep(actual_delay)
+                    
+                    # 每完成 10 章保存一次
+                    if len(completed) % 10 == 0:
+                        self._save_task(task_id)
         
         # 如果被暂停，不生成文件
         if task.get('paused'):
@@ -900,6 +908,133 @@ class ExportManager:
                 'content': '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
             }
         raise Exception("章节内容为空")
+    
+    def _cluster_parallel_fetch(self, task_id, chapters, completed, results, delay):
+        """集群并行爬取章节"""
+        import uuid as uuid_lib
+        import json
+        import time
+        from spider_core import _remote_request
+        
+        task = self.exports[task_id]
+        pending_chapters = [(i, c) for i, c in enumerate(chapters) if i not in completed]
+        
+        if not pending_chapters:
+            return results
+        
+        print(f"[Cluster] 📦 待爬取章节: {len(pending_chapters)} 章")
+        
+        # 批量推送任务到队列
+        task_mapping = {}  # {task_uuid: chapter_index}
+        
+        for idx, chapter in pending_chapters:
+            # 检查暂停标志
+            if task.get('paused'):
+                print(f"[Cluster] 任务 {task_id} 已暂停，停止推送")
+                break
+                
+            task_uuid = str(uuid_lib.uuid4())
+            task_package = {
+                "id": task_uuid,
+                "endpoint": "run",
+                "payload": {"url": chapter['url']},
+                "timestamp": time.time()
+            }
+            
+            try:
+                cluster_manager.r.lpush("crawler:queue:pending", json.dumps(task_package))
+                task_mapping[task_uuid] = idx
+                print(f"[Cluster] ✅ 已推送: 第{idx+1}章 ({chapter.get('name', '无标题')})")
+            except Exception as e:
+                print(f"[Cluster] ❌ 推送失败: {e}")
+                # 失败的章节标记为错误
+                results[idx] = {
+                    'title': chapter.get('name', f'第{idx+1}章'),
+                    'content': f'推送失败: {str(e)}'
+                }
+                completed.add(idx)
+        
+        print(f"[Cluster] ⏳ 等待节点处理 {len(task_mapping)} 个任务...")
+        
+        # 轮询等待结果
+        start_time = time.time()
+        timeout = 300  # 5分钟超时
+        check_interval = 0.5  # 每0.5秒检查一次
+        
+        while task_mapping and (time.time() - start_time < timeout):
+            # 检查暂停标志
+            if task.get('paused'):
+                print(f"[Cluster] 任务 {task_id} 已暂停")
+                break
+            
+            completed_tasks = []
+            
+            for task_uuid, idx in list(task_mapping.items()):
+                result_key = f"crawler:result:{task_uuid}"
+                res = cluster_manager.r.get(result_key)
+                
+                if res:
+                    # 解析结果
+                    json_res = json.loads(res)
+                    cluster_manager.r.delete(result_key)  # 读完即焚
+                    
+                    if json_res.get('status') == 'success':
+                        data = json_res.get('data')
+                        if data and data.get('content'):
+                            results[idx] = {
+                                'title': data.get('title', '无标题'),
+                                'content': '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
+                            }
+                            completed.add(idx)
+                            print(f"[Cluster] ✅ 完成: 第{idx+1}章 (Worker: {json_res.get('worker_uuid', 'unknown')[:8]}...)")
+                        else:
+                            results[idx] = {
+                                'title': chapters[idx].get('name', f'第{idx+1}章'),
+                                'content': '爬取结果为空'
+                            }
+                            completed.add(idx)
+                    else:
+                        # 失败的章节
+                        results[idx] = {
+                            'title': chapters[idx].get('name', f'第{idx+1}章'),
+                            'content': f'爬取失败: {json_res.get("msg", "未知错误")}'
+                        }
+                        completed.add(idx)
+                        print(f"[Cluster] ❌ 失败: 第{idx+1}章")
+                    
+                    completed_tasks.append(task_uuid)
+            
+            # 移除已完成的任务
+            for task_uuid in completed_tasks:
+                del task_mapping[task_uuid]
+            
+            # 更新进度
+            if completed_tasks:
+                task['current'] = len(completed)
+                task['completed_chapters'] = list(completed)
+                task['results'] = results
+                
+                # 每完成 10 章保存一次
+                if len(completed) % 10 == 0:
+                    self._save_task(task_id)
+            
+            # 如果还有待处理任务，等待一会再检查
+            if task_mapping:
+                time.sleep(check_interval)
+        
+        # 超时或暂停后，标记剩余章节为超时
+        if task_mapping:
+            print(f"[Cluster] ⚠️ {len(task_mapping)} 个章节超时或被暂停")
+            for task_uuid, idx in task_mapping.items():
+                if idx not in completed:
+                    results[idx] = {
+                        'title': chapters[idx].get('name', f'第{idx+1}章'),
+                        'content': '爬取超时或被暂停'
+                    }
+                    completed.add(idx)
+        
+        print(f"[Cluster] 🎉 集群爬取完成: {len(completed)}/{len(chapters)} 章")
+        return results
     
     def _generate_txt(self, task, results):
         """生成 TXT 文件"""

@@ -2323,8 +2323,19 @@ class NovelCrawler:
                             return data
              except: pass
              
-        # 2. 只有当没有缓存或强制刷新时，才走网络
-        print(f"[Crawler] 🌐 正在联网获取目录 (强制刷新={no_cache}): {url}")
+        # 2. 尝试远程集群获取目录
+        remote_data = _remote_request('toc', {'url': url})
+        if remote_data:
+            print(f"[Crawler] 📥 远程获取目录成功，写入本地缓存")
+            # 写入缓存
+            try:
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(remote_data, f, ensure_ascii=False, indent=2)
+            except: pass
+            return remote_data
+        
+        # 3. 降级到本地获取
+        print(f"[Crawler] 🌐 远程不可用，本地获取目录 (强制刷新={no_cache}): {url}")
         
         # 参数设置
         timeout = 5 if fast_mode else 15

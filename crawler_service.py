@@ -170,7 +170,7 @@ def do_work(task):
     
     print(f"⚡ [Job] 执行: {endpoint} -> {url}")
     
-    result = {"status": "failed", "msg": "Unknown error"}
+    result = {"status": "failed", "msg": "Unknown error", "worker_uuid": NODE_UUID}
     
     with TASK_LOCK: CURRENT_TASKS += 1
     try:
@@ -192,14 +192,14 @@ def do_work(task):
                 print("⚠️ 检测到不可序列化数据，执行深度清洗...")
                 data = clean_data(data)
 
-            result = {"status": "success", "data": data}
+            result = {"status": "success", "data": data, "worker_uuid": NODE_UUID}
         else:
-            result = {"status": "failed", "msg": "Empty data from crawler"}
+            result = {"status": "failed", "msg": "Empty data from crawler", "worker_uuid": NODE_UUID}
             
     except Exception as e:
         print(f"❌ 任务出错: {e}")
         # import traceback; traceback.print_exc() # 调试用
-        result = {"status": "error", "msg": str(e)}
+        result = {"status": "error", "msg": str(e), "worker_uuid": NODE_UUID}
     finally:
         with TASK_LOCK: CURRENT_TASKS -= 1
         
