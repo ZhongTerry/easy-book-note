@@ -4,7 +4,8 @@ import re
 import os
 import importlib.util
 import hashlib
-from urllib.parse import urljoin, urlparse 
+from urllib.parse import urljoin, urlparse, quote
+from difflib import SequenceMatcher
 from urllib.request import getproxies
 from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
@@ -1607,6 +1608,115 @@ class NovelCrawler:
         self.impersonate = "chrome110"
         self.timeout = 15
         self.proxies = getproxies()
+
+    def _normalize_title(self, text):
+        if not text:
+            return ""
+        text = re.sub(r'[\s\u3000]+', '', text)
+        text = re.sub(r'[\-—_·•:：,，。．!！?？~～\[\]【】\(\)（）<>《》"\']', '', text)
+        return text.strip().lower()
+
+    def _pick_best_match(self, candidates, target_title):
+        if not candidates:
+            return None
+        target_norm = self._normalize_title(target_title)
+        best = None
+        best_score = 0.0
+        for item in candidates:
+            title = item.get('title') or item.get('book_name')
+            if not title:
+                continue
+            score = SequenceMatcher(None, target_norm, self._normalize_title(title)).ratio()
+            if score > best_score:
+                best_score = score
+                best = item.copy()
+                best['match_score'] = score
+        return best
+
+    def _fetch_qidian_meta(self, book_name):
+        try:
+            url = f"https://www.qidian.com/so/{quote(book_name)}.html"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.qidian.com/"
+            }
+            resp = cffi_requests.get(url, headers=headers, impersonate=self.impersonate, timeout=8, allow_redirects=True, proxies=self.proxies)
+            html = resp.text if hasattr(resp, 'text') else resp.content.decode('utf-8', errors='replace')
+            soup = BeautifulSoup(html, 'html.parser')
+
+            items = []
+            for li in soup.select('#result-list li.res-book-item'):
+                title_tag = li.select_one('h3.book-info-title a')
+                if not title_tag:
+                    continue
+                title = title_tag.get_text(strip=True)
+                author_tag = li.select_one('p.author a.name')
+                author = author_tag.get_text(strip=True) if author_tag else ''
+                intro_tag = li.select_one('p.intro')
+                desc = intro_tag.get_text(strip=True) if intro_tag else ''
+                img_tag = li.select_one('div.book-img-box img')
+                cover = img_tag.get('src', '') if img_tag else ''
+                if cover.startswith('//'):
+                    cover = 'https:' + cover
+                href = title_tag.get('href') or ''
+                if href.startswith('//'):
+                    href = 'https:' + href
+                elif href.startswith('/'):
+                    href = 'https://www.qidian.com' + href
+
+                items.append({
+                    'title': title,
+                    'author': author,
+                    'desc': desc,
+                    'cover': cover,
+                    'url': href,
+                    'source': 'qidian'
+                })
+
+            best = self._pick_best_match(items, book_name)
+            if best:
+                return {
+                    'cover': best.get('cover', ''),
+                    'author': best.get('author', ''),
+                    'desc': best.get('desc', ''),
+                    'book_name': best.get('title', ''),
+                    'source': 'qidian',
+                    'match_score': best.get('match_score', 0)
+                }
+        except Exception as e:
+            print(f"[Meta] Qidian search failed: {e}")
+        return None
+
+    def _fetch_fanqie_meta(self, book_name):
+        try:
+            from adapters.fanqie_adapter import FanqieLocalAdapter
+            from spider_core import searcher
+
+            results = searcher._do_direct_source_search(book_name) or []
+            fanqie_candidates = [r for r in results if '番茄' in (r.get('source') or '')]
+            best = self._pick_best_match(fanqie_candidates, book_name)
+            if not best:
+                return None
+
+            adapter = FanqieLocalAdapter()
+            meta = adapter.get_meta(self, best.get('url'))
+            if meta:
+                meta['source'] = 'fanqie'
+                meta['match_score'] = best.get('match_score', 0)
+                return meta
+        except Exception as e:
+            print(f"[Meta] Fanqie search failed: {e}")
+        return None
+
+    def get_meta_from_qidian_fanqie(self, book_name):
+        qidian_meta = self._fetch_qidian_meta(book_name)
+        fanqie_meta = self._fetch_fanqie_meta(book_name)
+
+        candidates = [m for m in [qidian_meta, fanqie_meta] if m]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+        return candidates[0]
     # spider_core.py -> NovelCrawler 类内部
     # ==========================================
     # [新增] 智能换源核心逻辑
@@ -1747,6 +1857,42 @@ class NovelCrawler:
         """
         通用的小说名识别逻辑 (增强版)
         """
+        def _clean_candidate(name):
+            if not name:
+                return None
+            name = re.sub(r'[\s\u3000]+', ' ', name).strip()
+            # 去作者后缀或装饰符 (书名(作者) / 【书名】等)
+            name = re.sub(r'[\(（\[【<].*?[\)）\]】>]', '', name).strip()
+            # 去常见噪声后缀
+            name = re.sub(r'(最新章节|全文阅读|无错版|无弹窗|免费阅读|小说全集|小说下载|全文免费阅读|章节列表|最新)$', '', name).strip()
+            return name or None
+
+        def _is_chapter_like(text):
+            return bool(re.search(r'第\s*[0-9零一二两三四五六七八九十百千万]+\s*[章节回幕节话]', text or ''))
+
+        def _is_noise(text):
+            if not text:
+                return True
+            if len(text) < 2 or len(text) > 40:
+                return True
+            if _is_chapter_like(text):
+                return True
+            bad_keywords = ['笔趣', '小说', '阅读', '章节', '目录', '无弹窗', '下载', '作者', '手机版', '站', '网']
+            return any(k in text for k in bad_keywords)
+
+        # 策略 A: OG/Twitter 元信息 (最稳)
+        for prop in ['og:novel:book_name', 'og:title']:
+            meta = soup.find('meta', property=prop)
+            if meta:
+                candidate = _clean_candidate(meta.get('content', ''))
+                if candidate and not _is_noise(candidate):
+                    return candidate
+        meta_tw = soup.find('meta', attrs={'name': 'twitter:title'})
+        if meta_tw:
+            candidate = _clean_candidate(meta_tw.get('content', ''))
+            if candidate and not _is_noise(candidate):
+                return candidate
+
         # [新增] 策略 0: 从页面底部的脚本 lastread.set(...) 提取
         # 很多笔趣阁模版都有这个 script
         # 格式: lastread.set(id, zid, '书名', '章节名', '作者', ...)
@@ -1758,14 +1904,26 @@ class NovelCrawler:
                     match = re.search(r"lastread\.set\([^,]+,[^,]+,\s*['\"]([^'\"]+)['\"]", script.string)
                     if match:
                         print(f"[Smart Title] 🎯 从 JS lastread 提取成功: {match.group(1)}")
-                        return match.group(1)
+                        candidate = _clean_candidate(match.group(1))
+                        if candidate and not _is_noise(candidate):
+                            return candidate
         except: pass
+
+        # 策略 B: 结构化书名区域 (h1 / book-name 等)
+        for sel in ['h1', '.book-name', '#bookName', '.info h1', '.detail h1', '.book-info h1', '.detail-box h1']:
+            for tag in soup.select(sel):
+                candidate = _clean_candidate(tag.get_text(strip=True))
+                if candidate and not _is_noise(candidate):
+                    return candidate
 
         # [新增] 策略 1: 智能分析 <title> 标签
         # 常见的 title 格式: "章节名_书名_作者_网站名" 或 "书名_作者_网站名"
         if soup.title and soup.title.string:
             title_text = soup.title.string
-            parts = re.split(r'[_\-]', title_text) # 用 _ 或 - 切分
+            parts = re.split(r'[\_\-\|｜—]', title_text) # 用 _ 或 - 等切分
+            parts = [p.strip() for p in parts if p.strip()]
+            meta_kw = soup.find('meta', attrs={'name': 'keywords'})
+            kw_content = meta_kw.get('content', '') if meta_kw else ''
             
             # 如果切分后有 3 部分以上 (如: 第477章..._学霸..._十月廿二_新笔趣阁)
             # 通常书名在倒数第三个 (如果是4段) 或 倒数第二个 (如果是3段)
@@ -1779,26 +1937,36 @@ class NovelCrawler:
                 exclude_keywords = ['笔趣', '小说', '最新', '章节', '无弹窗', '阅读', '下载', '作者']
                 
                 # 从后往前找，找到第一个不包含上述关键字且长度适中的部分
+                candidates = []
                 for part in reversed(parts):
-                    p = part.strip()
+                    p = _clean_candidate(part)
                     if not p: continue
                     if any(k in p for k in exclude_keywords): continue
+                    if _is_noise(p): continue
+                    candidates.append(p)
                     
                     # 它是书名的概率很大，但要排除作者名
                     # 我们可以配合 meta keywords 验证
-                    meta_kw = soup.find('meta', attrs={'name': 'keywords'})
-                    if meta_kw:
-                        kw_content = meta_kw.get('content', '')
-                        if p in kw_content:
-                            print(f"[Smart Title] 🎯 从 Title+Keywords 锁定书名: {p}")
-                            return p
+                    if kw_content and p in kw_content:
+                        print(f"[Smart Title] 🎯 从 Title+Keywords 锁定书名: {p}")
+                        return p
                     
                     # 如果没有meta验证，简单的长度判断
-                    if 1 < len(p) < 20: 
-                        # 暂时先返回这个
-                        # print(f"[Smart Title] 猜测 Title 中的书名: {p}")
-                        # return p
-                        pass
+                    if 1 < len(p) < 30: 
+                        candidates.append(p)
+
+                if candidates:
+                    # 取最长且最像书名的
+                    return max(candidates, key=len)
+
+            # 标题不足分段时：尝试关键词提取
+            meta_kw = soup.find('meta', attrs={'name': 'keywords'})
+            if meta_kw:
+                kw_content = meta_kw.get('content', '')
+                for token in re.split(r'[,，;；\s]+', kw_content):
+                    candidate = _clean_candidate(token)
+                    if candidate and not _is_noise(candidate):
+                        return candidate
 
         # 1. 尝试从常见面包屑导航中提取
         # 匹配包含 'path', 'breadcrumb', 'crumb' 的 class 或 id
@@ -1823,6 +1991,14 @@ class NovelCrawler:
                         if len(lt) == 2: continue
                         
                         return lt
+
+        # 策略 C: 通用面包屑 (breadcrumb/path/crumb)
+        for crumb in soup.select('.breadcrumb, .breadcrumbs, .path, .crumb, [id*="breadcrumb"], [class*="breadcrumb"], [class*="crumb"], [class*="path"]'):
+            links = crumb.find_all('a')
+            for link in reversed(links):
+                candidate = _clean_candidate(link.get_text(strip=True))
+                if candidate and not _is_noise(candidate):
+                    return candidate
 
         # 最后兜底 ...
         return None
@@ -2102,6 +2278,7 @@ class NovelCrawler:
         og_desc = soup.find('meta', property='og:description')
         if og_desc: meta['desc'] = og_desc.get('content', '')[:100] + '...'
 
+        print(f"[Meta] cover={'Y' if meta['cover'] else 'N'} author={meta['author']} desc_len={len(meta['desc'])}")
         return meta
     def get_toc(self, url, fast_mode=False, no_cache=False):
         """
@@ -2170,6 +2347,7 @@ class NovelCrawler:
             if adapter: 
                 # 1. 调用适配器获取目录 (标准操作)
                 data = adapter.get_toc(self, url)
+                print(f"[TOC] adapter={adapter.__class__.__name__} data={'Y' if data else 'N'}")
                 
                 # 2. [新增功能] 检查并调用适配器的 get_meta 方法
                 if hasattr(adapter, 'get_meta'):
@@ -2183,6 +2361,7 @@ class NovelCrawler:
                             if plugin_meta.get('author'): final_meta['author'] = plugin_meta['author']
                             if plugin_meta.get('desc'): final_meta['desc'] = plugin_meta['desc']
                             if plugin_meta.get('tags'): final_meta['tags'] = plugin_meta['tags']
+                            print(f"[Meta] adapter_meta cover={'Y' if final_meta['cover'] else 'N'} author={final_meta['author']} desc_len={len(final_meta['desc'])}")
                     except Exception as e:
                         print(f"[Crawler] ⚠️ 适配器 get_meta 执行出错: {e}")
 
@@ -2191,20 +2370,25 @@ class NovelCrawler:
                     if not final_meta['cover'] and data.get('cover'): final_meta['cover'] = data['cover']
                     if not final_meta['author'] and data.get('author'): final_meta['author'] = data['author']
                     if not final_meta['desc'] and data.get('desc'): final_meta['desc'] = data.get('desc')
+                    print(f"[Meta] toc_meta cover={'Y' if final_meta['cover'] else 'N'} author={final_meta['author']} desc_len={len(final_meta['desc'])}")
             else:
                 # 通用逻辑
                 data = self._general_toc_logic(url)
+                print(f"[TOC] general data={'Y' if data else 'N'}")
                 if data:
                     final_meta['cover'] = data.get('cover', '')
                     final_meta['author'] = data.get('author', '')
                     final_meta['desc'] = data.get('desc', '')
+                    print(f"[Meta] general_meta cover={'Y' if final_meta['cover'] else 'N'} author={final_meta['author']} desc_len={len(final_meta['desc'])}")
 
         except Exception as e:
             return None
         finally:
             self.timeout = old_timeout
 
-        if not data or not data.get('chapters'): return None
+        if not data or not data.get('chapters'):
+            print(f"[TOC] empty or no chapters: data={'Y' if data else 'N'} url={url}")
+            return None
         
         if data.get('manual_sort') is True: return data
         final_chapters = self._standardize_chapters(data['chapters'])

@@ -33,6 +33,8 @@ def close_db(e=None):
     if db is not None: db.close()
 
 def get_current_user():
+    if not has_request_context():
+        return 'default_user'
     return session.get('user', {}).get('username', 'default_user')
 
 # ==========================================
@@ -327,9 +329,9 @@ class IsolatedDB:
             print(f"[DB] 迁移检查跳过: {e}")
 
     # === 2. 核心写入逻辑 (自动包装) ===
-    def insert(self, key, value):
+    def insert(self, key, value, username=None):
         if not key: return {"status": "error", "message": "Key cannot be empty"}
-        u = get_current_user()
+        u = username or get_current_user()
         
         final_json = ""
         if isinstance(value, dict):
@@ -352,8 +354,8 @@ class IsolatedDB:
             return {"status": "success", "message": f"Saved: {key}", "data": {key: final_json}}
         except Exception as e: return {"status": "error", "message": str(e)}
 
-    def update(self, key, value):
-        u = get_current_user()
+    def update(self, key, value, username=None):
+        u = username or get_current_user()
         try:
             conn = get_db()
             row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
@@ -384,14 +386,14 @@ class IsolatedDB:
             conn.commit()
             return {"status": "success", "message": f"Updated: {key}"}
         except:
-            return self.insert(key, value)
+            return self.insert(key, value, username=username)
 
     # === 3. 核心读取逻辑 (自动解包 - 兼容旧接口) ===
-    def get_val(self, key):
+    def get_val(self, key, username=None):
         """默认只返回 URL 字符串，保证旧代码不崩"""
         # [关键修复] 对于 :meta 结尾的 key，直接返回原始值
         if key.endswith(':meta'):
-            u = get_current_user()
+            u = username or get_current_user()
             try:
                 conn = get_db()
                 row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
@@ -400,12 +402,12 @@ class IsolatedDB:
                 return None
         
         # 正常的书籍 key，使用解包逻辑
-        full = self.get_full_data(key)
+        full = self.get_full_data(key, username=username)
         return full.get('url') if full else None
 
-    def get_full_data(self, key):
+    def get_full_data(self, key, username=None):
         """新接口：获取完整元数据"""
-        u = get_current_user()
+        u = username or get_current_user()
         try:
             conn = get_db()
             row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()

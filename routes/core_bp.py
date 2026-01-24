@@ -913,7 +913,7 @@ def api_upload_epub():
     managers.db.insert(k, v)
     return jsonify({"status": "success", "key": k, "value": v})
 # ... 引入 update_manager ...
-from managers import db, update_manager, booklist_manager, task_manager
+from managers import db, update_manager, booklist_manager, task_manager, get_current_user
 
 # === 异步任务 Worker 函数 ===
 
@@ -925,7 +925,7 @@ def _worker_search(keyword, callback=None):
     # 否则兼容旧调用
     return searcher.search_bing(keyword)
 
-def _worker_check_update(book_key, current_url):
+def _worker_check_update(book_key, current_url, callback=None, username=None):
     """后台检查更新任务"""
     # === 1. 智能定位目录页 URL ===
     toc_url = None
@@ -970,9 +970,34 @@ def _worker_check_update(book_key, current_url):
         if toc_data.get('author'): update_payload['author'] = toc_data['author']
         if toc_data.get('desc'): update_payload['desc'] = toc_data['desc']
         if toc_data.get('tags'): update_payload['official_tags'] = toc_data['tags']
+
+        # === 4.1 [新增] 目录元数据不足时，尝试番茄 + 起点综合补全 ===
+        need_fallback = (
+            not update_payload.get('cover') or
+            not update_payload.get('author') or
+            not update_payload.get('desc') or
+            (update_payload.get('author') in ['未知作者', '', None])
+        )
+        if need_fallback:
+            try:
+                book_data = managers.db.get_full_data(book_key, username=username) or {}
+                book_name = book_data.get('book_name') or book_data.get('title') or book_data.get('name') or book_key
+                print(f"[Update] Meta缺失，尝试综合补全: {book_name}")
+                extra_meta = crawler.get_meta_from_qidian_fanqie(book_name)
+                if extra_meta:
+                    if not update_payload.get('cover') and extra_meta.get('cover'):
+                        update_payload['cover'] = extra_meta['cover']
+                    if (not update_payload.get('author') or update_payload.get('author') == '未知作者') and extra_meta.get('author'):
+                        update_payload['author'] = extra_meta['author']
+                    if not update_payload.get('desc') and extra_meta.get('desc'):
+                        update_payload['desc'] = extra_meta['desc']
+                    if not update_payload.get('official_tags') and extra_meta.get('tags'):
+                        update_payload['official_tags'] = extra_meta['tags']
+            except Exception as e:
+                print(f"[Update] 综合补全失败: {e}")
         
         if update_payload:
-            managers.db.update(book_key, update_payload)
+            managers.db.update(book_key, update_payload, username=username)
 
         # === 5. 更新追更管理器 ===
         save_data = {
@@ -981,7 +1006,7 @@ def _worker_check_update(book_key, current_url):
             "latest_id": latest_chap.get('id', -1),
             "toc_url": toc_url
         }
-        managers.update_manager.set_update(book_key, save_data)
+        managers.update_manager.set_update(book_key, save_data, username=username)
 
         # === 6. 计算进度差值 (返回给前端) ===
         response_data = {
@@ -1034,7 +1059,8 @@ def api_check_update():
     if not current_url: return jsonify({"status": "error", "msg": "No URL"})
     
     # 提交异步任务
-    tid = managers.task_manager.submit(_worker_check_update, book_key, current_url)
+    username = get_current_user()
+    tid = managers.task_manager.submit(_worker_check_update, book_key, current_url, username=username)
     return jsonify({"status": "pending", "task_id": tid})
 
 
