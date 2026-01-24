@@ -25,7 +25,9 @@ def fetch_task():
     """Worker 来取任务"""
     # 1. 鉴权
     auth_header = request.headers.get('Authorization')
-    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
+    if not system_token:
+        return jsonify({"status": "error", "msg": "Server token not configured"}), 503
     if auth_header != f"Bearer {system_token}":
         return jsonify({"status": "error"}), 403
 
@@ -107,7 +109,9 @@ def submit_result():
     """Worker 交作业"""
     # 1. 鉴权 (同上)
     auth_header = request.headers.get('Authorization')
-    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
+    if not system_token:
+        return jsonify({"status": "error", "msg": "Server token not configured"}), 503
     if auth_header != f"Bearer {system_token}":
         return jsonify({"status": "error"}), 403
 
@@ -196,7 +200,9 @@ def get_speed_test_results(test_id):
 def handle_heartbeat():
     auth_header = request.headers.get('Authorization')
     # 默认 Token，生产环境请在 .env 设置
-    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN', 'my-secret-token-888')
+    system_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
+    if not system_token:
+        return jsonify({"status": "error", "msg": "Server token not configured"}), 503
     print("----------------------------------------")
     # 使用 repr() 可以把看不见的空格、换行符显示出来
     print(f"🔍 [Debug] 收到 Header: {repr(auth_header)}")

@@ -1,4 +1,5 @@
 from flask import Blueprint, render_template_string, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory, session
+from markupsafe import escape
 import requests
 import os
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR
@@ -344,7 +345,7 @@ def read_mode():
                     </div>
                 </div>
             </body></html>
-        """, url=u, key=k), 404
+        """, url=escape(u), key=escape(k)), 404
 
     # 5. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
@@ -426,6 +427,9 @@ def toc_page():
     # 接收 force 参数，如果是 'true' 则跳过缓存
     force = request.args.get('force') == 'true'
     is_api = request.args.get('api')
+    if not u or (not u.startswith('epub:') and not is_safe_url(u)):
+        return "Illegal URL", 403
+
     if u.startswith('epub:'):
         # 协议格式：epub:文件名:索引 (例如 epub:test.epub:toc)
         parts = u.split(':')
@@ -613,6 +617,9 @@ def api_switch_source():
     if not current_url or not book_key:
         return jsonify({"status": "error", "msg": "Missing params"})
 
+    if not is_safe_url(current_url):
+        return jsonify({"status": "error", "msg": "Illegal URL"}), 403
+
     try:
         # 1. 获取当前书名 (从书单或缓存拿，或者重新爬当前页)
         # 为了准确，我们先尝试从缓存拿当前页信息
@@ -692,6 +699,8 @@ def api_source_list():
     force = bool(request.json.get('force'))
     
     if not current_url: return jsonify({"status": "error", "msg": "参数错误"})
+    if not is_safe_url(current_url):
+        return jsonify({"status": "error", "msg": "Illegal URL"}), 403
 
     # === 核心逻辑：多级探测真实书名 ===
     book_name = None
@@ -880,7 +889,9 @@ def api_booklists_update():
 @core_bp.route('/api/prefetch', methods=['POST'])
 @login_required
 def api_prefetch():
-    u = request.json.get('url')
+    u = (request.json or {}).get('url')
+    if not u or not is_safe_url(u):
+        return jsonify({"status": "error", "message": "Illegal URL"}), 403
     if managers.cache.get(u): return jsonify({"status": "skipped"})
     d = crawler.run(u)
     if d:
@@ -891,8 +902,13 @@ def api_prefetch():
 @core_bp.route('/api/resolve_head', methods=['POST'])
 @login_required
 def api_resolve_head():
-    try: return jsonify({"status": "success", "url": crawler.get_first_chapter(request.json.get('url'))})
-    except: return jsonify({"status": "error"})
+    try:
+        u = (request.json or {}).get('url')
+        if not u or not is_safe_url(u):
+            return jsonify({"status": "error", "message": "Illegal URL"}), 403
+        return jsonify({"status": "success", "url": crawler.get_first_chapter(u)})
+    except:
+        return jsonify({"status": "error"})
 
 @core_bp.route('/api/search_novel', methods=['POST'])
 @login_required

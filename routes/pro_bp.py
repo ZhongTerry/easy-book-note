@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from shared import pro_required
+from shared import pro_required, is_safe_url
 from managers import offline_manager
 
 # 假设你把爬虫逻辑移到了 spider_core.py，并实例化了 crawler_instance
@@ -20,6 +20,9 @@ def api_pro_download_book():
     
     if not book_key or not input_url:
         return jsonify({"status": "error", "msg": "Missing params"})
+
+    if not is_safe_url(input_url):
+        return jsonify({"status": "error", "msg": "Illegal URL"}), 403
 
     def download_task(u_key, start_url):
         print(f"[Pro] 启动离线任务: {u_key}")

@@ -6,7 +6,7 @@ from dotenv import load_dotenv # 1. 引入这个库
 # 否则 routes/core_bp.py 初始化时读不到环境变量
 load_dotenv() 
 import sqlite3
-from flask import Flask, render_template
+from flask import Flask, render_template, request, jsonify, session
 from datetime import timedelta
 import threading
 import time
@@ -25,13 +25,28 @@ from spider_core import parse_chapter_id
 app = Flask(__name__)
 
 # 这里也能正确读到 KEY 了
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'default-unsafe-key')
+secret_key = os.environ.get('FLASK_SECRET_KEY')
+if not secret_key:
+    secret_key = os.urandom(32)
+    print("[Security] FLASK_SECRET_KEY 未配置，已使用随机临时密钥（重启后会失效）")
+app.secret_key = secret_key
 app.permanent_session_lifetime = timedelta(days=30)
 app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
 
 app.register_blueprint(core_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
+
+# 基础 CSRF 防护：仅校验同源 Origin/Referer（存在时）
+@app.before_request
+def basic_csrf_guard():
+    if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and session.get('user'):
+        origin = request.headers.get('Origin') or request.headers.get('Referer')
+        if origin and not origin.startswith(request.host_url):
+            return jsonify({"status": "error", "msg": "CSRF blocked"}), 403
 
 def schedule_cache_cleanup():
     time.sleep(10)

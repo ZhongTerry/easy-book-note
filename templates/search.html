@@ -370,6 +370,16 @@
         const API_URL = window.location.origin;
         let searchHistory = JSON.parse(localStorage.getItem('search_history') || '[]');
         let currentResults = [];
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;")
+                .replace(/`/g, "&#96;");
+        }
         
         // 初始化
         window.onload = function() {
@@ -398,7 +408,7 @@
             
             document.getElementById('historySection').style.display = 'block';
             container.innerHTML = searchHistory.slice(0, 8).map(keyword => 
-                `<span class="history-tag" onclick="searchFromHistory('${keyword}')">${keyword}</span>`
+                `<span class="history-tag" onclick="searchFromHistory(${JSON.stringify(keyword)})">${escapeHtml(keyword)}</span>`
             ).join('');
         }
         
@@ -486,18 +496,22 @@
                 else if (item.source.includes('Bing')) tagClass = 'tag-bing';
                 else if (item.source.includes('书香') || item.source.includes('笔趣') || item.source.includes('Direct')) tagClass = 'tag-direct';
                 
-                const authorHtml = item.description ? `<span class="res-author">${item.description}</span>` : '';
-                const urlHtml = showUrl ? `<span class="res-url">${item.url}</span>` : '';
+                const safeTitle = escapeHtml(item.title || '');
+                const safeDesc = escapeHtml(item.description || '');
+                const safeUrl = escapeHtml(item.url || '');
+                const safeSource = escapeHtml(item.source || 'Unknown');
+                const authorHtml = item.description ? `<span class="res-author">${safeDesc}</span>` : '';
+                const urlHtml = showUrl ? `<span class="res-url">${safeUrl}</span>` : '';
                 
                 return `
-                <div class="result-item" onclick="selectResult('${item.suggested_key}', '${item.url}', '${item.title.replace(/'/g, "\\'")}')">
+                <div class="result-item" onclick="selectResult(${JSON.stringify(item.suggested_key || '')}, ${JSON.stringify(item.url || '')}, ${JSON.stringify(item.title || '')})">
                     <div class="res-left">
                         <div class="res-title">
-                            ${item.title}
+                            ${safeTitle}
                             ${authorHtml}
                         </div>
                         <div class="res-meta">
-                            <span class="source-tag ${tagClass}">${item.source || 'Unknown'}</span>
+                            <span class="source-tag ${tagClass}">${safeSource}</span>
                             ${urlHtml}
                         </div>
                     </div>
@@ -607,12 +621,12 @@
                             handleSearchResults(t.result); // Should be full result by now
                         } catch (err) {
                             console.error("Render error:", err);
-                             document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>渲染结果出错: ${err.message}</p></div>`;
+                             document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>渲染结果出错: ${escapeHtml(err.message)}</p></div>`;
                         }
                         return;
                     } else if (t.status === 'failed') {
                         PureUI.loading.hide();
-                        document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>搜索出错: ${t.error}</p></div>`;
+                        document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>搜索出错: ${escapeHtml(t.error)}</p></div>`;
                         return;
                     } else if (t.status === 'not_found') {
                         PureUI.loading.hide();

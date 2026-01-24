@@ -3,6 +3,7 @@ from flask import session, jsonify, redirect, url_for, request, send_file
 from functools import wraps
 from urllib.parse import urlparse
 import socket
+from ipaddress import ip_address, ip_network
 
 # === 基础路径配置 ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -82,13 +83,47 @@ def is_safe_url(url):
     """防止 SSRF 攻击"""
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in ('http', 'https'): return False
+        if parsed.scheme not in ('http', 'https'):
+            return False
+
         hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # 共享地址空间需明确拦截
+        shared_net = ip_network('100.64.0.0/10')
+
+        def _is_private_ip(ip_str: str) -> bool:
+            try:
+                ip_obj = ip_address(ip_str)
+                if ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_link_local or ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified:
+                    return True
+                if ip_obj in shared_net:
+                    return True
+                return False
+            except Exception:
+                return True
+
+        # 1) 如果传入的是 IP，直接检查
         try:
-            ip = socket.gethostbyname(hostname)
-        except:
-            return True 
-        if ip.startswith(('127.', '192.168.', '10.', '172.16.', '0.')): return False
+            if _is_private_ip(hostname):
+                return False
+            return True
+        except Exception:
+            pass
+
+        # 2) 解析域名到所有地址，任一私网即拒绝
+        try:
+            infos = socket.getaddrinfo(hostname, None)
+        except Exception:
+            # DNS 解析失败，默认拒绝
+            return False
+
+        for info in infos:
+            ip_str = info[4][0]
+            if _is_private_ip(ip_str):
+                return False
+
         return True
-    except:
+    except Exception:
         return False

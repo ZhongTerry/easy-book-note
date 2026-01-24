@@ -1754,24 +1754,24 @@ body.dark-mode #settingsModal input.p-input {
                     try { domain = new URL(src.url).hostname; } catch(e) { domain = src.url; }
                     
                     return `
-                    <div onclick="requestSwitch('${src.url}', '${src.source}')" 
+                    <div onclick="requestSwitch(${JSON.stringify(src.url || '')}, ${JSON.stringify(src.source || '')})" 
                          style="padding:15px; border:1px solid #eee; border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; background:#fff;" 
                          onmouseover="this.style.borderColor='var(--accent)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.05)'" 
                          onmouseout="this.style.borderColor='#eee'; this.style.boxShadow='none'">
                         
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                            <div style="font-weight:bold; color: #333; font-size:15px;">${src.source}</div>
-                            <div style="font-size:12px; color:#888;">${src.description || ''}</div>
+                            <div style="font-weight:bold; color: #333; font-size:15px;">${escapeHtml(src.source || '')}</div>
+                            <div style="font-size:12px; color:#888;">${escapeHtml(src.description || '')}</div>
                         </div>
 
-                        <div style="font-size:13px; color:#555; margin-bottom:8px;">${src.title}</div>
+                        <div style="font-size:13px; color:#555; margin-bottom:8px;">${escapeHtml(src.title || '')}</div>
                         
                         <div style="font-size:11px; color:#999; background:#f9f9f9; padding:4px 8px; border-radius:4px; font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                            ${src.url}
+                            ${escapeHtml(src.url || '')}
                         </div>
                     </div>`;
                 }).join('');
-            } else { list.innerHTML = `<div style="text-align:center; padding: 20px;">${json.msg}</div>`; }
+            } else { list.innerHTML = `<div style="text-align:center; padding: 20px;">${escapeHtml(json.msg || '')}</div>`; }
         } catch(e) { showToast("换源服务暂时不可用"); }
     }
     async function requestSwitch(targetUrl, sourceName) {
@@ -1781,7 +1781,7 @@ body.dark-mode #settingsModal input.p-input {
         list.parentElement.scrollTop = 0; // 滚回顶部
         list.style.display = 'none';
         loading.style.display = 'block';
-        loading.innerHTML = `⏳ 正在前往 ${sourceName}<br>尝试匹配章节...`;
+        loading.innerHTML = `⏳ 正在前往 ${escapeHtml(sourceName || '')}<br>尝试匹配章节...`;
 
         try {
             const res = await fetch('/api/source/confirm_switch', {
@@ -1877,6 +1877,16 @@ body.dark-mode #settingsModal input.p-input {
     }
 
     function showToast(m) { const x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(()=>x.className="", 3000); }
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;")
+            .replace(/`/g, "&#96;");
+    }
     
     // 🔥 处理"已是末尾"时自动重抓目录
     async function handleNoNextChapter() {
@@ -2055,7 +2065,14 @@ async function updatePageContent(data) {
         const meta = contentBox.querySelector('.article-meta');
         if(meta) {
             const wordCount = data.content.join('').length;
-            meta.innerHTML = `<span>本章字数: ${wordCount}字</span> <span>来源: ${dbKey}</span>`;
+            meta.innerHTML = '';
+            const wcSpan = document.createElement('span');
+            wcSpan.textContent = `本章字数: ${wordCount}字`;
+            const srcSpan = document.createElement('span');
+            srcSpan.textContent = `来源: ${dbKey}`;
+            meta.appendChild(wcSpan);
+            meta.appendChild(document.createTextNode(' '));
+            meta.appendChild(srcSpan);
         }
     }
     
