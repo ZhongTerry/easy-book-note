@@ -175,13 +175,26 @@ def do_work(task):
     with TASK_LOCK: CURRENT_TASKS += 1
     try:
         data = None
-        # 强制爬取逻辑
-        if endpoint == 'run':
-            data = crawler.run(url)
-        elif endpoint == 'toc':
-            data = crawler.get_toc(url)
-        elif endpoint == 'search':
-            data = searcher.search_bing(payload.get('keyword'))
+        # [关键修复] Worker节点强制本地爬取，跳过_remote_request
+        # 设置环境变量告诉crawler跳过远程请求
+        import os
+        original_flag = os.environ.get('FORCE_LOCAL_CRAWL')
+        os.environ['FORCE_LOCAL_CRAWL'] = '1'
+        
+        try:
+            # 强制爬取逻辑
+            if endpoint == 'run':
+                data = crawler.run(url)
+            elif endpoint == 'toc':
+                data = crawler.get_toc(url)
+            elif endpoint == 'search':
+                data = searcher.search_bing(payload.get('keyword'))
+        finally:
+            # 恢复环境变量
+            if original_flag is None:
+                os.environ.pop('FORCE_LOCAL_CRAWL', None)
+            else:
+                os.environ['FORCE_LOCAL_CRAWL'] = original_flag
             
         if data:
             # 数据清洗：防止任何非标对象混入

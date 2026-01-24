@@ -28,6 +28,11 @@ def _remote_request(endpoint, payload):
     远程爬取请求（带延迟自动记录）
     返回: (data, worker_uuid, latency_ms) 或 None
     """
+    # [关键修复] Worker节点执行时跳过远程请求，直接返回None降级到本地爬取
+    import os
+    if os.environ.get('FORCE_LOCAL_CRAWL') == '1':
+        return None  # Worker节点强制本地爬取
+    
     # 1. 检查 Redis 是否可用
     try:
         from managers import cluster_manager
