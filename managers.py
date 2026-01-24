@@ -1004,39 +1004,93 @@ class ClusterManager:
     # ... (前面的方法保持不变) ...
     def record_latency(self, url, worker_uuid, latency_ms):
         """
-        [新增] 按域名记录节点的延迟
+        自适应权重记录：EWMA平滑 + 异常值过滤 + 熔断保护
         Redis Key: crawler:latency:{domain}  (Hash结构)
         """
         if not self.use_redis or not url: return
         
         try:
             from urllib.parse import urlparse
+            import statistics
+            
             domain = urlparse(url).netloc
             if not domain: return
 
             key = f"crawler:latency:{domain}"
             
-            # 存入 Hash: {worker_uuid: latency_ms}
-            self.r.hset(key, worker_uuid, latency_ms)
+            # === 1. 异常值过滤（防止单次超时污染权重） ===
+            # 获取该域名下所有节点的延迟，用于统计分析
+            all_latencies_raw = self.r.hgetall(key)
+            all_latencies = [float(v) for v in all_latencies_raw.values() if v]
             
-            # 设置过期时间 (例如 7 天)，因为网络环境会变，老数据没意义
-            self.r.expire(key, 7 * 86400) 
+            # 如果有足够样本（至少3个节点），进行异常检测
+            if len(all_latencies) >= 3:
+                mean = statistics.mean(all_latencies)
+                try:
+                    std = statistics.stdev(all_latencies)
+                except:
+                    std = mean * 0.3  # 如果标准差计算失败，用30%作为估计
+                
+                # 检测异常值：超过均值+3倍标准差视为异常
+                threshold = mean + 3 * std
+                if latency_ms > threshold:
+                    # 钳制到均值+2倍标准差（保留一定惩罚，但不至于过度）
+                    clamped = mean + 2 * std
+                    print(f"[Latency] 异常值过滤: {domain} {worker_uuid} {latency_ms}ms -> {clamped:.0f}ms (均值{mean:.0f})")
+                    latency_ms = clamped
             
-            # print(f"[Cluster] 记录延迟: {domain} -> {worker_uuid} = {latency_ms}ms")
+            # === 2. 熔断保护（超时直接降权） ===
+            if latency_ms > 15000:  # 超过15秒视为严重超时
+                print(f"[Latency] 熔断触发: {domain} {worker_uuid} {latency_ms}ms")
+                latency_ms = 15000  # 钳制到15秒上限
+            
+            # === 3. EWMA平滑处理（核心算法） ===
+            old_latency_str = self.r.hget(key, worker_uuid)
+            
+            if old_latency_str:
+                old_latency = float(old_latency_str)
+                # α = 0.15：历史占85%，新数据占15%（保守策略，适合不稳定网络）
+                alpha = 0.15
+                smoothed_latency = alpha * latency_ms + (1 - alpha) * old_latency
+            else:
+                # 冷启动：第一次记录直接使用
+                smoothed_latency = latency_ms
+            
+            # === 4. 保存到Redis ===
+            self.r.hset(key, worker_uuid, int(smoothed_latency))
+            
+            # 设置过期时间7天（网络环境会变化）
+            self.r.expire(key, 7 * 86400)
+            
+            # 调试日志（生产环境可注释）
+            # print(f"[Latency] {domain} {worker_uuid}: {latency_ms}ms -> {smoothed_latency:.0f}ms")
+            
         except Exception as e:
-            print(f"Latency save error: {e}")
+            print(f"[Latency] 记录失败: {e}")
     def _get_speed_coefficient(self, latency):
-        return 1
         """
-        [辅助] 将延迟毫秒数转换为分数系数 (您可以调整这里的公式)
+        延迟转权重系数（平滑曲线，避免阶梯式跳变）
+        公式: weight = baseline / max(latency, min_latency)
         """
-        if latency < 0: return 0.01   # 之前报错过，几乎屏蔽
-        if latency < 200: return 2.0  # 极速
-        if latency < 500: return 1.5  # 优秀
-        if latency < 1000: return 1.1 # 良好
-        if latency < 2000: return 0.9 # 及格
-        if latency < 5000: return 0.6 # 缓慢
-        return 0.3                    # 龟速
+        # 错误熔断：之前报错过的节点给极低权重
+        if latency < 0:
+            return 0.05
+        
+        # 基准延迟：1000ms（1秒）视为标准水平
+        baseline = 1000
+        
+        # 最小延迟保护：避免除零，最小按100ms计算
+        safe_latency = max(latency, 100)
+        
+        # 计算权重比例（反比关系：延迟越低权重越高）
+        ratio = baseline / safe_latency
+        
+        # 限制在合理区间 [0.1, 3.0]
+        # - 最快节点（100ms）最多3倍权重
+        # - 最慢节点（10s+）最低0.1倍权重
+        coefficient = max(0.1, min(3.0, ratio))
+        
+        return coefficient
     def get_speed_multiplier(self, url, worker_uuid):
         """
         [新增] 计算速度加权系数

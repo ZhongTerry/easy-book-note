@@ -1748,3 +1748,45 @@ def check_unfinished_export():
     except Exception as e:
         print(f"[Export Check Error] {e}")
         return jsonify({"status": "error", "msg": str(e)})
+
+@core_bp.route('/api/cluster/latency_stats')
+@login_required
+def api_latency_stats():
+    """查看集群延迟统计（监控权重调整效果）"""
+    try:
+        if not managers.cluster_manager.use_redis:
+            return jsonify({"status": "error", "msg": "未启用Redis集群模式"})
+        
+        # 获取所有延迟记录的域名
+        pattern = "crawler:latency:*"
+        keys = managers.cluster_manager.r.keys(pattern)
+        
+        stats = {}
+        for key in keys:
+            domain = key.replace("crawler:latency:", "")
+            latencies = managers.cluster_manager.r.hgetall(key)
+            
+            if latencies:
+                # 转换为可读格式
+                node_stats = {}
+                for node_uuid, latency_str in latencies.items():
+                    latency = float(latency_str)
+                    # 计算该延迟对应的权重系数
+                    coefficient = managers.cluster_manager._get_speed_coefficient(latency)
+                    node_stats[node_uuid] = {
+                        "latency_ms": round(latency, 0),
+                        "weight_coefficient": round(coefficient, 2),
+                        "status": "极快" if latency < 500 else "正常" if latency < 2000 else "较慢" if latency < 5000 else "很慢"
+                    }
+                
+                stats[domain] = node_stats
+        
+        return jsonify({
+            "status": "success",
+            "algorithm": "EWMA (α=0.15) + 异常值过滤 + 熔断保护",
+            "data": stats
+        })
+    
+    except Exception as e:
+        print(f"[Latency Stats Error] {e}")
+        return jsonify({"status": "error", "msg": str(e)})
