@@ -897,21 +897,34 @@ def api_resolve_head():
 @core_bp.route('/api/search_novel', methods=['POST'])
 @login_required
 def api_search():
-    keyword = request.json.get('keyword')
-    if not keyword: return jsonify({"status": "error"})
-    tid = managers.task_manager.submit(_worker_search, keyword)
-    return jsonify({"status": "pending", "task_id": tid})
+    try:
+        keyword = request.json.get('keyword') if request.json else None
+        if not keyword: return jsonify({"status": "error", "message": "缺少关键词"})
+        tid = managers.task_manager.submit(_worker_search, keyword)
+        return jsonify({"status": "pending", "task_id": tid})
+    except Exception as e:
+        print(f"[Search Error] {e}")
+        return jsonify({"status": "error", "message": str(e)})
 
 @core_bp.route('/api/upload_epub', methods=['POST'])
 @login_required
 def api_upload_epub():
-    if 'file' not in request.files: return jsonify({"status": "error"})
-    f = request.files['file']
-    fn = epub_handler.save_file(f)
-    k = searcher.get_pinyin_key(os.path.splitext(fn)[0])
-    v = f"epub:{fn}:toc"
-    managers.db.insert(k, v)
-    return jsonify({"status": "success", "key": k, "value": v})
+    try:
+        if 'file' not in request.files: 
+            return jsonify({"status": "error", "message": "未检测到文件"})
+        f = request.files['file']
+        if not f.filename:
+            return jsonify({"status": "error", "message": "文件名为空"})
+        if not f.filename.lower().endswith('.epub'):
+            return jsonify({"status": "error", "message": "仅支持EPUB格式"})
+        fn = epub_handler.save_file(f)
+        k = searcher.get_pinyin_key(os.path.splitext(fn)[0])
+        v = f"epub:{fn}:toc"
+        managers.db.insert(k, v)
+        return jsonify({"status": "success", "key": k, "value": v})
+    except Exception as e:
+        print(f"[Upload Error] {e}")
+        return jsonify({"status": "error", "message": str(e)})
 # ... 引入 update_manager ...
 from managers import db, update_manager, booklist_manager, task_manager, get_current_user
 
@@ -1602,12 +1615,6 @@ def start_export():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"[Export Start Error] {e}")
-        return jsonify({"status": "error", "msg": str(e)})
-        
-        return jsonify({"status": "success", "task_id": task_id})
-    
-    except Exception as e:
         print(f"[Export Start Error] {e}")
         return jsonify({"status": "error", "msg": str(e)})
 

@@ -1569,6 +1569,7 @@ class SearchHelperOld:
 
             soup = BeautifulSoup(resp.content, 'html.parser')
             results = []
+            raw_results = []  # 初始化原始结果列表
             
             # 百度的结果块通常是 c-container
             containers = soup.select('div.c-container')
@@ -2483,69 +2484,80 @@ class NovelCrawler:
         return self._general_run_logic(url)
     
     def _general_run_logic(self, url):
-        base_url = url
-        if "_" in url:
-            normalized = re.sub(r'_\d+\.html', '.html', url)
-            if normalized != url: base_url = normalized
-        combined_content = []
-        first_page_meta = None
-        current_url = base_url
-        visited_urls = {url, base_url}
-        max_pages, page_count = 8, 0
-        original_title = ""
-        chap_id_match = re.search(r'/(\d+)(?:_\d+)?\.html', base_url)
-        current_chap_id = chap_id_match.group(1) if chap_id_match else ""
-        while page_count < max_pages:
-            html = self._fetch_page_smart(current_url)
-            if not html: break
-            soup = BeautifulSoup(html, 'html.parser')
-            current_title = self._get_smart_title(soup)
-            if page_count == 0: original_title = current_title
-            elif current_title != original_title and len(current_title) > 3: break
-            content = self._extract_content_smart(soup)
-            if content and original_title in content[0]: content = content[1:]
-            combined_content.extend(content)
-            next_page_url, next_chapter_url, prev_chapter_url, toc_url = None, None, None, None
-            for a in soup.find_all('a'):
-                txt = a.get_text(strip=True).replace(' ', '')
-                href = a.get('href')
-                if not href or href.startswith('javascript'): continue
-                full = urljoin(current_url, href)
-                if "下一页" in txt or "下—页" in txt or re.search(r'\(\d+/\d+\)', txt):
-                    if current_chap_id and current_chap_id in href: next_page_url = full
-                    else: next_chapter_url = full
-                elif "下一章" in txt or "下章" in txt: next_chapter_url = full
-                if page_count == 0:
-                    if "上一章" in txt or "上章" in txt: prev_chapter_url = full
-                    elif "上一页" in txt or "上页" in txt:
-                        if current_chap_id and current_chap_id not in href: prev_chapter_url = full
-                if "目录" in txt: toc_url = full
-            for aid in ['pb_prev', 'prev_url', 'pb_next', 'next_url', 'pb_mulu']:
-                tag = soup.find(id=aid)
-                if not tag or not tag.get('href'): continue
-                t_url = urljoin(current_url, tag['href'])
-                if 'prev' in aid and page_count == 0 and not prev_chapter_url:
-                    if current_chap_id and current_chap_id not in tag['href']: prev_chapter_url = t_url
-                elif 'next' in aid and not next_chapter_url:
-                    if current_chap_id and current_chap_id in tag['href']: next_page_url = t_url
-                    else: next_chapter_url = t_url
-                elif 'mulu' in aid and not toc_url: toc_url = t_url
-            if page_count == 0: first_page_meta = {'title': original_title, 'prev': prev_chapter_url, 'toc_url': toc_url}
-            if next_page_url and next_page_url not in visited_urls:
-                current_url = next_page_url
-                visited_urls.add(next_page_url)
-                page_count += 1
-            else:
-                first_page_meta['next'] = next_chapter_url
-                break
-        if first_page_meta:
-            first_page_meta['content'] = combined_content
-            return first_page_meta
-        return None
+        try:
+            base_url = url
+            if "_" in url:
+                normalized = re.sub(r'_\d+\.html', '.html', url)
+                if normalized != url: base_url = normalized
+            combined_content = []
+            first_page_meta = None
+            current_url = base_url
+            visited_urls = {url, base_url}
+            max_pages, page_count = 8, 0
+            original_title = ""
+            chap_id_match = re.search(r'/(\d+)(?:_\d+)?\.html', base_url)
+            current_chap_id = chap_id_match.group(1) if chap_id_match else ""
+            
+            while page_count < max_pages:
+                html = self._fetch_page_smart(current_url)
+                if not html: break
+                soup = BeautifulSoup(html, 'html.parser')
+                current_title = self._get_smart_title(soup)
+                if page_count == 0: original_title = current_title
+                elif current_title != original_title and len(current_title) > 3: break
+                content = self._extract_content_smart(soup)
+                if content and original_title in content[0]: content = content[1:]
+                combined_content.extend(content)
+                next_page_url, next_chapter_url, prev_chapter_url, toc_url = None, None, None, None
+                for a in soup.find_all('a'):
+                    txt = a.get_text(strip=True).replace(' ', '')
+                    href = a.get('href')
+                    if not href or href.startswith('javascript'): continue
+                    full = urljoin(current_url, href)
+                    if "下一页" in txt or "下—页" in txt or re.search(r'\(\d+/\d+\)', txt):
+                        if current_chap_id and current_chap_id in href: next_page_url = full
+                        else: next_chapter_url = full
+                    elif "下一章" in txt or "下章" in txt: next_chapter_url = full
+                    if page_count == 0:
+                        if "上一章" in txt or "上章" in txt: prev_chapter_url = full
+                        elif "上一页" in txt or "上页" in txt:
+                            if current_chap_id and current_chap_id not in href: prev_chapter_url = full
+                    if "目录" in txt: toc_url = full
+                for aid in ['pb_prev', 'prev_url', 'pb_next', 'next_url', 'pb_mulu']:
+                    tag = soup.find(id=aid)
+                    if not tag or not tag.get('href'): continue
+                    t_url = urljoin(current_url, tag['href'])
+                    if 'prev' in aid and page_count == 0 and not prev_chapter_url:
+                        if current_chap_id and current_chap_id not in tag['href']: prev_chapter_url = t_url
+                    elif 'next' in aid and not next_chapter_url:
+                        if current_chap_id and current_chap_id in tag['href']: next_page_url = t_url
+                        else: next_chapter_url = t_url
+                    elif 'mulu' in aid and not toc_url: toc_url = t_url
+                if page_count == 0: first_page_meta = {'title': original_title, 'prev': prev_chapter_url, 'toc_url': toc_url}
+                if next_page_url and next_page_url not in visited_urls:
+                    current_url = next_page_url
+                    visited_urls.add(next_page_url)
+                    page_count += 1
+                else:
+                    first_page_meta['next'] = next_chapter_url
+                    break
+            
+            if first_page_meta:
+                first_page_meta['content'] = combined_content
+                return first_page_meta
+            return None
+        except Exception as e:
+            print(f"[Run] General logic error: {e}")
+            return None
 
     def get_first_chapter(self, toc_url):
-        res = self.get_toc(toc_url)
-        return res['chapters'][0]['url'] if res and res['chapters'] else None
+        try:
+            res = self.get_toc(toc_url)
+            if res and res.get('chapters') and len(res['chapters']) > 0:
+                return res['chapters'][0].get('url')
+        except Exception as e:
+            print(f"[Crawler] get_first_chapter error: {e}")
+        return None
 
 # ... (EpubHandler 保持不变) ...
 # spider_core.py

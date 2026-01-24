@@ -1248,8 +1248,8 @@ class ClusterManager:
             region_coef = 1.0
             if target_url:
                 is_cn_site = any(x in target_url for x in ['.cn', 'biqu', 'gongzicp'])
-                if is_cn and cfg['region'] == 'CN': region_coef = 1.2
-                if not is_cn and cfg['region'] == 'GLOBAL': region_coef = 1.2
+                if is_cn_site and cfg['region'] == 'CN': region_coef = 1.2
+                if not is_cn_site and cfg['region'] == 'GLOBAL': region_coef = 1.2
             
             # 4. [核心] 域名级速度加权 (精细筛选)
             speed_coef = 1.0
