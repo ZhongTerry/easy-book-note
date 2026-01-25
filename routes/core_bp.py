@@ -258,8 +258,14 @@ def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
     force = request.args.get('force')
     
+    # [调试] 打印 URL 检查结果
+    print(f"[Read] URL: {u}")
+    print(f"[Read] Key: {k}")
+    print(f"[Read] is_safe_url: {is_safe_url(u) if u and not u.startswith('epub:') else 'epub-skip'}")
+    
     # 1. 安全检查
     if not u.startswith('epub:') and not is_safe_url(u): 
+        print(f"[Read] ❌ Blocked by is_safe_url: {u}")
         return "Illegal URL", 403
     
     data = None

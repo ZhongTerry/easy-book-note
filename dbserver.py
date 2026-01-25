@@ -43,10 +43,30 @@ app.register_blueprint(pro_bp)
 # 基础 CSRF 防护：仅校验同源 Origin/Referer（存在时）
 @app.before_request
 def basic_csrf_guard():
+    # [调试] 打印所有请求信息
+    print(f"[Request] {request.method} {request.path} | User: {session.get('user', {}).get('username', 'None')}")
+    
+    # [核心] 只拦截非 GET 请求
     if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and session.get('user'):
         origin = request.headers.get('Origin') or request.headers.get('Referer')
-        if origin and not origin.startswith(request.host_url):
-            return jsonify({"status": "error", "msg": "CSRF blocked"}), 403
+        if origin:
+            # 提取 origin 的 host 部分进行比较
+            from urllib.parse import urlparse
+            origin_parsed = urlparse(origin)
+            origin_host = origin_parsed.netloc.split(':')[0]  # 去掉端口
+            request_host = request.host.split(':')[0]  # 去掉端口
+            
+            # 规范化 localhost 和 127.0.0.1（它们是同一个地址）
+            def normalize_host(h):
+                if h in ('localhost', '127.0.0.1', '0.0.0.0'):
+                    return 'localhost'
+                return h
+            
+            if normalize_host(origin_host) != normalize_host(request_host):
+                print(f"[CSRF] ❌ Blocked: {origin_host} != {request_host}")
+                return jsonify({"status": "error", "msg": "CSRF blocked"}), 403
+        
+        print(f"[CSRF] ✅ Passed: {request.method} {request.path}")
 
 def schedule_cache_cleanup():
     time.sleep(10)

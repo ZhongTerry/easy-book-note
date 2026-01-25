@@ -1630,12 +1630,13 @@ class SearchHelperOld:
 # ==========================================
 class NovelCrawler:
     def __init__(self):
+        import threading
         self.impersonate = "chrome110"
         self.timeout = 15
         self.proxies = getproxies()
         # [新增] 任务去重机制：防止同一 URL 被重复爬取
         self._active_tasks = {}  # {url: {'event': threading.Event(), 'result': None, 'error': None}}
-        self._task_lock = __import__('threading').Lock()
+        self._task_lock = threading.Lock()
 
     def _normalize_title(self, text):
         if not text:
