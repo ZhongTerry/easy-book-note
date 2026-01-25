@@ -467,9 +467,32 @@
         setInterval(sendHeartbeat, 60000);
         reportWordCount();
         
-        // 预加载下一章
+        // 预加载下一章和下下一章
         const nextUrl = "{{ article.next }}";
-        if(nextUrl) setTimeout(() => fetch('/api/prefetch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:nextUrl})}), 3000);
+        if(nextUrl) {
+            // 预加载下一章
+            setTimeout(() => {
+                fetch('/api/prefetch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:nextUrl})})
+                .then(res => res.json())
+                .then(data => {
+                    if(data.status === 'success' || data.status === 'skipped') {
+                        // 延迟预加载下下一章
+                        setTimeout(() => {
+                            fetch('/read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:nextUrl, ajax:true})})
+                            .then(r => r.json())
+                            .then(d => {
+                                if(d.next_url) {
+                                    console.log('🚀 预加载下下一章:', d.next_url);
+                                    fetch('/api/prefetch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:d.next_url})});
+                                }
+                            })
+                            .catch(() => {});
+                        }, 1500);
+                    }
+                })
+                .catch(() => {});
+            }, 500);
+        }
     };
 
     // === 1. 智能点击监听 ===
@@ -982,11 +1005,31 @@
                  if(window.speechSynthesis) window.speechSynthesis.cancel();
                  
                  if(data.next_url) {
-                    setTimeout(() => fetch('/api/prefetch', { 
-                        method: 'POST', 
-                        headers: {'Content-Type': 'application/json'}, 
-                        body: JSON.stringify({ url: data.next_url }) 
-                    }), 2000);
+                    setTimeout(() => {
+                        fetch('/api/prefetch', { 
+                            method: 'POST', 
+                            headers: {'Content-Type': 'application/json'}, 
+                            body: JSON.stringify({ url: data.next_url }) 
+                        })
+                        .then(res => res.json())
+                        .then(prefetchData => {
+                            if(prefetchData.status === 'success' || prefetchData.status === 'skipped') {
+                                // 延迟预加载下下一章
+                                setTimeout(() => {
+                                    fetch('/read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:data.next_url, ajax:true})})
+                                    .then(r => r.json())
+                                    .then(d => {
+                                        if(d.next_url) {
+                                            console.log('🚀 预加载下下一章:', d.next_url);
+                                            fetch('/api/prefetch', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:d.next_url})});
+                                        }
+                                    })
+                                    .catch(() => {});
+                                }, 1500);
+                            }
+                        })
+                        .catch(() => {});
+                    }, 500);
                  }
 
                  // 统计与同步

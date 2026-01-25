@@ -1633,6 +1633,9 @@ class NovelCrawler:
         self.impersonate = "chrome110"
         self.timeout = 15
         self.proxies = getproxies()
+        # [新增] 任务去重机制：防止同一 URL 被重复爬取
+        self._active_tasks = {}  # {url: {'event': threading.Event(), 'result': None, 'error': None}}
+        self._task_lock = __import__('threading').Lock()
 
     def _normalize_title(self, text):
         if not text:
@@ -2479,25 +2482,97 @@ class NovelCrawler:
         return None
 
     def run(self, url):
-                # 0. [新增] 优先检查本地缓存
-        # 必须在函数内部导入，防止循环引用
-        from managers import cache
+        """
+        智能爬取：自动去重 + 结果共享
+        如果同一 URL 正在被其他请求爬取，则等待结果而非重复爬取
+        """
+        if not url:
+            return None
         
-        # 除非是 epub 协议 (epub 不走普通缓存逻辑，走 handler)
+        # 0. 优先检查本地缓存
+        from managers import cache
         if not url.startswith('epub:'):
             cached_data = cache.get(url)
             if cached_data:
                 print(f"[Crawler] ✅ 命中本地缓存: {url}")
                 return cached_data
-
+        
+        # 1. [核心去重] 检查是否有正在进行的任务
+        import threading
+        with self._task_lock:
+            if url in self._active_tasks:
+                print(f"[Crawler] 🔄 检测到重复请求 {url[:80]}，等待已有任务完成...")
+                task_info = self._active_tasks[url]
+                is_waiter = True
+            else:
+                # 创建新任务记录
+                print(f"[Crawler] 🆕 创建新爬取任务: {url[:80]}")
+                task_info = {
+                    'event': threading.Event(),
+                    'result': None,
+                    'error': None
+                }
+                self._active_tasks[url] = task_info
+                is_waiter = False
+        
+        # 2. 如果是等待者，阻塞等待结果
+        if is_waiter:
+            task_info['event'].wait(timeout=30)  # 最多等待 30 秒
+            if task_info['result'] is not None:
+                print(f"[Crawler] ✅ 获得共享结果: {url[:80]}")
+                return task_info['result']
+            elif task_info['error'] is not None:
+                print(f"[Crawler] ❌ 主任务失败: {task_info['error']}")
+                return None
+            else:
+                print(f"[Crawler] ⏰ 等待超时，尝试自己爬取")
+                # 超时后尝试自己爬取（防止死锁）
+        
+        # 3. 我们是执行者，开始实际爬取
+        try:
+            result = self._do_actual_crawl(url)
+            
+            # 保存结果并通知所有等待者
+            with self._task_lock:
+                if url in self._active_tasks:
+                    self._active_tasks[url]['result'] = result
+                    self._active_tasks[url]['event'].set()
+                    print(f"[Crawler] 📢 爬取完成，通知等待者: {url[:80]}")
+            
+            return result
+        
+        except Exception as e:
+            # 保存错误并通知等待者
+            with self._task_lock:
+                if url in self._active_tasks:
+                    self._active_tasks[url]['error'] = str(e)
+                    self._active_tasks[url]['event'].set()
+            print(f"[Crawler] ❌ 爬取失败: {e}")
+            return None
+        
+        finally:
+            # 延迟清理任务记录（60秒后），避免内存泄漏
+            threading.Timer(60, lambda: self._cleanup_task(url)).start()
+    
+    def _cleanup_task(self, url):
+        """清理已完成的任务记录"""
+        with self._task_lock:
+            if url in self._active_tasks:
+                del self._active_tasks[url]
+                print(f"[Crawler] 🧹 清理任务记录: {url[:80]}")
+    
+    def _do_actual_crawl(self, url):
+        """
+        实际执行爬取的逻辑（原 run 方法的核心部分）
+        """
+        # 必须在函数内部导入，防止循环引用
+        from managers import cache
+        
         # 1. 尝试远程集群爬取 (Pull/Push 模式通用)
-        # _remote_request 内部已经封装了检查 Token 的逻辑
         remote_data = _remote_request('run', {'url': url})
         
         if remote_data:
             print(f"[Crawler] 📥 远程抓取成功，写入本地缓存")
-            # [关键] 拿到远程数据后，立刻存入本地缓存！
-            # 这样下次就不用再烦劳集群了
             cache.set(url, remote_data)
             return remote_data
         
@@ -2505,17 +2580,16 @@ class NovelCrawler:
         print(f"[Run] 🐢 远程不可用或未配置，开始本地爬取: {url}")
         print(f"\n[Run] 🚀 开始处理 URL: {url}")
         
-        # 1. 尝试匹配插件
+        # 3. 尝试匹配插件
         adapter = plugin_mgr.find_match(url)
         if adapter:
             print(f"[Run] ✨ 匹配到适配器: {adapter.__class__.__name__}")
             result = adapter.run(self, url)
-            # 打印插件返回的书名
             print(f"[Run] 📦 插件返回书名: {result.get('book_name', '未获取')}")
             return result
         
         print(f"[Run] 🌐 未找到插件，使用通用逻辑...")
-        # 2. 如果没插件，执行通用逻辑
+        # 4. 如果没插件，执行通用逻辑
         return self._general_run_logic(url)
     
     def _general_run_logic(self, url):

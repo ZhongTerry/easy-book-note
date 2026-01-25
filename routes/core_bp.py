@@ -892,7 +892,16 @@ def api_prefetch():
     u = (request.json or {}).get('url')
     if not u or not is_safe_url(u):
         return jsonify({"status": "error", "message": "Illegal URL"}), 403
-    if managers.cache.get(u): return jsonify({"status": "skipped"})
+    
+    # 先检查缓存
+    if managers.cache.get(u): 
+        return jsonify({"status": "skipped", "msg": "已缓存"})
+    
+    # 检查是否有正在进行的爬取任务
+    if hasattr(crawler, '_active_tasks') and u in crawler._active_tasks:
+        return jsonify({"status": "pending", "msg": "正在爬取中，请稍候"})
+    
+    # 提交爬取任务（自动去重）
     d = crawler.run(u)
     if d:
         managers.cache.set(u, d)

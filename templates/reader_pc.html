@@ -1997,9 +1997,9 @@ async function loadChapter(url) {
             // 8. 自动保存进度
             autoSyncProgress();
             
-            // 9. 预加载下一章
+            // 9. 预加载下一章和下下一章
             if(data.next_url) {
-                setTimeout(() => prefetchChapter(data.next_url), 2000);
+                setTimeout(() => prefetchChapter(data.next_url, 0), 500);
             }
             
             // 10. 刷新目录高亮(如果目录已打开)
@@ -2120,12 +2120,38 @@ function rebindAjaxEvents() {
 }
 
 /* 预加载下一章 */
-function prefetchChapter(url) {
+function prefetchChapter(url, depth = 0) {
+    if(depth > 1) return; // 最多预加载2章（下一章 + 下下一章）
+    
     fetch('/api/prefetch', { 
         method: 'POST', 
         headers: {'Content-Type': 'application/json'}, 
         body: JSON.stringify({ url: url }) 
-    }).catch(() => {}); // 静默失败
+    })
+    .then(res => res.json())
+    .then(data => {
+        if(data.status === 'success' || data.status === 'skipped') {
+            // 预加载成功，尝试获取下下一章
+            if(depth === 0) {
+                setTimeout(() => {
+                    fetch('/read', { 
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ url: url, ajax: true })
+                    })
+                    .then(r => r.json())
+                    .then(d => {
+                        if(d.next_url) {
+                            console.log('🚀 预加载下下一章:', d.next_url);
+                            prefetchChapter(d.next_url, depth + 1);
+                        }
+                    })
+                    .catch(() => {});
+                }, 1500); // 延迟1.5秒预加载下下一章，避免请求过于密集
+            }
+        }
+    })
+    .catch(() => {}); // 静默失败
 }
 
 /* 进度条控制 */
