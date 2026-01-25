@@ -1217,6 +1217,11 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         { icon: '📦', text: '导出全书', click: asyncAct(`showExportModal('${safeKey}', '${encodeURIComponent(value)}')`) }
     ];
 
+    // 对 http/https 链接显示目录选项
+    if (isLink && !isEpub) {
+        items.unshift({ icon: '📚', text: '打开目录', click: `${closeCmd} window.open('/toc?url=${encodeURIComponent(value)}&key=${encodeURIComponent(key)}', '_blank')` });
+    }
+
     if (isLink) {
         items.push({ icon: '🔗', text: '复制源链接', click: `${closeCmd} PureUI.copy('${safeVal}')` });
     }
@@ -2253,7 +2258,6 @@ function restoreVersion(key, value) {
                 const bg = stringToColor(title);
                 const isLink = v.startsWith('http') || v.startsWith('epub:');
                 const clickAction = isLink ? `window.open('/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}', '_blank')` : `PureUI.copy('${v}')`;
-                
                 html += `
                 <div class="book-card" onclick="${clickAction}">
                     <div class="book-cover" style="background:${bg}">
