@@ -242,7 +242,7 @@ def index():
         
         # 这里的 render_template_string 会自动接收 context_processor 注入的 app_version
         return render_template("index.html", 
-        api_url="", app_version="1.1.3")
+        api_url="", app_version="1.1.4")
     except Exception as e:
         return f"Error loading index: {str(e)}", 500
 
