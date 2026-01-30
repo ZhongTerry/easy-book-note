@@ -503,8 +503,22 @@
                 const authorHtml = item.description ? `<span class="res-author">${safeDesc}</span>` : '';
                 const urlHtml = showUrl ? `<span class="res-url">${safeUrl}</span>` : '';
                 
+                // 使用现有的escapeHtml函数并进一步处理引号
+                const jsSafeKey = (item.suggested_key || '')
+                    .replace(/\\/g, '\\\\')
+                    .replace(/"/g, '\\"')
+                    .replace(/'/g, "\\'");
+                const jsSafeUrl = (item.url || '')
+                    .replace(/\\/g, '\\\\')
+                    .replace(/"/g, '\\"')
+                    .replace(/'/g, "\\'");
+                const jsSafeTitle = (item.title || '')
+                    .replace(/\\/g, '\\\\')
+                    .replace(/"/g, '\\"')
+                    .replace(/'/g, "\\'");
+                
                 return `
-                <div class="result-item" onclick="selectResult(${JSON.stringify(item.suggested_key || '')}, ${JSON.stringify(item.url || '')}, ${JSON.stringify(item.title || '')})">
+                <div class="result-item" onclick="selectResult('&quot;${jsSafeKey}&quot;, '&quot;${jsSafeUrl}&quot;, '&quot;${jsSafeTitle}&quot;)">
                     <div class="res-left">
                         <div class="res-title">
                             ${safeTitle}
@@ -537,14 +551,14 @@
             renderResults(currentResults);
         }
         
-        // 选择结果
+        // 选择结果 - 在搜索页面直接跳转到阅读界面
         async function selectResult(key, url, title) {
             const autoSave = document.getElementById('autoSave').checked;
             
             PureUI.loading.show('🔍 正在获取目录...');
             
             try {
-                // 1. 保存到书架
+                // 1. 如果勾选自动保存，则先保存到书架
                 if (autoSave) {
                     await fetch(`${API_URL}/insert`, {
                         method: 'POST',
@@ -574,11 +588,9 @@
                 }
                 
                 setTimeout(() => {
-                    // [关键修复] 不保存时不传 key，避免历史记录不存在的 key
                     if (autoSave) {
                         window.location.href = `/read?url=${encodeURIComponent(firstChapterUrl)}&key=${encodeURIComponent(key)}`;
                     } else {
-                        // 不保存时，只传 URL，不传 key
                         window.location.href = `/read?url=${encodeURIComponent(firstChapterUrl)}`;
                     }
                 }, 300);

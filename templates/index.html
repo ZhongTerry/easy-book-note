@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -2170,7 +2170,7 @@ function renderTable(data) {
         `;
 
         html += `
-        <div class="book-row">
+        <div class="book-row" onclick="handleListItemClick(event, '${k}', '${url}', '${displayName}')">
             ${coverHtml}
             <div class="book-info">
                 <div>
@@ -2257,7 +2257,10 @@ function restoreVersion(key, value) {
                 const title = parts[parts.length - 1];
                 const bg = stringToColor(title);
                 const isLink = v.startsWith('http') || v.startsWith('epub:');
-                const clickAction = isLink ? `window.open('/read?url=${encodeURIComponent(v)}&key=${encodeURIComponent(k)}', '_blank')` : `PureUI.copy('${v}')`;
+                // 修改点击事件：Ctrl/Cmd点击用于填充输入框，普通点击用于阅读
+                const clickAction = isLink ? 
+                    `handleBookCardClick(event, '${k}', '${v}', '${title}')` : 
+                    `handleBookCardClick(event, '${k}', '${v}', '${title}')`;
                 html += `
                 <div class="book-card" onclick="${clickAction}">
                     <div class="book-cover" style="background:${bg}">
@@ -3501,6 +3504,46 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
                 console.error('删除失败:', e);
                 PureUI.toast('error', '删除失败：' + e.message);
             }
+        }
+        
+        // 处理书卡点击事件：Ctrl/Cmd点击填充输入框，普通点击阅读
+        function handleBookCardClick(event, key, value, title) {
+            // 检查是否按下了Ctrl或Cmd键
+            console.log(key, value);
+            console.log(event.ctrlKey, event.metaKey);
+            // if (event.ctrlKey || event.metaKey) {
+                // 填充到输入框
+                document.getElementById('key').value = key;
+                document.getElementById('value').value = value;
+                showMsg(`✅ 已填入：${title}，可点击保存`, 'success');
+            // } else {
+            //     // 普通点击，如果是链接则打开阅读页面，否则复制值
+            //     if (value.startsWith('http') || value.startsWith('epub:')) {
+            //         window.open(`/read?url=${encodeURIComponent(value)}&key=${encodeURIComponent(key)}`, '_blank');
+            //     } else {
+            //         PureUI.copy(value);
+            //     }
+            // }
+        }
+        
+        // 处理列表项点击事件：同样支持Ctrl/Cmd填充输入框
+        function handleListItemClick(event, key, value, title) {
+            // 检查是否按下了Ctrl或Cmd键
+            console.log(key, value);
+            console.log(event.ctrlKey, event.metaKey);
+            // if (event.ctrlKey || event.metaKey) {
+                // 填充到输入框
+                document.getElementById('key').value = key;
+                document.getElementById('value').value = value;
+                showMsg(`✅ 已填入：${title}，可点击保存`, 'success');
+            // } else {
+            //     // 普通点击，如果是链接则打开阅读页面，否则复制值
+            //     if (value.startsWith('http') || value.startsWith('epub:')) {
+            //         window.open(`/read?url=${encodeURIComponent(value)}&key=${encodeURIComponent(key)}`, '_blank');
+            //     } else {
+            //         PureUI.copy(value);
+            //     }
+            // }
         }
     </script>
 </body>
