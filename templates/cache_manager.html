@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全文缓存管理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            color: #666;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .cache-list {
+            display: grid;
+            gap: 15px;
+        }
+        .cache-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+        .cache-item:hover {
+            border-color: #4CAF50;
+            box-shadow: 0 2px 8px rgba(76, 175, 80, 0.2);
+        }
+        .cache-info {
+            flex: 1;
+        }
+        .cache-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .cache-stats {
+            font-size: 13px;
+            color: #666;
+        }
+        .progress-bar {
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            margin: 8px 0;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            transition: width 0.3s;
+        }
+        .cache-actions {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-update {
+            background: #2196F3;
+            color: white;
+        }
+        .btn-update:hover {
+            background: #1976D2;
+        }
+        .btn-delete {
+            background: #f44336;
+            color: white;
+        }
+        .btn-delete:hover {
+            background: #d32f2f;
+        }
+        .btn-download {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-download:hover {
+            background: #45a049;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        input:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status-info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📚 全文缓存管理</h1>
+
+        <!-- 新建下载任务 -->
+        <div class="card">
+            <h2>新建下载任务</h2>
+            <div class="form-group">
+                <label for="bookKey">书籍 Key:</label>
+                <input type="text" id="bookKey" placeholder="例如: my_novel">
+            </div>
+            <div class="form-group">
+                <label for="tocUrl">目录 URL (可选):</label>
+                <input type="text" id="tocUrl" placeholder="留空则从数据库获取">
+            </div>
+            <button class="btn-download" onclick="startDownload()">🚀 开始下载</button>
+            <div id="downloadStatus"></div>
+        </div>
+
+        <!-- 缓存列表 -->
+        <div class="card">
+            <h2>我的缓存列表</h2>
+            <div id="cacheList" class="cache-list">
+                <div class="empty-state">
+                    <div class="loading"></div>
+                    <p>加载中...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 加载缓存列表
+        async function loadCacheList() {
+            try {
+                const response = await fetch('/api/cache/list');
+                const result = await response.json();
+
+                const container = document.getElementById('cacheList');
+
+                if (result.status === 'success' && result.data.length > 0) {
+                    container.innerHTML = result.data.map(cache => `
+                        <div class="cache-item">
+                            <div class="cache-info">
+                                <div class="cache-name">${cache.book_name || cache.book_key}</div>
+                                <div class="cache-stats">
+                                    ${cache.cached_chapters}/${cache.total_chapters} 章 
+                                    · ${(cache.total_size / 1024 / 1024).toFixed(2)} MB
+                                    · 更新于 ${cache.updated_at}
+                                </div>
+                                <div class="progress-bar">
+                                    <div class="progress-fill" style="width: ${cache.progress}%"></div>
+                                </div>
+                            </div>
+                            <div class="cache-actions">
+                                <button class="btn-update" onclick="updateCache('${cache.book_key}')">
+                                    🔄 更新
+                                </button>
+                                <button class="btn-delete" onclick="deleteCache('${cache.book_key}')">
+                                    🗑️ 删除
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <p>暂无缓存，请先添加下载任务</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('加载失败:', error);
+                document.getElementById('cacheList').innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: #f44336;">加载失败: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // 开始下载
+        async function startDownload() {
+            const bookKey = document.getElementById('bookKey').value.trim();
+            const tocUrl = document.getElementById('tocUrl').value.trim();
+            const statusDiv = document.getElementById('downloadStatus');
+
+            if (!bookKey) {
+                showStatus(statusDiv, '请输入书籍 Key', 'error');
+                return;
+            }
+
+            showStatus(statusDiv, '正在启动下载任务...', 'info');
+
+            try {
+                const response = await fetch('/api/cache/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ book_key: bookKey, toc_url: tocUrl || undefined })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    showStatus(statusDiv, `任务已启动！总共 ${result.total_chapters} 章`, 'success');
+                    
+                    // 开始轮询任务状态
+                    pollTaskStatus(result.task_id, statusDiv);
+                } else {
+                    showStatus(statusDiv, `启动失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus(statusDiv, `错误: ${error.message}`, 'error');
+            }
+        }
+
+        // 轮询任务状态
+        async function pollTaskStatus(taskId, statusDiv) {
+            const interval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/cache/task/${taskId}`);
+                    const status = await response.json();
+
+                    if (status.status === 'running') {
+                        const progress = ((status.current / status.total) * 100).toFixed(1);
+                        showStatus(statusDiv, 
+                            `下载中: ${status.current}/${status.total} (${progress}%) | 失败: ${status.failed}`, 
+                            'info'
+                        );
+                    } else if (status.status === 'completed') {
+                        clearInterval(interval);
+                        showStatus(statusDiv, '✅ 下载完成！', 'success');
+                        setTimeout(() => {
+                            loadCacheList(); // 刷新列表
+                            statusDiv.innerHTML = '';
+                        }, 2000);
+                    } else if (status.status === 'error') {
+                        clearInterval(interval);
+                        showStatus(statusDiv, `❌ 下载失败: ${status.error}`, 'error');
+                    }
+                } catch (error) {
+                    clearInterval(interval);
+                    showStatus(statusDiv, `查询失败: ${error.message}`, 'error');
+                }
+            }, 2000);
+        }
+
+        // 更新缓存
+        async function updateCache(bookKey) {
+            if (!confirm(`确定要更新「${bookKey}」的缓存吗？`)) return;
+
+            try {
+                const response = await fetch(`/api/cache/update/${bookKey}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                alert(result.message);
+                
+                if (result.status === 'success') {
+                    loadCacheList();
+                }
+            } catch (error) {
+                alert(`更新失败: ${error.message}`);
+            }
+        }
+
+        // 删除缓存
+        async function deleteCache(bookKey) {
+            if (!confirm(`确定要删除「${bookKey}」的缓存吗？此操作不可恢复！`)) return;
+
+            try {
+                const response = await fetch(`/api/cache/delete/${bookKey}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+
+                alert(result.message);
+                
+                if (result.status === 'success') {
+                    loadCacheList();
+                }
+            } catch (error) {
+                alert(`删除失败: ${error.message}`);
+            }
+        }
+
+        // 显示状态消息
+        function showStatus(container, message, type) {
+            container.innerHTML = `<div class="status status-${type}">${message}</div>`;
+        }
+
+        // 页面加载时获取缓存列表
+        window.addEventListener('load', loadCacheList);
+    </script>
+</body>
+</html>

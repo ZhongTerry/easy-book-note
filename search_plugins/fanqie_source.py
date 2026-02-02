@@ -1,19 +1,48 @@
 import requests
 import json
+import os
+import dotenv
+
+# --- 加载配置 ---
+def _load_config():
+    possible_paths = [
+        os.path.join(os.getcwd(), 'config.env'),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.env'),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.env')
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            dotenv.load_dotenv(path)
+            return True
+    return False
+
+_load_config()
 
 class SourceWorker:
     def __init__(self):
         self.source_name = "番茄小说 (本地) 🍅"
-        # 请确保端口与你启动 main.py 的端口一致 (9000 或 9001)
-        self.api_url = "http://127.0.0.1:9000/search"
+        # 从环境变量读取配置
+        self.api_host = os.environ.get("FANQIE_API_HOST", "http://127.0.0.1:9000").rstrip('/')
+        self.api_token = os.environ.get("FANQIE_API_TOKEN", "").strip().strip('"').strip("'")
+        self.api_url = f"{self.api_host}/search"
+
+    def _get_headers(self):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+        }
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        return headers
 
     def search(self, keyword):
         print(f"[FanqieLocal] 正在搜索: {keyword}")
         try:
-            # 1. 发起请求
+            # 1. 发起请求 (添加 headers)
             resp = requests.get(
                 self.api_url, 
                 params={"key": keyword, "offset": 0}, 
+                headers=self._get_headers(),
                 timeout=8
             )
             

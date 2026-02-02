@@ -19,6 +19,7 @@ import json
 from routes.core_bp import core_bp
 from routes.admin_bp import admin_bp
 from routes.pro_bp import pro_bp
+from routes.cache_bp import cache_bp
 # [新增] 引入解析函数
 from spider_core import parse_chapter_id
 
@@ -39,6 +40,7 @@ app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0
 app.register_blueprint(core_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
+app.register_blueprint(cache_bp)
 
 # 基础 CSRF 防护：仅校验同源 Origin/Referer（存在时）
 @app.before_request

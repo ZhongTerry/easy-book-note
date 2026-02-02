@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全文缓存管理 - 增强版</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        .tab.active {
+            color: #4CAF50;
+            border-bottom-color: #4CAF50;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            color: #666;
+            font-size: 18px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-primary { background: #4CAF50; color: white; }
+        .btn-primary:hover { background: #45a049; }
+        .btn-warning { background: #ff9800; color: white; }
+        .btn-warning:hover { background: #e68900; }
+        .btn-danger { background: #f44336; color: white; }
+        .btn-danger:hover { background: #d32f2f; }
+        .btn-info { background: #2196F3; color: white; }
+        .btn-info:hover { background: #1976D2; }
+        .btn-secondary { background: #9e9e9e; color: white; }
+        .btn-secondary:hover { background: #757575; }
+        
+        .task-list {
+            display: grid;
+            gap: 15px;
+        }
+        .task-item {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .task-item:hover {
+            border-color: #4CAF50;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.2);
+        }
+        .task-item.selected {
+            border-color: #4CAF50;
+            background: #f1f8f4;
+        }
+        .task-icon {
+            font-size: 48px;
+            line-height: 1;
+        }
+        .task-info {
+            flex: 1;
+        }
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .task-name {
+            font-weight: bold;
+            font-size: 16px;
+            color: #333;
+        }
+        .task-status {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-running { background: #e3f2fd; color: #1976d2; }
+        .status-paused { background: #fff3e0; color: #f57c00; }
+        .status-completed { background: #e8f5e9; color: #388e3c; }
+        .status-cancelled { background: #ffebee; color: #c62828; }
+        .status-error { background: #ffebee; color: #c62828; }
+        
+        .task-progress {
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 5px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            transition: width 0.3s;
+        }
+        .progress-text {
+            font-size: 13px;
+            color: #666;
+        }
+        .task-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .task-actions button {
+            padding: 6px 12px;
+            font-size: 13px;
+        }
+        
+        .task-detail {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        .detail-item {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #4CAF50;
+        }
+        .detail-label {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 5px;
+        }
+        .detail-value {
+            font-size: 16px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .cache-list {
+            display: grid;
+            gap: 15px;
+        }
+        .cache-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+        .cache-item:hover {
+            border-color: #4CAF50;
+            box-shadow: 0 2px 8px rgba(76, 175, 80, 0.2);
+        }
+        .cache-info {
+            flex: 1;
+        }
+        .cache-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .cache-stats {
+            font-size: 13px;
+            color: #666;
+        }
+        .cache-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .status-message {
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 15px;
+            animation: slideIn 0.3s;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .status-success { background: #d4edda; color: #155724; }
+        .status-error { background: #f8d7da; color: #721c24; }
+        .status-info { background: #d1ecf1; color: #0c5460; }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .empty-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4CAF50;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+        }
+        .modal.active { display: flex; align-items: center; justify-content: center; }
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            📚 全文缓存管理
+            <span style="font-size: 14px; color: #999; font-weight: normal;">增强版 v2.0</span>
+        </h1>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('tasks', event)">🎯 活动任务</button>
+            <button class="tab" onclick="switchTab('new', event)">➕ 新建任务</button>
+            <button class="tab" onclick="switchTab('caches', event)">💾 缓存列表</button>
+        </div>
+
+        <!-- 活动任务标签页 -->
+        <div id="tab-tasks" class="tab-content active">
+            <div class="card">
+                <h2>当前活动任务</h2>
+                <div id="taskList" class="task-list">
+                    <div class="empty-state">
+                        <div class="loading"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="taskDetailContainer" style="display: none;">
+                <div class="card">
+                    <h2>任务详情</h2>
+                    <div id="taskDetail"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 新建任务标签页 -->
+        <div id="tab-new" class="tab-content">
+            <div class="card">
+                <h2>新建下载任务</h2>
+                <div class="form-group">
+                    <label for="bookKey">书籍 Key *</label>
+                    <input type="text" id="bookKey" placeholder="例如: my_novel">
+                </div>
+                <div class="form-group">
+                    <label for="tocUrl">目录 URL (可选)</label>
+                    <input type="text" id="tocUrl" placeholder="留空则从数据库获取">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="interval">下载间隔 (秒)</label>
+                        <input type="number" id="interval" value="0.5" step="0.1" min="0">
+                        <small style="color: #999;">建议 0.5-2 秒，防止被封</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="maxWorkers">并发线程数</label>
+                        <input type="number" id="maxWorkers" value="8" min="1" max="20">
+                        <small style="color: #999;">不建议设置过高</small>
+                    </div>
+                </div>
+                <button class="btn-primary" onclick="startDownload()">🚀 开始下载</button>
+                <div id="downloadStatus"></div>
+            </div>
+        </div>
+
+        <!-- 缓存列表标签页 -->
+        <div id="tab-caches" class="tab-content">
+            <div class="card">
+                <h2>我的缓存列表</h2>
+                <div id="cacheList" class="cache-list">
+                    <div class="empty-state">
+                        <div class="loading"></div>
+                        <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑任务模态框 -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">⚙️ 编辑任务设置</div>
+            <div class="form-group">
+                <label for="editInterval">下载间隔 (秒)</label>
+                <input type="number" id="editInterval" step="0.1" min="0">
+            </div>
+            <div class="form-group">
+                <label for="editMaxWorkers">并发线程数</label>
+                <input type="number" id="editMaxWorkers" min="1" max="20">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="closeEditModal()">取消</button>
+                <button class="btn-primary" onclick="saveTaskSettings()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedTaskId = null;
+        let editingTaskId = null;
+        let autoRefreshInterval = null;
+
+        // 标签页切换
+        function switchTab(tab, event) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            // 尝试获取触发切换的按钮
+            let target;
+            if (event && (event.currentTarget || event.target)) {
+                target = event.currentTarget || event.target;
+            } else {
+                // 如果没有提供事件，尝试通过 onclick 内容匹配按钮
+                target = Array.from(document.querySelectorAll('.tab')).find(btn => 
+                    btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(`'${tab}'`)
+                );
+            }
+            
+            if (target) target.classList.add('active');
+            
+            const content = document.getElementById(`tab-${tab}`);
+            if (content) content.classList.add('active');
+            
+            // 切换到对应标签时加载数据
+            if (tab === 'tasks') {
+                loadActiveTasks();
+                startAutoRefresh();
+            } else if (tab === 'caches') {
+                loadCacheList();
+                stopAutoRefresh();
+            } else {
+                stopAutoRefresh();
+            }
+        }
+
+        // 自动刷新
+        function startAutoRefresh() {
+            stopAutoRefresh();
+            autoRefreshInterval = setInterval(loadActiveTasks, 2000);
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+        }
+
+        // 加载活动任务
+        async function loadActiveTasks() {
+            try {
+                const response = await fetch('/api/cache/tasks');
+                const result = await response.json();
+
+                const container = document.getElementById('taskList');
+
+                if (result.status === 'success' && result.data.length > 0) {
+                    container.innerHTML = result.data.map(task => {
+                        const progress = task.total > 0 ? (task.current / task.total * 100).toFixed(1) : 0;
+                        const statusClass = `status-${task.status}`;
+                        const statusText = {
+                            'running': '运行中',
+                            'paused': '已暂停',
+                            'completed': '已完成',
+                            'cancelled': '已取消',
+                            'error': '错误'
+                        }[task.status] || task.status;
+                        
+                        const isActive = task.task_id === selectedTaskId;
+                        
+                        return `
+                            <div class="task-item ${isActive ? 'selected' : ''}" onclick="selectTask('${task.task_id}')">
+                                <div class="task-icon">${getTaskIcon(task.status)}</div>
+                                <div class="task-info">
+                                    <div class="task-header">
+                                        <div class="task-name">${task.book_name || task.book_key}</div>
+                                        <span class="task-status ${statusClass}">${statusText}</span>
+                                    </div>
+                                    <div class="task-progress">
+                                        <div class="progress-bar">
+                                            <div class="progress-fill" style="width: ${progress}%"></div>
+                                        </div>
+                                        <div class="progress-text">
+                                            ${task.current}/${task.total} 章 (${progress}%) 
+                                            ${task.failed > 0 ? `· 失败 ${task.failed}` : ''}
+                                            · 间隔 ${task.settings?.interval || 0}s
+                                        </div>
+                                    </div>
+                                    <div class="task-actions">
+                                        ${getTaskActions(task)}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">📭</div>
+                            <p>暂无活动任务</p>
+                            <p style="font-size: 13px; margin-top: 10px;">前往"新建任务"标签页创建下载任务</p>
+                        </div>
+                    `;
+                    document.getElementById('taskDetailContainer').style.display = 'none';
+                }
+            } catch (error) {
+                console.error('加载失败:', error);
+                document.getElementById('taskList').innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: #f44336;">加载失败: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function getTaskIcon(status) {
+            const icons = {
+                'running': '▶️',
+                'paused': '⏸️',
+                'completed': '✅',
+                'cancelled': '❌',
+                'error': '⚠️'
+            };
+            return icons[status] || '📦';
+        }
+
+        function getTaskActions(task) {
+            const buttons = [];
+            
+            if (task.status === 'running') {
+                buttons.push(`<button class="btn-warning" onclick="pauseTask('${task.task_id}', event)">⏸️ 暂停</button>`);
+                buttons.push(`<button class="btn-danger" onclick="cancelTask('${task.task_id}', event)">❌ 取消</button>`);
+            } else if (task.status === 'paused') {
+                buttons.push(`<button class="btn-info" onclick="resumeTask('${task.task_id}', event)">▶️ 继续</button>`);
+                buttons.push(`<button class="btn-secondary" onclick="openEditModal('${task.task_id}', event)">⚙️ 编辑</button>`);
+                buttons.push(`<button class="btn-danger" onclick="cancelTask('${task.task_id}', event)">❌ 取消</button>`);
+            }
+            
+            return buttons.join('');
+        }
+
+        function selectTask(taskId) {
+            selectedTaskId = taskId;
+            loadActiveTasks();
+            showTaskDetail(taskId);
+        }
+
+        async function showTaskDetail(taskId) {
+            try {
+                const response = await fetch(`/api/cache/task/${taskId}`);
+                const task = await response.json();
+                
+                const container = document.getElementById('taskDetail');
+                const detailContainer = document.getElementById('taskDetailContainer');
+                
+                if (task.status !== 'not_found') {
+                    const elapsed = task.end_time ? 
+                        (task.end_time - task.start_time) : 
+                        (Date.now() / 1000 - task.start_time);
+                    const speed = task.current / elapsed;
+                    
+                    container.innerHTML = `
+                        <div class="detail-grid">
+                            <div class="detail-item">
+                                <div class="detail-label">书籍名称</div>
+                                <div class="detail-value">${task.book_name}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">任务 ID</div>
+                                <div class="detail-value" style="font-size: 12px;">${task.task_id}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">下载进度</div>
+                                <div class="detail-value">${task.current}/${task.total} 章</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">失败章节</div>
+                                <div class="detail-value">${task.failed} 章</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">下载速度</div>
+                                <div class="detail-value">${speed.toFixed(2)} 章/秒</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">已用时间</div>
+                                <div class="detail-value">${formatTime(elapsed)}</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">下载间隔</div>
+                                <div class="detail-value">${task.settings?.interval || 0} 秒</div>
+                            </div>
+                            <div class="detail-item">
+                                <div class="detail-label">并发线程</div>
+                                <div class="detail-value">${task.settings?.max_workers || 8}</div>
+                            </div>
+                        </div>
+                    `;
+                    detailContainer.style.display = 'block';
+                } else {
+                    detailContainer.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('获取详情失败:', error);
+            }
+        }
+
+        function formatTime(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        async function pauseTask(taskId, event) {
+            event.stopPropagation();
+            try {
+                const response = await fetch(`/api/cache/task/${taskId}/pause`, { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    loadActiveTasks();
+                } else {
+                    alert(result.message);
+                }
+            } catch (error) {
+                alert('操作失败: ' + error.message);
+            }
+        }
+
+        async function resumeTask(taskId, event) {
+            event.stopPropagation();
+            try {
+                const response = await fetch(`/api/cache/task/${taskId}/resume`, { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    loadActiveTasks();
+                } else {
+                    alert(result.message);
+                }
+            } catch (error) {
+                alert('操作失败: ' + error.message);
+            }
+        }
+
+        async function cancelTask(taskId, event) {
+            event.stopPropagation();
+            if (!confirm('确定要取消这个任务吗？')) return;
+            
+            try {
+                const response = await fetch(`/api/cache/task/${taskId}/cancel`, { method: 'POST' });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    loadActiveTasks();
+                } else {
+                    alert(result.message);
+                }
+            } catch (error) {
+                alert('操作失败: ' + error.message);
+            }
+        }
+
+        function openEditModal(taskId, event) {
+            event.stopPropagation();
+            editingTaskId = taskId;
+            
+            fetch(`/api/cache/task/${taskId}`)
+                .then(r => r.json())
+                .then(task => {
+                    document.getElementById('editInterval').value = task.settings?.interval || 0.5;
+                    document.getElementById('editMaxWorkers').value = task.settings?.max_workers || 8;
+                    document.getElementById('editModal').classList.add('active');
+                });
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('active');
+            editingTaskId = null;
+        }
+
+        async function saveTaskSettings() {
+            const interval = parseFloat(document.getElementById('editInterval').value);
+            const maxWorkers = parseInt(document.getElementById('editMaxWorkers').value);
+            
+            try {
+                const response = await fetch(`/api/cache/task/${editingTaskId}/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ interval, max_workers: maxWorkers })
+                });
+                
+                const result = await response.json();
+                if (result.status === 'success') {
+                    closeEditModal();
+                    loadActiveTasks();
+                } else {
+                    alert(result.message);
+                }
+            } catch (error) {
+                alert('保存失败: ' + error.message);
+            }
+        }
+
+        // 开始下载
+        async function startDownload() {
+            const bookKey = document.getElementById('bookKey').value.trim();
+            const tocUrl = document.getElementById('tocUrl').value.trim();
+            const interval = parseFloat(document.getElementById('interval').value);
+            const maxWorkers = parseInt(document.getElementById('maxWorkers').value);
+            const statusDiv = document.getElementById('downloadStatus');
+
+            if (!bookKey) {
+                showStatus(statusDiv, '请输入书籍 Key', 'error');
+                return;
+            }
+
+            showStatus(statusDiv, '正在启动下载任务...', 'info');
+
+            try {
+                const response = await fetch('/api/cache/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        book_key: bookKey, 
+                        toc_url: tocUrl || undefined,
+                        interval,
+                        max_workers: maxWorkers
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    showStatus(statusDiv, `✅ 任务已启动！总共 ${result.total_chapters} 章`, 'success');
+                    
+                    setTimeout(() => {
+                        switchTab('tasks');
+                    }, 1500);
+                } else {
+                    showStatus(statusDiv, `启动失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus(statusDiv, `错误: ${error.message}`, 'error');
+            }
+        }
+
+        // 加载缓存列表
+        async function loadCacheList() {
+            try {
+                const response = await fetch('/api/cache/list');
+                const result = await response.json();
+
+                const container = document.getElementById('cacheList');
+
+                if (result.status === 'success' && result.data.length > 0) {
+                    container.innerHTML = result.data.map(cache => `
+                        <div class="cache-item">
+                            <div class="cache-info">
+                                <div class="cache-name">${cache.book_name || cache.book_key}</div>
+                                <div class="cache-stats">
+                                    ${cache.cached_chapters}/${cache.total_chapters} 章 
+                                    · ${(cache.total_size / 1024 / 1024).toFixed(2)} MB
+                                    · 更新于 ${cache.updated_at}
+                                </div>
+                                <div class="progress-bar" style="margin-top: 8px;">
+                                    <div class="progress-fill" style="width: ${cache.progress}%"></div>
+                                </div>
+                            </div>
+                            <div class="cache-actions">
+                                <button class="btn-info" onclick="updateCache('${cache.book_key}')">
+                                    🔄 更新
+                                </button>
+                                <button class="btn-danger" onclick="deleteCache('${cache.book_key}')">
+                                    🗑️ 删除
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">💾</div>
+                            <p>暂无缓存，请先添加下载任务</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('加载失败:', error);
+                document.getElementById('cacheList').innerHTML = `
+                    <div class="empty-state">
+                        <p style="color: #f44336;">加载失败: ${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        async function updateCache(bookKey) {
+            if (!confirm(`确定要更新「${bookKey}」的缓存吗？`)) return;
+
+            try {
+                const response = await fetch(`/api/cache/update/${bookKey}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                alert(result.message);
+                
+                if (result.status === 'success') {
+                    loadCacheList();
+                }
+            } catch (error) {
+                alert(`更新失败: ${error.message}`);
+            }
+        }
+
+        async function deleteCache(bookKey) {
+            if (!confirm(`确定要删除「${bookKey}」的缓存吗？此操作不可恢复！`)) return;
+
+            try {
+                const response = await fetch(`/api/cache/delete/${bookKey}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+
+                alert(result.message);
+                
+                if (result.status === 'success') {
+                    loadCacheList();
+                }
+            } catch (error) {
+                alert(`删除失败: ${error.message}`);
+            }
+        }
+
+        function showStatus(container, message, type) {
+            container.innerHTML = `<div class="status-message status-${type}">${message}</div>`;
+        }
+
+        // 页面加载时
+        window.addEventListener('load', () => {
+            loadActiveTasks();
+            startAutoRefresh();
+        });
+        
+        // 页面关闭时停止自动刷新
+        window.addEventListener('beforeunload', stopAutoRefresh);
+    </script>
+</body>
+</html>

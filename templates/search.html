@@ -144,11 +144,7 @@
             border: 1px solid #e5e7eb;
             border-radius: 8px;
             margin-bottom: 12px;
-            cursor: pointer;
-            transition: 0.2s;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            transition: all 0.2s;
         }
         
         .result-item:hover {
@@ -180,6 +176,7 @@
             align-items: center;
             font-size: 12px;
             color: #9ca3af;
+            flex-wrap: wrap;
         }
         
         .source-tag {
@@ -196,19 +193,31 @@
         
         .res-url {
             font-family: monospace;
-            color: #9ca3af;
+            color: #4f46e5;
             font-size: 11px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            max-width: 400px;
+            max-width: 350px;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+        
+        .res-url:hover {
+            color: #6366f1;
         }
         
         .res-action {
             color: #4f46e5;
             font-weight: 600;
-            font-size: 14px;
+            font-size: 13px;
             white-space: nowrap;
+            margin-left: auto;
+            cursor: pointer;
+        }
+        
+        .res-action:hover {
+            color: #6366f1;
         }
         
         /* 空状态 */
@@ -325,7 +334,7 @@
                 <label for="autoSave">自动保存到书架</label>
             </div>
             <div class="feature-item">
-                <input type="checkbox" id="showUrl">
+                <input type="checkbox" id="showUrl" checked>
                 <label for="showUrl">显示源链接</label>
             </div>
             <div class="feature-item">
@@ -407,9 +416,13 @@
             }
             
             document.getElementById('historySection').style.display = 'block';
-            container.innerHTML = searchHistory.slice(0, 8).map(keyword => 
-                `<span class="history-tag" onclick="searchFromHistory(${JSON.stringify(keyword)})">${escapeHtml(keyword)}</span>`
-            ).join('');
+            container.innerHTML = searchHistory.slice(0, 8).map(keyword => {
+                const escapedKeyword = keyword
+                    .replace(/\\/g, '\\\\')
+                    .replace(/'/g, "\\'")
+                    .replace(/"/g, '&quot;');
+                return `<span class="history-tag" onclick="searchFromHistory('${escapedKeyword}')">${escapeHtml(keyword)}</span>`;
+            }).join('');
         }
         
         // 从历史搜索
@@ -500,38 +513,41 @@
                 const safeDesc = escapeHtml(item.description || '');
                 const safeUrl = escapeHtml(item.url || '');
                 const safeSource = escapeHtml(item.source || 'Unknown');
-                const authorHtml = item.description ? `<span class="res-author">${safeDesc}</span>` : '';
-                const urlHtml = showUrl ? `<span class="res-url">${safeUrl}</span>` : '';
                 
                 // 使用现有的escapeHtml函数并进一步处理引号
                 const jsSafeKey = (item.suggested_key || '')
                     .replace(/\\/g, '\\\\')
-                    .replace(/"/g, '\\"')
-                    .replace(/'/g, "\\'");
+                    .replace(/'/g, "\\'")
+                    .replace(/"/g, '&quot;');
                 const jsSafeUrl = (item.url || '')
                     .replace(/\\/g, '\\\\')
-                    .replace(/"/g, '\\"')
-                    .replace(/'/g, "\\'");
+                    .replace(/'/g, "\\'")
+                    .replace(/"/g, '&quot;');
                 const jsSafeTitle = (item.title || '')
                     .replace(/\\/g, '\\\\')
-                    .replace(/"/g, '\\"')
-                    .replace(/'/g, "\\'");
+                    .replace(/'/g, "\\'")
+                    .replace(/"/g, '&quot;');
+                
+                // 第一行：书名和作者
+                let line1 = `<div class="res-title">${safeTitle}`;
+                if (item.description) {
+                    line1 += ` <span class="res-author">${safeDesc}</span>`;
+                }
+                line1 += `</div>`;
+                
+                // 第二行：源链接、来源、阅读按钮
+                let line2 = `<div class="res-meta">`;
+                if (showUrl) {
+                    line2 += `<span class="res-url" onclick="event.stopPropagation(); window.open('${jsSafeUrl}', '_blank');" title="点击在新标签页打开">${safeUrl}</span>`;
+                }
+                line2 += `<span class="source-tag ${tagClass}">${safeSource}</span>`;
+                line2 += `<span class="res-action" onclick="selectResult('${jsSafeKey}', '${jsSafeUrl}', '${jsSafeTitle}')">阅读 →</span>`;
+                line2 += `</div>`;
                 
                 return `
-                <div class="result-item" onclick="selectResult('&quot;${jsSafeKey}&quot;, '&quot;${jsSafeUrl}&quot;, '&quot;${jsSafeTitle}&quot;)">
-                    <div class="res-left">
-                        <div class="res-title">
-                            ${safeTitle}
-                            ${authorHtml}
-                        </div>
-                        <div class="res-meta">
-                            <span class="source-tag ${tagClass}">${safeSource}</span>
-                            ${urlHtml}
-                        </div>
-                    </div>
-                    <div class="res-action">
-                        阅读 →
-                    </div>
+                <div class="result-item">
+                    ${line1}
+                    ${line2}
                 </div>`;
             }).join('');
         }
@@ -551,48 +567,23 @@
             renderResults(currentResults);
         }
         
-        // 选择结果 - 在搜索页面直接跳转到阅读界面
+        // 选择结果 - 直接保存并打开（依赖自动判断toc/content逻辑）
         async function selectResult(key, url, title) {
-            const autoSave = document.getElementById('autoSave').checked;
-            
-            PureUI.loading.show('🔍 正在获取目录...');
+            PureUI.loading.show('💾 保存中...');
             
             try {
-                // 1. 如果勾选自动保存，则先保存到书架
-                if (autoSave) {
-                    await fetch(`${API_URL}/insert`, {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ key: key, value: url, manual: true })
-                    });
-                }
+                // 1. 保存到书架
+                await fetch(`${API_URL}/insert`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ key: key, value: url, manual: true })
+                });
                 
-                // 2. 获取目录，找到第一章
-                const tocRes = await fetch(`${API_URL}/toc?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}&api=1`);
-                const tocData = await tocRes.json();
+                PureUI.toast('✅ 已保存到书架');
                 
-                let firstChapterUrl = url; // 默认使用原始URL
-                
-                if (tocData && tocData.chapters && tocData.chapters.length > 0) {
-                    // 找到第一章
-                    firstChapterUrl = tocData.chapters[0].url;
-                    PureUI.loading.show('📖 正在打开第一章...');
-                } else {
-                    // 如果获取目录失败，直接用原始URL
-                    console.warn('无法获取目录，使用原始URL');
-                }
-                
-                // 3. 跳转到阅读页面
-                if (autoSave) {
-                    PureUI.toast('✅ 已保存到书架');
-                }
-                
+                // 2. 直接跳转到阅读页面（让后端自动判断是toc还是content）
                 setTimeout(() => {
-                    if (autoSave) {
-                        window.location.href = `/read?url=${encodeURIComponent(firstChapterUrl)}&key=${encodeURIComponent(key)}`;
-                    } else {
-                        window.location.href = `/read?url=${encodeURIComponent(firstChapterUrl)}`;
-                    }
+                    window.location.href = `/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`;
                 }, 300);
                 
             } catch(e) {

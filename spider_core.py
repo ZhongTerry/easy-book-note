@@ -2490,12 +2490,40 @@ class NovelCrawler:
         if not url:
             return None
         
-        # 0. 优先检查本地缓存
+        # 0. 最优先：检查全文缓存（永久缓存）
+        from managers import fulltext_cache_manager, db
+        from flask import session
+        
+        if not url.startswith('epub:') and session and 'user' in session:
+            try:
+                # 尝试从当前用户的书架中找到对应的 book_key
+                # 这需要我们能够从 URL 找到对应的书籍
+                all_books = db.list_all()
+                if all_books.get('status') == 'success':
+                    for book_key, book_data in all_books.get('data', {}).items():
+                        # 简单匹配：如果这个 URL 可能属于这本书
+                        # 更精确的做法是在 URL 中提取书籍标识
+                        cached_chapter = fulltext_cache_manager.get_chapter_from_cache(
+                            book_key, url
+                        )
+                        if cached_chapter:
+                            print(f"[Crawler] 🎯 命中全文缓存: {book_key} - {url[:50]}")
+                            return {
+                                'content': cached_chapter['content'].split('\\n'),
+                                'title': cached_chapter['title'],
+                                'book_name': book_key,
+                                'from_fulltext_cache': True
+                            }
+            except Exception as e:
+                # 全文缓存查询失败不影响正常流程
+                pass
+        
+        # 1. 其次：检查临时本地缓存
         from managers import cache
         if not url.startswith('epub:'):
             cached_data = cache.get(url)
             if cached_data:
-                print(f"[Crawler] ✅ 命中本地缓存: {url}")
+                print(f"[Crawler] ✅ 命中临时缓存: {url}")
                 return cached_data
         
         # 1. [核心去重] 检查是否有正在进行的任务

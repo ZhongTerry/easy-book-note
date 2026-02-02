@@ -1,24 +1,44 @@
 import re
 import requests
 import json
+import re
+import requests
+import json
 import os
+import dotenv
 from urllib.parse import urljoin
+
+# --- 增强的环境变量加载 ---
+def _load_config():
+    # 查找顺序：当前目录 -> 脚本所在目录的父目录 -> adapters目录
+    possible_paths = [
+        os.path.join(os.getcwd(), 'config.env'),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.env'),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.env')
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            dotenv.load_dotenv(path)
+            # print(f"[FanqieAdapter] Loaded config from {path}")
+            return True
+    return False
+
+_load_config()
 
 class FanqieLocalAdapter:
     """
     番茄小说本地微服务适配器 (增强版)
     功能：
-    1. 连接本地 FastAPI 微服务 (默认 127.0.0.1:9001)
+    1. 连接本地 FastAPI 微服务 (默认 127.0.0.1:9000)
     2. 支持自动反查 BookID
     3. 支持基于目录上下文计算 Prev/Next 链接
     4. Token鉴权保护微服务接口
     """
     
-    # 你的微服务地址 (请确保和 main.py 的端口一致)
-    API_HOST = os.environ.get("FANQIE_API_HOST", "http://127.0.0.1:9000")
-    # 微服务鉴权Token（从环境变量读取，与微服务保持一致）
-    API_TOKEN = os.environ.get("FANQIE_API_TOKEN", "")
-    
+    # 你的微服务地址
+    API_HOST = os.environ.get("FANQIE_API_HOST", "http://127.0.0.1:9000").rstrip('/')
+    # 微服务鉴权Token
+    API_TOKEN = os.environ.get("FANQIE_API_TOKEN", "").strip().strip('"').strip("'")
     def __init__(self):
         # 初始化时检查Token配置
         if not self.API_TOKEN:
@@ -28,10 +48,13 @@ class FanqieLocalAdapter:
     def _get_headers(self):
         """构造带鉴权的请求头"""
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
         }
         if self.API_TOKEN:
-            headers["Authorization"] = f"Bearer {self.API_TOKEN}"
+            # 确保 Token 没有多余的空白
+            token = self.API_TOKEN.strip()
+            headers["Authorization"] = f"Bearer {token}"
         return headers
 
     def can_handle(self, url):
@@ -238,13 +261,23 @@ class FanqieLocalAdapter:
             raw_list = raw_data.get('item_data_list') or raw_data.get('item_list') or []
             
             chapter_list = []
-            for item in raw_list:
+            for idx, item in enumerate(raw_list, 1):
                 if isinstance(item, str): continue # 过滤纯ID
                 cid = str(item.get('item_id'))
+                title = item.get('title', '无标题')
+                
+                # 尝试从标题提取章节序号（如"第1章"），如果失败则使用列表索引
+                chapter_num = idx
+                import re
+                match = re.search(r'第(\d+)章', title)
+                if match:
+                    chapter_num = int(match.group(1))
+                
                 chapter_list.append({
-                    'id': int(cid), # [核心修复] 显式设定 id 为长整数(item_id)，供 updateManager 比较使用
-                    'item_id': cid,
-                    'title': item.get('title', '无标题'),
+                    'id': chapter_num,  # 使用解析的章节序号而不是item_id
+                    'item_id': cid,     # 保留原始item_id用于API调用
+                    'title': title,
+                    'name': title,
                     'url': f"https://fanqienovel.com/reader/{cid}"
                 })
             return chapter_list
@@ -269,6 +302,7 @@ class FanqieLocalAdapter:
 
         # 3. 获取列表
         chapters = self._fetch_toc_list(book_id)
+        print(f"[FanqieLocal] 目录获取成功，共 {len(chapters)} 章，前500个字符：{str(chapters)[:500]}")
         
         # 4. [修复] 获取真实书名 (从微服务详情接口)
         book_title = "番茄小说"  # 默认值

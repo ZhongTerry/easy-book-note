@@ -667,6 +667,732 @@ class CacheManager:
                 except: pass
         return count, size / (1024*1024)
 
+class FullTextCacheManager:
+    """全文缓存管理器 - 支持永久缓存、增量更新、智能序号管理、任务控制、Redis支持"""
+    
+    def __init__(self):
+        self.cache_dir = os.path.join(USER_DATA_DIR, "fulltext_cache")
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+        self._ensure_table()
+        self.executor = ThreadPoolExecutor(max_workers=8)
+        
+        # Redis 连接检测
+        self.redis_client = None
+        self.use_redis = False
+        self._init_redis()
+        
+        # 任务存储（内存模式回退）
+        self.active_tasks = {}  # {task_id: {status, progress, control_event, ...}}
+        self.task_lock = threading.Lock()  # 任务操作锁
+        
+        # 从 Redis 恢复任务（如果启用）
+        if self.use_redis:
+            self._load_tasks_from_redis()
+    
+    def _init_redis(self):
+        """初始化 Redis 连接"""
+        try:
+            # 尝试连接到本地 Redis
+            test_client = redis.Redis(
+                host='localhost',
+                port=6379,
+                db=0,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2
+            )
+            # 测试连接
+            test_client.ping()
+            self.redis_client = test_client
+            self.use_redis = True
+            print("[FullTextCache] ✅ Redis 连接成功，使用 Redis 存储任务数据")
+        except (redis.ConnectionError, redis.TimeoutError, Exception) as e:
+            self.use_redis = False
+            print(f"[FullTextCache] ⚠️  Redis 不可用 ({e})，使用内存模式")
+    
+    def _load_tasks_from_redis(self):
+        """从 Redis 加载活动任务"""
+        try:
+            task_keys = self.redis_client.keys('fulltext_task:*')
+            for key in task_keys:
+                task_data = self.redis_client.hgetall(key)
+                if task_data:
+                    task_id = key.split(':', 1)[1]
+                    # 重建任务对象（不包括线程对象）
+                    self.active_tasks[task_id] = {
+                        'task_id': task_id,
+                        'username': task_data.get('username'),
+                        'status': task_data.get('status', 'paused'),
+                        'book_key': task_data.get('book_key'),
+                        'book_name': task_data.get('book_name'),
+                        'toc_url': task_data.get('toc_url'),
+                        'total': int(task_data.get('total', 0)),
+                        'current': int(task_data.get('current', 0)),
+                        'failed': int(task_data.get('failed', 0)),
+                        'start_time': float(task_data.get('start_time', time.time())),
+                        'pause_event': threading.Event(),
+                        'cancel_flag': task_data.get('status') == 'cancelled',
+                        'settings': json.loads(task_data.get('settings', '{}')),
+                        'chapters': json.loads(task_data.get('chapters', '[]'))
+                    }
+                    # 如果任务未完成，标记为暂停
+                    if self.active_tasks[task_id]['status'] not in ['completed', 'cancelled', 'error']:
+                        self.active_tasks[task_id]['status'] = 'paused'
+            print(f"[FullTextCache] 从 Redis 恢复 {len(self.active_tasks)} 个任务")
+        except Exception as e:
+            print(f"[FullTextCache] 从 Redis 加载任务失败: {e}")
+    
+    def _ensure_table(self):
+        """确保全文缓存表存在"""
+        try:
+            with get_db() as conn:
+                conn.execute('''CREATE TABLE IF NOT EXISTS fulltext_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    book_key TEXT NOT NULL,
+                    book_name TEXT,
+                    toc_url TEXT,
+                    cache_data TEXT,
+                    total_size INTEGER DEFAULT 0,
+                    cached_chapters INTEGER DEFAULT 0,
+                    total_chapters INTEGER DEFAULT 0,
+                    last_chapter_index INTEGER DEFAULT 0,
+                    never_expire BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, book_key)
+                )''')
+                conn.commit()
+        except Exception as e:
+            print(f"[FullTextCache] 建表失败: {e}")
+    
+    @staticmethod
+    def extract_chapter_index(title):
+        """智能提取章节序号"""
+        if not title:
+            return None
+        
+        patterns = [
+            r'第[零一二三四五六七八九十百千万\d]+章',  # 中文章节
+            r'第(\d+)章',
+            r'chapter[\s_-]*(\d+)',
+            r'ch[\s._-]*(\d+)',
+            r'卷(\d+)',
+            r'^(\d+)[、.\s]',
+            r'\[(\d+)\]',
+            r'（(\d+)）',
+        ]
+        
+        # 中文数字转阿拉伯数字
+        cn_num_map = {
+            '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
+            '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
+            '十': 10, '百': 100, '千': 1000, '万': 10000
+        }
+        
+        for pattern in patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                try:
+                    num_str = match.group(1) if len(match.groups()) > 0 else match.group(0)
+                    # 尝试直接转换为数字
+                    if num_str.isdigit():
+                        return int(num_str)
+                    # 处理中文数字
+                    # 这里简化处理，只处理"第X章"的情况
+                    for cn, num in cn_num_map.items():
+                        if cn in num_str:
+                            return num
+                except:
+                    pass
+        
+        return None
+    
+    def _get_cache_path(self, username, book_key):
+        """获取缓存文件路径"""
+        user_dir = os.path.join(self.cache_dir, username)
+        if not os.path.exists(user_dir):
+            os.makedirs(user_dir)
+        return os.path.join(user_dir, f"{book_key}.json")
+    
+    def get_cache_status(self, book_key, username=None):
+        """获取缓存状态"""
+        u = username or get_current_user()
+        try:
+            conn = get_db()
+            row = conn.execute(
+                "SELECT * FROM fulltext_cache WHERE username=? AND book_key=?",
+                (u, book_key)
+            ).fetchone()
+            
+            if row:
+                return {
+                    'exists': True,
+                    'book_name': row[3],
+                    'toc_url': row[4],
+                    'cached_chapters': row[7],
+                    'total_chapters': row[8],
+                    'last_chapter_index': row[9],
+                    'total_size': row[6],
+                    'created_at': row[11],
+                    'updated_at': row[12],
+                    'progress': round(row[7] / row[8] * 100, 1) if row[8] > 0 else 0
+                }
+            return {'exists': False}
+        except Exception as e:
+            print(f"[FullTextCache] 获取状态失败: {e}")
+            return {'exists': False, 'error': str(e)}
+    
+    def get_chapter_from_cache(self, book_key, chapter_url, username=None):
+        """从缓存中获取章节内容"""
+        u = username or get_current_user()
+        cache_path = self._get_cache_path(u, book_key)
+        
+        if not os.path.exists(cache_path):
+            return None
+        
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # 在章节列表中查找
+            for ch in cache_data.get('chapters', []):
+                if ch.get('url') == chapter_url and ch.get('content'):
+                    return {
+                        'content': ch['content'],
+                        'title': ch.get('title', ''),
+                        'cached_at': ch.get('cached_at', '')
+                    }
+            return None
+        except Exception as e:
+            print(f"[FullTextCache] 读取缓存失败: {e}")
+            return None
+    
+    def start_full_download(self, book_key, book_name, toc_url, chapters, crawler_instance, 
+                           username=None, interval=0.5, max_workers=8):
+        """
+        开始全文下载任务
+        :param interval: 章节下载间隔（秒），默认0.5秒，防止被封
+        :param max_workers: 并发线程数，默认8
+        """
+        u = username or get_current_user()
+        task_id = hashlib.md5(f"{u}_{book_key}_{time.time()}".encode()).hexdigest()
+        
+        # 创建任务记录（带控制事件）
+        task_data = {
+            'task_id': task_id,
+            'username': u,
+            'status': 'running',  # running/paused/cancelled/completed/error
+            'book_key': book_key,
+            'book_name': book_name,
+            'toc_url': toc_url,
+            'total': len(chapters),
+            'current': 0,
+            'failed': 0,
+            'start_time': time.time(),
+            'pause_event': threading.Event(),  # 暂停控制
+            'cancel_flag': False,  # 取消标志
+            'settings': {
+                'interval': interval,
+                'max_workers': max_workers
+            },
+            'chapters': chapters  # 保存章节列表用于恢复
+        }
+        
+        with self.task_lock:
+            # 初始设置为运行状态
+            task_data['pause_event'].set()
+            self.active_tasks[task_id] = task_data
+            
+            # 保存到 Redis（如果启用）
+            if self.use_redis:
+                self._save_task_to_redis(task_id, task_data)
+        
+        # 启动后台线程
+        threading.Thread(
+            target=self._download_worker,
+            args=(task_id,),
+            daemon=True
+        ).start()
+        
+        return task_id
+    
+    def _save_task_to_redis(self, task_id, task_data):
+        """保存任务到 Redis"""
+        try:
+            redis_key = f'fulltext_task:{task_id}'
+            # 序列化任务数据（排除不可序列化的对象）
+            serializable_data = {
+                'task_id': task_data['task_id'],
+                'username': task_data['username'],
+                'status': task_data['status'],
+                'book_key': task_data['book_key'],
+                'book_name': task_data['book_name'],
+                'toc_url': task_data['toc_url'],
+                'total': task_data['total'],
+                'current': task_data['current'],
+                'failed': task_data['failed'],
+                'start_time': task_data['start_time'],
+                'settings': json.dumps(task_data['settings']),
+                'chapters': json.dumps(task_data['chapters']),
+                'end_time': task_data.get('end_time', '')
+            }
+            if 'error' in task_data:
+                serializable_data['error'] = str(task_data['error'])
+            
+            # 保存到 Redis Hash
+            self.redis_client.hset(redis_key, mapping=serializable_data)
+            # 设置过期时间（7天）
+            self.redis_client.expire(redis_key, 604800)
+        except Exception as e:
+            print(f"[FullTextCache] 保存任务到 Redis 失败: {e}")
+    
+    def _update_task_in_redis(self, task_id):
+        """更新任务状态到 Redis"""
+        if self.use_redis and task_id in self.active_tasks:
+            try:
+                task = self.active_tasks[task_id]
+                redis_key = f'fulltext_task:{task_id}'
+                # 更新关键字段
+                self.redis_client.hset(redis_key, mapping={
+                    'status': task['status'],
+                    'current': task['current'],
+                    'failed': task['failed'],
+                    'end_time': task.get('end_time', '')
+                })
+                if 'error' in task:
+                    self.redis_client.hset(redis_key, 'error', str(task['error']))
+            except Exception as e:
+                print(f"[FullTextCache] 更新 Redis 任务状态失败: {e}")
+    
+    def _delete_task_from_redis(self, task_id):
+        """从 Redis 删除任务"""
+        if self.use_redis:
+            try:
+                redis_key = f'fulltext_task:{task_id}'
+                self.redis_client.delete(redis_key)
+            except Exception as e:
+                print(f"[FullTextCache] 从 Redis 删除任务失败: {e}")
+    
+    def _download_worker(self, task_id):
+        """下载工作线程（支持暂停/继续/取消）"""
+        task = self.active_tasks.get(task_id)
+        if not task:
+            return
+        
+        username = task['username']
+        book_key = task['book_key']
+        book_name = task['book_name']
+        toc_url = task['toc_url']
+        chapters = task['chapters']
+        interval = task['settings']['interval']
+        max_workers = task['settings']['max_workers']
+        
+        cache_path = self._get_cache_path(username, book_key)
+        
+        # 准备缓存数据结构
+        cache_data = {
+            'metadata': {
+                'book_key': book_key,
+                'book_name': book_name,
+                'toc_url': toc_url,
+                'total_chapters': len(chapters)
+            },
+            'chapters': [],
+            'settings': {
+                'never_expire': True,
+                'auto_update': False
+            }
+        }
+        
+        # 加载已有缓存（支持断点续传）
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                    cache_data['chapters'] = existing_data.get('chapters', [])
+                    print(f"[FullTextCache] 发现已有缓存，继续下载...")
+            except:
+                pass
+        
+        # 已下载的URL集合
+        cached_urls = {ch['url'] for ch in cache_data['chapters'] if 'content' in ch}
+        
+        # 下载章节（串行+间隔控制）
+        from spider_core import crawler_instance as crawler
+        
+        for idx, ch in enumerate(chapters):
+            # 检查取消标志
+            if task.get('cancel_flag'):
+                task['status'] = 'cancelled'
+                print(f"[FullTextCache] ❌ 任务已取消: {book_name}")
+                return
+            
+            # 等待暂停解除
+            task['pause_event'].wait()
+            
+            # 跳过已下载的章节
+            if ch['url'] in cached_urls:
+                task['current'] = idx + 1
+                continue
+            
+            try:
+                # 下载章节
+                content, title = self._fetch_chapter(ch['url'], crawler)
+                
+                if content:
+                    ch_index = self.extract_chapter_index(title or ch.get('title', ''))
+                    
+                    chapter_data = {
+                        'index': ch_index,
+                        'title': title or ch.get('title', ''),
+                        'url': ch['url'],
+                        'content': content,
+                        'cached_at': datetime.now().isoformat(),
+                        'size': len(content)
+                    }
+                    
+                    cache_data['chapters'].append(chapter_data)
+                    task['current'] = idx + 1
+                    
+                    # 间隔控制
+                    if interval > 0 and idx < len(chapters) - 1:
+                        time.sleep(interval)
+                else:
+                    task['failed'] += 1
+                    
+            except Exception as e:
+                print(f"[FullTextCache] 下载章节失败 {ch.get('title', '')}: {e}")
+                task['failed'] += 1
+            
+            # 定期保存（每10章或最后一章）
+            if (idx + 1) % 10 == 0 or idx == len(chapters) - 1:
+                self._save_cache(cache_path, cache_data, username, book_key, book_name, 
+                               toc_url, len(chapters))
+                # 更新 Redis
+                if self.use_redis:
+                    self._update_task_in_redis(task_id)
+        
+        # 最终保存
+        try:
+            self._save_cache(cache_path, cache_data, username, book_key, book_name, 
+                           toc_url, len(chapters))
+            
+            task['status'] = 'completed'
+            task['end_time'] = time.time()
+            
+            # 更新 Redis
+            if self.use_redis:
+                self._update_task_in_redis(task_id)
+            
+            print(f"[FullTextCache] ✅ 下载完成: {book_name}, 成功 {len(cache_data['chapters'])}/{len(chapters)} 章")
+            
+        except Exception as e:
+            task['status'] = 'error'
+            task['error'] = str(e)
+            
+            # 更新 Redis
+            if self.use_redis:
+                self._update_task_in_redis(task_id)
+            
+            print(f"[FullTextCache] ❌ 保存失败: {e}")
+    
+    def _save_cache(self, cache_path, cache_data, username, book_key, book_name, toc_url, total_chapters):
+        """保存缓存到文件和数据库"""
+        # 计算统计信息
+        max_index = max([ch.get('index', 0) for ch in cache_data['chapters'] if ch.get('index')], default=0)
+        total_size = sum([ch.get('size', 0) for ch in cache_data['chapters']])
+        
+        # 保存到文件
+        with open(cache_path, 'w', encoding='utf-8') as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        
+        # 更新数据库
+        with get_db() as conn:
+            conn.execute('''INSERT OR REPLACE INTO fulltext_cache 
+                (username, book_key, book_name, toc_url, cache_data, total_size, 
+                 cached_chapters, total_chapters, last_chapter_index, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
+                (username, book_key, book_name, toc_url, 'stored_in_file',
+                 total_size, len(cache_data['chapters']), total_chapters, max_index)
+            )
+            conn.commit()
+    
+    def _fetch_chapter(self, url, crawler):
+        """获取单个章节内容"""
+        try:
+            data = crawler.run(url)
+            if data and 'content' in data:
+                content = '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
+                return content, data.get('title', '')
+            return None, None
+        except Exception as e:
+            raise Exception(f"获取章节失败: {e}")
+    
+    def incremental_update(self, book_key, crawler_instance, username=None):
+        """增量更新缓存"""
+        u = username or get_current_user()
+        
+        # 获取当前缓存状态
+        status = self.get_cache_status(book_key, u)
+        if not status['exists']:
+            return {'status': 'error', 'message': '缓存不存在，请先完整下载'}
+        
+        cache_path = self._get_cache_path(u, book_key)
+        
+        try:
+            # 读取现有缓存
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # 获取最新目录
+            toc_url = status['toc_url']
+            toc_data = crawler_instance.get_toc(toc_url, no_cache=True)
+            
+            if not toc_data or 'chapters' not in toc_data:
+                return {'status': 'error', 'message': '获取目录失败'}
+            
+            # 找出新章节
+            cached_urls = {ch['url'] for ch in cache_data['chapters']}
+            new_chapters = [ch for ch in toc_data['chapters'] if ch['url'] not in cached_urls]
+            
+            if not new_chapters:
+                return {'status': 'success', 'message': '已是最新，无需更新', 'new_count': 0}
+            
+            # 下载新章节
+            print(f"[FullTextCache] 发现 {len(new_chapters)} 个新章节，开始下载...")
+            
+            for ch in new_chapters:
+                try:
+                    content, title = self._fetch_chapter(ch['url'], crawler_instance)
+                    if content:
+                        ch_index = self.extract_chapter_index(title or ch.get('title', ''))
+                        cache_data['chapters'].append({
+                            'index': ch_index,
+                            'title': title or ch.get('title', ''),
+                            'url': ch['url'],
+                            'content': content,
+                            'cached_at': datetime.now().isoformat(),
+                            'size': len(content)
+                        })
+                except Exception as e:
+                    print(f"[FullTextCache] 更新章节失败: {e}")
+            
+            # 重新计算统计信息
+            max_index = max([ch.get('index', 0) for ch in cache_data['chapters'] if ch.get('index')], default=0)
+            total_size = sum([ch.get('size', 0) for ch in cache_data['chapters']])
+            
+            # 保存更新后的缓存
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            
+            # 更新数据库
+            with get_db() as conn:
+                conn.execute('''UPDATE fulltext_cache 
+                    SET cached_chapters=?, total_chapters=?, last_chapter_index=?, 
+                        total_size=?, updated_at=CURRENT_TIMESTAMP
+                    WHERE username=? AND book_key=?''',
+                    (len(cache_data['chapters']), len(toc_data['chapters']), 
+                     max_index, total_size, u, book_key)
+                )
+                conn.commit()
+            
+            return {
+                'status': 'success',
+                'message': f'更新成功，新增 {len(new_chapters)} 章',
+                'new_count': len(new_chapters)
+            }
+            
+        except Exception as e:
+            return {'status': 'error', 'message': f'更新失败: {str(e)}'}
+    
+    def delete_cache(self, book_key, username=None):
+        """删除缓存"""
+        u = username or get_current_user()
+        cache_path = self._get_cache_path(u, book_key)
+        
+        try:
+            # 删除文件
+            if os.path.exists(cache_path):
+                os.remove(cache_path)
+            
+            # 删除数据库记录
+            with get_db() as conn:
+                conn.execute(
+                    "DELETE FROM fulltext_cache WHERE username=? AND book_key=?",
+                    (u, book_key)
+                )
+                conn.commit()
+            
+            return {'status': 'success', 'message': '缓存已删除'}
+        except Exception as e:
+            return {'status': 'error', 'message': f'删除失败: {str(e)}'}
+    
+    def list_all_caches(self, username=None):
+        """列出所有缓存"""
+        u = username or get_current_user()
+        try:
+            conn = get_db()
+            rows = conn.execute(
+                '''SELECT book_key, book_name, cached_chapters, total_chapters, 
+                   total_size, created_at, updated_at 
+                   FROM fulltext_cache WHERE username=? ORDER BY updated_at DESC''',
+                (u,)
+            ).fetchall()
+            
+            result = []
+            for row in rows:
+                result.append({
+                    'book_key': row[0],
+                    'book_name': row[1],
+                    'cached_chapters': row[2],
+                    'total_chapters': row[3],
+                    'total_size': row[4],
+                    'created_at': row[5],
+                    'updated_at': row[6],
+                    'progress': round(row[2] / row[3] * 100, 1) if row[3] > 0 else 0
+                })
+            
+            return {'status': 'success', 'data': result}
+        except Exception as e:
+            return {'status': 'error', 'message': str(e)}
+    
+    def get_task_status(self, task_id):
+        """获取下载任务状态"""
+        task = self.active_tasks.get(task_id)
+        if not task:
+            return {'status': 'not_found'}
+        
+        # 返回任务信息（去除内部对象）
+        return {
+            'task_id': task.get('task_id'),
+            'username': task.get('username'),
+            'status': task.get('status'),
+            'book_key': task.get('book_key'),
+            'book_name': task.get('book_name'),
+            'toc_url': task.get('toc_url'),
+            'total': task.get('total'),
+            'current': task.get('current'),
+            'failed': task.get('failed'),
+            'start_time': task.get('start_time'),
+            'end_time': task.get('end_time'),
+            'settings': task.get('settings', {}),
+            'error': task.get('error')
+        }
+    
+    def list_active_tasks(self, username=None):
+        """列出所有活动任务"""
+        u = username or get_current_user()
+        tasks = []
+        
+        with self.task_lock:
+            for task_id, task in self.active_tasks.items():
+                if task.get('username') == u:
+                    tasks.append(self.get_task_status(task_id))
+        
+        return {'status': 'success', 'data': tasks}
+    
+    def pause_task(self, task_id):
+        """暂停任务"""
+        task = self.active_tasks.get(task_id)
+        if not task:
+            return {'status': 'error', 'message': '任务不存在'}
+        
+        if task['status'] != 'running':
+            return {'status': 'error', 'message': f'任务状态为 {task["status"]}，无法暂停'}
+        
+        with self.task_lock:
+            task['pause_event'].clear()  # 清除事件，阻塞下载线程
+            task['status'] = 'paused'
+            
+            # 更新 Redis
+            if self.use_redis:
+                self._update_task_in_redis(task_id)
+        
+        print(f"[FullTextCache] ⏸️ 任务已暂停: {task['book_name']}")
+        return {'status': 'success', 'message': '任务已暂停'}
+    
+    def resume_task(self, task_id):
+        """继续任务"""
+        task = self.active_tasks.get(task_id)
+        if not task:
+            return {'status': 'error', 'message': '任务不存在'}
+        
+        if task['status'] != 'paused':
+            return {'status': 'error', 'message': f'任务状态为 {task["status"]}，无法继续'}
+        
+        with self.task_lock:
+            task['pause_event'].set()  # 设置事件，解除阻塞
+            task['status'] = 'running'
+            
+            # 更新 Redis
+            if self.use_redis:
+                self._update_task_in_redis(task_id)
+        
+        print(f"[FullTextCache] ▶️ 任务已继续: {task['book_name']}")
+        return {'status': 'success', 'message': '任务已继续'}
+    
+    def cancel_task(self, task_id):
+        """取消任务"""
+        task = self.active_tasks.get(task_id)
+        if not task:
+            return {'status': 'error', 'message': '任务不存在'}
+        
+        if task['status'] in ['completed', 'cancelled']:
+            return {'status': 'error', 'message': f'任务已{task["status"]}，无法取消'}
+        
+        with self.task_lock:
+            task['cancel_flag'] = True
+            task['pause_event'].set()  # 确保不会卡在暂停状态
+            task['status'] = 'cancelled'
+            
+            # 更新 Redis
+            if self.use_redis:
+                self._update_task_in_redis(task_id)
+        
+        print(f"[FullTextCache] ❌ 任务已取消: {task['book_name']}")
+        return {'status': 'success', 'message': '任务已取消'}
+    
+    def update_task_settings(self, task_id, interval=None, max_workers=None):
+        """更新任务设置（仅限暂停状态）"""
+        task = self.active_tasks.get(task_id)
+        if not task:
+            return {'status': 'error', 'message': '任务不存在'}
+        
+        if task['status'] != 'paused':
+            return {'status': 'error', 'message': '只能编辑暂停中的任务'}
+        
+        with self.task_lock:
+            if interval is not None:
+                task['settings']['interval'] = float(interval)
+            if max_workers is not None:
+                task['settings']['max_workers'] = int(max_workers)
+            
+            # 更新 Redis
+            if self.use_redis:
+                self._update_task_in_redis(task_id)
+        
+        return {
+            'status': 'success', 
+            'message': '设置已更新',
+            'settings': task['settings']
+        }
+    
+    def cleanup_finished_tasks(self):
+        """清理已完成的任务（释放内存）"""
+        with self.task_lock:
+            finished = [tid for tid, task in self.active_tasks.items() 
+                       if task['status'] in ['completed', 'cancelled', 'error']]
+            
+            for tid in finished:
+                # 保留最近1小时的任务
+                if time.time() - self.active_tasks[tid].get('end_time', time.time()) > 3600:
+                    del self.active_tasks[tid]
+        
+        return len(finished)
+
+
 class DownloadManager:
     def __init__(self):
         self.downloads = {}
@@ -1617,6 +2343,7 @@ cluster_manager = ClusterManager()
 role_manager = RoleManager()
 offline_manager = OfflineBookManager()
 cache = CacheManager()
+fulltext_cache_manager = FullTextCacheManager()
 db = IsolatedDB()
 booklist_manager = IsolatedBooklistManager()
 downloader = DownloadManager()

@@ -39,6 +39,24 @@ def init_db():
                     value TEXT
                 )''')
     
+    # 4. 全文缓存表
+    c.execute('''CREATE TABLE IF NOT EXISTS fulltext_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    book_key TEXT NOT NULL,
+                    book_name TEXT,
+                    toc_url TEXT,
+                    cache_data TEXT,
+                    total_size INTEGER DEFAULT 0,
+                    cached_chapters INTEGER DEFAULT 0,
+                    total_chapters INTEGER DEFAULT 0,
+                    last_chapter_index INTEGER DEFAULT 0,
+                    never_expire BOOLEAN DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, book_key)
+                )''')
+    
     conn.commit()
     return conn
 

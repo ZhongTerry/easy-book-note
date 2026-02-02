@@ -268,6 +268,17 @@ def read_mode():
         print(f"[Read] ❌ Blocked by is_safe_url: {u}")
         return "Illegal URL", 403
     
+    # 1.5 [新增] 在获取数据前，先通过适配器判断URL类型
+    if not u.startswith('epub:'):
+        from spider_core import plugin_mgr
+        adapter = plugin_mgr.find_match(u)
+        if adapter and hasattr(adapter, 'detect_url_type'):
+            url_type = adapter.detect_url_type(u)
+            print(f"[Read] Adapter检测URL类型: {url_type}")
+            if url_type == 'toc':
+                print(f"[Smart Redirect] URL是目录页，直接重定向到/toc: {u}")
+                return redirect(url_for('core.toc_page', url=u, key=k))
+    
     data = None
     
     # 2. 获取数据 (放在 try 块中只负责获取)
