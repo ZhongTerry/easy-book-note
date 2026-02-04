@@ -2,7 +2,7 @@ from flask import Blueprint, render_template_string, request, jsonify, send_file
 from markupsafe import escape
 import requests
 import os
-from shared import login_required, is_safe_url, BASE_DIR, DL_DIR
+from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, warn, error
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
 import re
@@ -30,14 +30,14 @@ def detect_page_type(data):
     if 'page_type' in data:
         declared_type = data['page_type']
         if declared_type in ('toc', 'chapter'):
-            print(f"[Smart Detect] 适配器声明类型: {declared_type}")
+            info("Smart Detect", f"适配器声明类型: {declared_type}")
             return declared_type
     
     # === [优先级2] 数据结构特征检测 ===
     # 检查是否有 chapters 列表（典型的目录页特征）
     chapters = data.get('chapters', [])
     if isinstance(chapters, list) and len(chapters) > 3:  # 至少3章才算目录
-        print(f"[Smart Detect] 发现 {len(chapters)} 个章节 → 判定为目录页")
+        info("System", f"[Smart Detect] 发现 {len(chapters)} 个章节 → 判定为目录页")
         return 'toc'
     
     # 检查是否有 content（典型的章节页特征）
@@ -50,7 +50,7 @@ def detect_page_type(data):
         if len(valid_lines) > 3:  # [修复] 降低阈值，只要3行就认为是章节
             total_length = sum(len(line) for line in valid_lines)
             if total_length > 100:  # [修复] 降低阈值，100字符就够了
-                print(f"[Smart Detect] 发现 {len(valid_lines)} 行有效内容 (共{total_length}字符) → 判定为章节页")
+                info("System", f"[Smart Detect] 发现 {len(valid_lines)} 行有效内容 (共{total_length}字符) → 判定为章节页")
                 return 'chapter'
         # [修复] 如果只有1-2行，也可能是章节页（特别短的章节或失败信息）
         # 不要直接判定为目录页，继续检查其他特征
@@ -59,10 +59,10 @@ def detect_page_type(data):
     if isinstance(content, str):
         if '提取失败' in content or '无法获取' in content or '获取失败' in content:
             # [修复] 失败信息不一定是目录页，继续检查其他特征
-            print(f"[Smart Detect] 检测到失败信息，继续检查...")
+            error("Smart Detect", f"检测到失败信息，继续检查...")
         elif len(content) > 100:  # [修复] 降低阈值
             # 有足够长的内容，可能是章节页
-            print(f"[Smart Detect] 内容长度 {len(content)} → 判定为章节页")
+            info("System", f"[Smart Detect] 内容长度 {len(content)} → 判定为章节页")
             return 'chapter'
     
     # 如果有 next_url, prev_url 等章节导航，很可能是章节页
@@ -71,15 +71,15 @@ def detect_page_type(data):
     prev_url = data.get('prev_url') or data.get('prev') or ''
     
     if (next_url and 'index.html' not in next_url) or (prev_url and 'index.html' not in prev_url):
-        print(f"[Smart Detect] 发现章节导航链接 → 判定为章节页")
+        info("Smart Detect", f"发现章节导航链接 → 判定为章节页")
         return 'chapter'
     
     # [新增] 如果有 toc_url 字段，说明这是从章节页提取的
     if data.get('toc_url'):
-        print(f"[Smart Detect] 发现 toc_url 字段 → 判定为章节页")
+        info("Smart Detect", f"发现 toc_url 字段 → 判定为章节页")
         return 'chapter'
     
-    print(f"[Smart Detect] 无法判断页面类型")
+    error("Smart Detect", f"无法判断页面类型")
     return 'unknown'
 
 def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
@@ -256,16 +256,17 @@ def search_page():
 @login_required
 def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
-    force = request.args.get('force')
+    # [修复] 强化 force 参数转换，支持 ?force=true, ?force=1 等
+    force_raw = request.args.get('force', '').lower()
+    force = force_raw in ['true', '1', 'yes', 'on']
     
     # [调试] 打印 URL 检查结果
-    print(f"[Read] URL: {u}")
-    print(f"[Read] Key: {k}")
-    print(f"[Read] is_safe_url: {is_safe_url(u) if u and not u.startswith('epub:') else 'epub-skip'}")
+    info("Read", f"URL: {u}, Force: {force}")
+    info("System", f"[Read] is_safe_url: {is_safe_url(u) if u and not u.startswith('epub:') else 'epub-skip'}")
     
     # 1. 安全检查
     if not u.startswith('epub:') and not is_safe_url(u): 
-        print(f"[Read] ❌ Blocked by is_safe_url: {u}")
+        error("Read", f"❌ Blocked by is_safe_url: {u}")
         return "Illegal URL", 403
     
     # 1.5 [新增] 在获取数据前，先通过适配器判断URL类型
@@ -274,10 +275,11 @@ def read_mode():
         adapter = plugin_mgr.find_match(u)
         if adapter and hasattr(adapter, 'detect_url_type'):
             url_type = adapter.detect_url_type(u)
-            print(f"[Read] Adapter检测URL类型: {url_type}")
+            info("Read", f"Adapter检测URL类型: {url_type}")
             if url_type == 'toc':
-                print(f"[Smart Redirect] URL是目录页，直接重定向到/toc: {u}")
-                return redirect(url_for('core.toc_page', url=u, key=k))
+                info("Smart Redirect", f"URL是目录页，直接重定向到/toc: {u}")
+                # [修复] 重定向时保留 force 等原始参数
+                return redirect(url_for('core.toc_page', **request.args))
     
     data = None
     
@@ -304,21 +306,22 @@ def read_mode():
             data = managers.offline_manager.get_chapter(k, u) if k and not force else None
             if not data and not force: data = managers.cache.get(u)
             if not data:
-                data = crawler.run(u)
+                # [关键修复] 当 force=True 时，告知爬虫跳过它内部的缓存
+                data = crawler.run(u, no_cache=force)
                 if data: managers.cache.set(u, data)
 
     except Exception as e:
         # 捕获爬虫内部的错误
-        print(f"[Read Error] {e}")
+        info("Read Error", f"{e}")
         return f"解析发生错误: {str(e)}", 500
 
     # 3. [智能检测] 如果获取的内容实际上是目录页，自动跳转到目录页
     if data and not u.startswith('epub:'):
         page_type = detect_page_type(data)
         if page_type == 'toc':
-            print(f"[Smart Redirect] 检测到章节URL返回了目录内容，重定向到目录页: {u}")
-            # 重定向到目录页，保持 key 参数
-            return redirect(url_for('core.toc_page', url=u, key=k))
+            info("Smart Redirect", f"检测到章节URL返回了目录内容，重定向到目录页: {u}")
+            # [修复] 重定向时保留 force 等原始参数
+            return redirect(url_for('core.toc_page', **request.args))
     
     # 4. [核心修复] 必须先判断 data 是否存在
     if not data:
@@ -377,9 +380,9 @@ def read_mode():
                     # key 存在，记录历史
                     managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
                 else:
-                    print(f"[History] 跳过不存在的 key: {k}")
+                    warn("History", f"跳过不存在的 key: {k}")
             else:
-                print(f"[History] 跳过目录页历史记录: {data.get('title')}")
+                warn("History", f"跳过目录页历史记录: {data.get('title')}")
 
         # 计算 ID
         current_chapter_id = -1
@@ -391,8 +394,27 @@ def read_mode():
             match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
             if match: current_chapter_id = int(match.group(1))
 
+        # [V2 增强] 自动保存阅读进度与序号到 SQLite
+        if k and current_chapter_id > 0:
+            # 更新书籍的主记录，方便后续排序和进度追踪
+            managers.db.update(k, {
+                "last_read_index": current_chapter_id,
+                "last_read_url": u,
+                "last_read_title": data.get('title', ''),
+                "last_read_time": int(time.time())
+            })
+            info("DB", f"已同步阅读进度: {k} -> 第 {current_chapter_id} 章")
+
         # [新增] AJAX 模式支持 (用于前端骨架屏无刷新加载)
         if request.args.get('mode') == 'ajax':
+            # 检查当前章节是否已标记
+            is_marked_ajax = False
+            if k:
+                book_data = managers.db.get_raw_book(get_current_user(), k)
+                if book_data and 'value' in book_data:
+                    marks = book_data['value'].get('marked_chapters', [])
+                    is_marked_ajax = any(m.get('url') == u for m in marks)
+
             return jsonify({
                 'code': 0,
                 'data': {
@@ -405,18 +427,28 @@ def read_mode():
                     'toc_url': data.get('toc_url') or (managers.db.find(k)['url'] if k and managers.db.find(k) else '')
                 },
                 'current_url': u,
-                'chapter_id': current_chapter_id
+                'chapter_id': current_chapter_id,
+                'is_marked': is_marked_ajax
             })
 
         # 6. 渲染页面
         ua = request.headers.get('User-Agent', '').lower()
         is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
         
+        # 检查当前章节是否已标记
+        is_marked = False
+        if k:
+            book_data = managers.db.get_raw_book(get_current_user(), k)
+            if book_data and 'value' in book_data:
+                marks = book_data['value'].get('marked_chapters', [])
+                is_marked = any(m.get('url') == u for m in marks)
+
         context = {
             'article': data,
             'current_url': u,
             'db_key': k,
-            'chapter_id': current_chapter_id
+            'chapter_id': current_chapter_id,
+            'is_marked': is_marked
         }
 
         if is_mobile:
@@ -425,7 +457,7 @@ def read_mode():
             return render_template('reader_pc.html', **context)
             
     except Exception as e:
-        print(f"[Render Error] {e}")
+        info("Render Error", f"{e}")
         return f"渲染错误: {str(e)}", 500
 @core_bp.route('/api/history/list')
 @login_required
@@ -437,12 +469,73 @@ def api_history_list():
 def api_history_clear():
     managers.history_manager.clear()
     return jsonify({"status": "success"})
+@core_bp.route('/api/book/toggle_mark', methods=['POST'])
+@login_required
+def toggle_book_mark():
+    """标记/取消标记 章节"""
+    k = request.json.get('key')
+    url = request.json.get('url')
+    title = request.json.get('title')
+    cid = request.json.get('cid', -1)
+    
+    if not k or not url:
+        return jsonify({"status": "error", "message": "Missing key or url"})
+    
+    # 获取原始数据
+    book_data = managers.db.get_raw_book(get_current_user(), k)
+    if not book_data:
+        return jsonify({"status": "error", "message": "Book not found"})
+    
+    marked = book_data['value'].get('marked_chapters', [])
+    
+    # 检查是否已存在
+    exists_idx = -1
+    for i, m in enumerate(marked):
+        if m.get('url') == url:
+            exists_idx = i
+            break
+            
+    if exists_idx >= 0:
+        # 取消标记
+        marked.pop(exists_idx)
+        msg = "已取消标记"
+        is_marked = False
+    else:
+        # 添加标记
+        marked.append({
+            "title": title,
+            "url": url,
+            "id": cid,
+            "time": int(time.time())
+        })
+        # 按序号排序 (如果有)
+        marked.sort(key=lambda x: x.get('id', 0))
+        msg = "已标记当前章节"
+        is_marked = True
+        
+    managers.db.update(k, {"marked_chapters": marked})
+    return jsonify({"status": "success", "message": msg, "is_marked": is_marked})
+
+@core_bp.route('/api/book/find', methods=['GET'])
+@login_required
+def get_book_details():
+    """获取单本书籍的详细信息 (用于书架菜单等)"""
+    k = request.args.get('key')
+    if not k:
+        return jsonify({"status": "error", "message": "Missing key"})
+    
+    val = managers.db.get_full_data(k)
+    if val:
+        return jsonify({"status": "success", "data": val})
+    return jsonify({"status": "error", "message": "Book not found"})
+
 @core_bp.route('/toc')
 @login_required
 def toc_page():
     u, k = request.args.get('url'), request.args.get('key', '')
-    # 接收 force 参数，如果是 'true' 则跳过缓存
-    force = request.args.get('force') == 'true'
+    # [修复] 统一参数解析方式
+    force_raw = request.args.get('force', '').lower()
+    force = force_raw in ['true', '1', 'yes', 'on']
     is_api = request.args.get('api')
     if not u or (not u.startswith('epub:') and not is_safe_url(u)):
         return "Illegal URL", 403
@@ -459,41 +552,45 @@ def toc_page():
         if is_api:
             return jsonify(data)
         return render_template('toc.html', toc=data, toc_url=u, db_key=k)
+    # [V2 优化] 优先从 SQLite 缓存读取目录
     data = None
-    
-    # 网页逻辑
-    # 如果 force 为 true，先不读缓存，也别让 crawler 读缓存
-    # 但由于我们在 crawler.run 里强制加了读缓存逻辑，这里需要一点技巧：
-    
-    # 方案 A: 相信 crawler.run 的缓存机制 (推荐)
-    # 我们需要让 crawler.run 知道我们要强制刷新。
-    # 但这需要改动 crawler.run 的签名。
-    
-    # 方案 B (当前代码现状):
-    # 既然我们在 crawler.run 里加了缓存检查，那么 routes 里的 managers.cache.get(u) 就可以删掉了？
-    # 不完全是。为了兼容性，我们保留 routes 里的逻辑。
-    
-    # [关键]：如果你想让“强制刷新”生效，你需要在 crawler.run 之前手动清理一下缓存
-    if force:
-        try:
-            # 删掉缓存文件，这样 crawler.run 内部 check cache 就会 miss，从而去远程爬
-            from managers import cache
-            cache_file = cache._get_filename(u)
-            if os.path.exists(cache_file):
-                os.remove(cache_file)
-        except: pass
-    
-    if not data:
-        data = crawler.get_toc(u)
-        print("getting data", u)
+    if not force and k:
+        data = managers.db.get_toc_cache(k)
         if data:
+            info("Cache", f"从 SQLite 加载目录: {k}")
+
+    # 如果 SQLite 没中，或者是旧书籍还未同步，再尝试文件缓存 (二级缓存)
+    if not data and not force:
+        data = managers.cache.get(u)
+        if data:
+            info("Cache", f"从文件缓存加载目录: {u}")
+            # [自动同步] 既然文件里有但 SQLite 里没有，顺便同步到 SQLite
+            if k:
+                managers.db.save_toc_cache(k, data)
+    
+    # 强制刷新或两级缓存都失效
+    if not data or force:
+        info("System", f"[Crawl] 正在爬取目录: {u} (Force={force})")
+        # 如果是强制刷新，手动清理文件缓存
+        if force:
+            try:
+                cache_file = managers.cache._get_filename(u)
+                if os.path.exists(cache_file): os.remove(cache_file)
+            except: pass
+            
+        # [关键修复] 传递 no_cache 参数
+        data = crawler.get_toc(u, no_cache=force)
+        if data:
+            # 同步到两级缓存
+            if k:
+                managers.db.save_toc_cache(k, data)
             managers.cache.set(u, data)
     
     # [智能检测] 如果获取的内容实际上是章节页，自动跳转到阅读页
     if data:
         page_type = detect_page_type(data)
         if page_type == 'chapter':
-            print(f"[Smart Redirect] 检测到目录URL返回了章节内容，重定向到阅读页: {u}")
+            info("Smart Redirect", f"检测到目录URL返回了章节内容，重定向到阅读页: {u}")
             # 如果是API调用，返回错误提示
             if is_api:
                 return jsonify({
@@ -504,10 +601,25 @@ def toc_page():
             # 否则直接重定向到阅读页
             return redirect(url_for('core.read_mode', url=u, key=k))
     
-    if is_api:
-        return jsonify(data if data else {"status": "error", "message": "无法获取目录"})
+    # 获取书籍进度信息 (用于高亮已读章节)
+    book_progress = {}
+    if k:
+        book_data = managers.db.get_raw_book(get_current_user(), k)
+        if book_data:
+            book_progress = book_data.get('value', {})
 
-    return render_template('toc.html', toc=data, toc_url=u, db_key=k)
+    if is_api:
+        return jsonify({
+            "toc": data,
+            "progress": book_progress
+        } if data else {"status": "error", "message": "无法获取目录"})
+
+    return render_template('toc.html', 
+        toc=data, 
+        toc_url=u, 
+        db_key=k,
+        progress=book_progress
+    )
 
 @core_bp.route('/list', methods=['POST'])
 @login_required
@@ -580,7 +692,7 @@ def update():
     real_id = calculate_real_chapter_id(key, final_value, title)
     
     # [新增] 调试日志：打印识别结果
-    print(f"[Sync Debug] 书籍={key}, 标题=\"{title}\", 识别ID={real_id}")
+    info("Sync Debug", f"书籍={key}, 标题={title} -> 识别ID={real_id}")
     
     # 只有当 real_id 是有效正整数时才更新 meta
     # 如果返回 -1 (未识别)，这里直接跳过，数据库里旧的 meta 会保留
@@ -597,27 +709,27 @@ def update():
             meta['updated_at'] = int(time.time())
             
             # [关键调试] 打印即将保存的内容
-            print(f"[Sync Debug] 准备保存 - Key='{meta_key}', Value='{json.dumps(meta)}'")
+            info("Sync Debug", f"准备保存 - Key={meta_key}, Content={meta}")
             
             save_result = managers.db.update(meta_key, json.dumps(meta))
             
             # [关键调试] 打印保存结果
-            print(f"[Sync Debug] 保存结果: {save_result}")
+            info("Sync Debug", f"保存结果: {save_result}")
             
             # 验证保存是否成功（立即读回来检查）
             verify_str = managers.db.get_val(meta_key)
             if verify_str:
-                print(f"[Sync] ✅ 识别并保存成功：{title} -> ID {real_id}, 验证读取: {verify_str}")
+                info("Sync", f"✅ 识别并保存成功：{title} -> ID {real_id}, 验证读取: {verify_str}")
             else:
-                print(f"[Sync] ❌ 保存失败！无法读回数据")
+                error("Sync", f"❌ 保存失败！无法读回数据")
                 
         except Exception as e:
-            print(f"[Sync] Meta save error: {e}")
+            error("Sync", f"Meta save error: {e}")
             import traceback
             traceback.print_exc()
     else:
         # 如果没识别到，打印一个日志方便调试，但不写库
-        print(f"[Sync] ⚠️ 章节识别失败，跳过 Meta 记录: \"{title}\"")
+        error("Sync", f"⚠️ 章节识别失败，跳过 Meta 记录: {title}")
 
     # 3. 历史版本 (仅手动)
     if is_manual and res.get('status') == 'success':
@@ -701,7 +813,7 @@ def api_switch_source():
             return jsonify({"status": "failed", "msg": "全网未找到该章节的其他源"})
 
     except Exception as e:
-        print(f"Switch Error: {e}")
+        error("System", f"Switch Error: {e}")
         return jsonify({"status": "error", "msg": str(e)})
     
 # @core_bp.route('/api/source/list', methods=['POST'])
@@ -737,16 +849,16 @@ def api_source_list():
 
     # 3. 【关键补丁】如果书单没找到，直接“现场爬取”当前阅读页提取书名
     if not book_name or re.match(r'^[a-zA-Z0-9_]+$', book_name):
-        print(f"[Switch] 无法从本地获取书名，正在现场爬取源站: {current_url}")
+        error("Switch", f"无法从本地获取书名，正在现场爬取源站: {current_url}")
         try:
             # 现场爬取当前页面内容
             # 注意：这里 run 会自动识别是走插件还是走通用逻辑
             temp_data = crawler.run(current_url)
             if temp_data and temp_data.get('book_name'):
                 book_name = temp_data['book_name']
-                print(f"[Switch] 🎯 现场抓取书名成功: {book_name}")
+                info("Switch", f"🎯 现场抓取书名成功: {book_name}")
         except Exception as e:
-            print(f"[Switch] 现场抓取书名失败: {e}")
+            error("Switch", f"现场抓取书名失败: {e}")
 
     # 3. 最终校验
     # 如果还是拿不到中文（全是字母数字），说明真的没法搜
@@ -766,7 +878,7 @@ def api_source_list():
     #    return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
 
     # === 搜索 ===
-    print(f"[Switch] 准备搜索新源，关键词: {book_name}")
+    info("Switch", f"准备搜索新源，关键词: {book_name}")
     # 改为直接返回搜索结果，不做耗时的验证
     from spider_core import searcher
     sources = searcher.search_bing(book_name) if force else searcher.search_bing_cached(book_name)
@@ -830,19 +942,19 @@ def get_val():
         meta = {}
         
         # [关键调试] 打印读取的详细信息
-        print(f"[GetValue Debug] 书籍={key}")
-        print(f"[GetValue Debug] 读取Key='{meta_key}'")
-        print(f"[GetValue Debug] 读取结果='{meta_str}'")
+        info("GetValue Debug", f"书籍={key}")
+        info("GetValue Debug", f"读取Key=")
+        info("GetValue Debug", f"读取结果=")
         
         if meta_str:
             try: 
                 import json
                 meta = json.loads(meta_str)
-                print(f"[GetValue Debug] 解析后meta={meta}")
+                info("GetValue Debug", f"解析后meta={meta}")
             except Exception as e:
-                print(f"[GetValue Error] 书籍={key}, meta解析失败: {e}")
+                error("GetValue Error", f"书籍={key}, meta解析失败: {e}")
         else:
-            print(f"[GetValue Debug] meta_str为空或None")
+            info("GetValue Debug", f"meta_str为空或None")
         
         return jsonify({
             "status": "success", 
@@ -945,7 +1057,7 @@ def api_search():
         tid = managers.task_manager.submit(_worker_search, keyword)
         return jsonify({"status": "pending", "task_id": tid})
     except Exception as e:
-        print(f"[Search Error] {e}")
+        info("Search Error", f"{e}")
         return jsonify({"status": "error", "message": str(e)})
 
 @core_bp.route('/api/upload_epub', methods=['POST'])
@@ -965,7 +1077,7 @@ def api_upload_epub():
         managers.db.insert(k, v)
         return jsonify({"status": "success", "key": k, "value": v})
     except Exception as e:
-        print(f"[Upload Error] {e}")
+        info("Upload Error", f"{e}")
         return jsonify({"status": "error", "message": str(e)})
 # ... 引入 update_manager ...
 from managers import db, update_manager, booklist_manager, task_manager, get_current_user
@@ -1008,9 +1120,9 @@ def _worker_check_update(book_key, current_url, callback=None, username=None):
         cache_file = cache._get_filename(toc_url)
         if os.path.exists(cache_file):
             os.remove(cache_file)
-            print(f"[Update] 强制刷新，已清理缓存: {toc_url}")
+            info("Update", f"强制刷新，已清理缓存: {toc_url}")
     except Exception as e:
-        print(f"[Update] 清理缓存失败: {e}")
+        error("Update", f"清理缓存失败: {e}")
 
     # === 3. 爬取最新目录和元数据 ===
     toc_data = crawler.get_toc(toc_url)
@@ -1037,7 +1149,7 @@ def _worker_check_update(book_key, current_url, callback=None, username=None):
             try:
                 book_data = managers.db.get_full_data(book_key, username=username) or {}
                 book_name = book_data.get('book_name') or book_data.get('title') or book_data.get('name') or book_key
-                print(f"[Update] Meta缺失，尝试综合补全: {book_name}")
+                info("Update", f"Meta缺失，尝试综合补全: {book_name}")
                 extra_meta = crawler.get_meta_from_qidian_fanqie(book_name)
                 if extra_meta:
                     if not update_payload.get('cover') and extra_meta.get('cover'):
@@ -1049,7 +1161,7 @@ def _worker_check_update(book_key, current_url, callback=None, username=None):
                     if not update_payload.get('official_tags') and extra_meta.get('tags'):
                         update_payload['official_tags'] = extra_meta['tags']
             except Exception as e:
-                print(f"[Update] 综合补全失败: {e}")
+                error("Update", f"综合补全失败: {e}")
         
         if update_payload:
             managers.db.update(book_key, update_payload, username=username)
@@ -1163,7 +1275,7 @@ def api_get_updates_status():
         target_keys = list(set(target_keys))
         # print(f"[DEBUG] 检查列表: {target_keys}")
     except Exception as e:
-        print(f"[Updates] 获取订阅列表失败: {e}")
+        error("Updates", f"获取订阅列表失败: {e}")
 
     # 获取用户进度
     user_progress = managers.db.list_all().get('data', {})
@@ -1292,7 +1404,7 @@ def api_subscribe():
         managers.update_sub_manager.subscribe(username, key, toc_url, current_id)
         
         def _instant_check(pre_fetched_val):
-            print(f"[Instant Check] ⚡ 用户手动订阅 {key}，正在立即检查更新...")
+            info("Instant Check", f"⚡ 用户手动订阅 {key}，正在立即检查更新...")
             try:
                 # 0. [核心新增] 强力清除目录页缓存 (无论爬虫怎么想，物理删除缓存文件)
                 try:
@@ -1302,9 +1414,9 @@ def api_subscribe():
                         # 检查一下文件最后修改时间，如果是1分钟内生成的，可能没必要删
                         # 但为了保证“立即检查”的承诺，还是删了好
                         os.remove(cache_file)
-                        print(f"[Instant Check] 已强制清理TOC缓存: {toc_url}")
+                        info("Instant Check", f"已强制清理TOC缓存: {toc_url}")
                 except Exception as e:
-                    print(f"[Instant Check] 清理缓存失败(可能文件被占用): {e}")
+                    error("System", f"[Instant Check] 清理缓存失败(可能文件被占用): {e}")
 
                 # =========================================================
                 # 核心逻辑修正：对比基准应该是 [本地缓存TOC的最后一章]
@@ -1326,12 +1438,12 @@ def api_subscribe():
                         # 注意：这里如果是番茄的长ID，后面会在比较环节处理
                         pass 
                     
-                    print(f"[Check] 本地缓存TOC命中: 最后一章 {local_title} -> {local_seq}")
+                    info("Check", f"本地缓存TOC命中: 最后一章 {local_title} -> {local_seq}")
 
                 # 策略B (兜底)：如果完全没有TOC缓存，才退化为使用阅读进度
                 # (场景：刚加书架还没点开过目录，或者缓存被清空)
                 if local_seq == -1:
-                    print(f"[Check] 本地无TOC缓存，尝试使用阅读进度作为基准...")
+                    info("Check", f"本地无TOC缓存，尝试使用阅读进度作为基准...")
                     current_reading_url = None
                     if isinstance(pre_fetched_val, dict):
                         current_reading_url = pre_fetched_val.get('url')
@@ -1343,7 +1455,7 @@ def api_subscribe():
                         if cached_chap and cached_chap.get('title'):
                             local_title = cached_chap['title']
                             local_seq = parse_chapter_id(local_title)
-                            print(f"[Check] 阅读进度兜底: {local_title} -> {local_seq}")
+                            info("Check", f"阅读进度兜底: {local_title} -> {local_seq}")
                 
                 # --- 2. 获取远程进度 (Remote) ---
                 latest_data = crawler.get_latest_chapter(toc_url, no_cache=True)
@@ -1363,12 +1475,12 @@ def api_subscribe():
                     # 只有解析失败时，才存原始 ID
                     id_to_save = remote_seq if remote_seq > 0 else remote_id;
                     
-                    print(f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq} (原始ID: {remote_id})")
+                    info("System", f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq} (原始ID: {remote_id})")
                 else:
                     return
 
                 # --- 3. 核心比对 ---
-                print(f"[Check] 最终比对: Local({local_seq}) vs Remote({remote_seq})")
+                info("System", f"[Check] 最终比对: Local({local_seq}) vs Remote({remote_seq})")
                 
                 has_update = False
                 
@@ -1382,23 +1494,23 @@ def api_subscribe():
                 elif local_title != "未知" and local_title != remote_title:
                      has_update = True
                      # 如果是番茄源长ID场景，可能走到这里
-                     print(f"[Check] 标题/ID 变动触发更新: {local_title} != {remote_title}")
+                     info("Check", f"标题/ID 变动触发更新: {local_title} != {remote_title}")
 
                 if has_update:
                      # [修复] 传入 id_to_save 而不是 remote_id
                      managers.update_sub_manager.update_status(key, id_to_save, True)
-                     print(f"✅ 发现更新 (存入ID: {id_to_save})")
+                     info("System", f"✅ 发现更新 (存入ID: {id_to_save})")
                 else:
                      # 关键：如果没有更新，也要更新一下 update_sub_manager 里的 last_check_time 和 latest_id
                      # 这样前端可以显示“刚刚检查过”
                      # [修复] 传入 id_to_save 而不是 remote_id
                      managers.update_sub_manager.update_status(key, id_to_save, False)
-                     print(f"💤 无更新 (已同步状态, 存入ID: {id_to_save})")
+                     info("System", f"💤 无更新 (已同步状态, 存入ID: {id_to_save})")
 
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                print(f"[Instant Check] 失败: {e}")
+                error("Instant Check", f"失败: {e}")
 
         threading.Thread(target=_instant_check, args=(user_db_val,), daemon=True).start()
 
@@ -1479,7 +1591,7 @@ def api_manual_check():
             "latest_id": id_to_save
         })
     except Exception as e:
-        print(f"[Manual Check Error] {e}")
+        info("Manual Check Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})
 
 @core_bp.route('/api/rename_key', methods=['POST'])
@@ -1502,39 +1614,12 @@ def api_rename_key():
         return jsonify({"status": "error", "msg": f"Key [{new_key}] 已存在，请换一个名字"})
     
     try:
-        # 1. 迁移主数据
-        old_val = managers.db.get_val(old_key)
-        if not old_val:
-            return jsonify({"status": "error", "msg": "原Key不存在"})
+        # 使用 V2 版本的重命名逻辑，它会自动迁移 JSON 内部的所有数据
+        res = managers.db.rename_key(old_key, new_key)
+        if res['status'] == 'error':
+            return jsonify(res), 400
         
-        managers.db.insert(new_key, old_val)
-        managers.db.remove(old_key)
-        
-        # 2. 迁移标签
-        all_tags = managers.tag_manager.load()
-        if old_key in all_tags:
-            managers.tag_manager.update_tags(new_key, all_tags[old_key])
-            managers.tag_manager.update_tags(old_key, [])  # 清空旧的
-        
-        # 3. 迁移追更订阅（如果有）
-        try:
-            username = session.get('user', {}).get('username')
-            old_sub = managers.update_sub_manager.get_book_status(old_key)
-            if old_sub['subscribed']:
-                # 复制订阅数据到新Key
-                conn = managers.get_db()
-                conn.execute('''
-                    INSERT INTO book_updates (book_key, toc_url, last_local_id, last_remote_id, has_update, username)
-                    SELECT ?, toc_url, last_local_id, last_remote_id, has_update, username
-                    FROM book_updates WHERE book_key = ? AND username = ?
-                ''', (new_key, old_key, username))
-                # 删除旧的
-                conn.execute('DELETE FROM book_updates WHERE book_key = ? AND username = ?', (old_key, username))
-                conn.commit()
-        except Exception as e:
-            print(f"[Rename] 迁移追更失败（可忽略）: {e}")
-        
-        # 4. 迁移历史记录（最近阅读）
+        # 4. 迁移历史记录（最近阅读，仍然存储在 user_modules 中）
         try:
             history_data = managers.history_manager.load()
             if 'records' in history_data:
@@ -1543,12 +1628,12 @@ def api_rename_key():
                         record['key'] = new_key
                 managers.history_manager.save(history_data)
         except Exception as e:
-            print(f"[Rename] 迁移历史失败（可忽略）: {e}")
+            error("Rename", f"迁移历史失败: {e}")
         
         return jsonify({"status": "success", "msg": f"已重命名: {old_key} → {new_key}"})
     
     except Exception as e:
-        print(f"[Rename Error] {e}")
+        info("Rename Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})
 
 # ==========================================
@@ -1578,15 +1663,15 @@ def start_export():
         if not toc_url:
             return jsonify({"status": "error", "msg": "无法获取书籍 URL"})
         
-        print(f"[Export] 开始导出: {book_name}, URL: {toc_url}, 格式: {export_format}")
+        info("Export", f"开始导出: {book_name}, URL: {toc_url}, 格式: {export_format}")
         
         # 获取目录信息
         # 如果 toc_url 是章节页，爬虫会自动获取其目录页
         toc = managers.cache.get(toc_url)
         if not toc:
-            print(f"[Export] 缓存未命中，正在从网络获取目录...")
+            info("Export", f"缓存未命中，正在从网络获取目录...")
             toc = crawler.get_toc(toc_url)
-            print(f"[Export] 爬虫返回结果: {type(toc)}, keys: {toc.keys() if isinstance(toc, dict) else 'N/A'}")
+            info("System", f"[Export] 爬虫返回结果: {type(toc)}, keys: {toc.keys() if isinstance(toc, dict) else 'N/A'}")
         
         if not toc:
             return jsonify({"status": "error", "msg": "爬虫返回空数据，请检查网络或适配器状态"})
@@ -1595,18 +1680,18 @@ def start_export():
             return jsonify({"status": "error", "msg": f"爬虫返回数据格式错误，类型: {type(toc)}"})
         
         chapters = toc.get('chapters', [])
-        print(f"[Export] 第一次解析到章节数量: {len(chapters)}")
+        info("System", f"[Export] 第一次解析到章节数量: {len(chapters)}")
         
         # 如果没有 chapters 但有 toc_url，说明传入的是章节页，需要重新获取目录页
         if not chapters and toc.get('toc_url'):
             real_toc_url = toc.get('toc_url')
-            print(f"[Export] 检测到章节页，重定向到目录页: {real_toc_url}")
+            info("Export", f"检测到章节页，重定向到目录页: {real_toc_url}")
             
             # 从目录页重新获取
             toc = managers.cache.get(real_toc_url) or crawler.get_toc(real_toc_url)
             if toc:
                 chapters = toc.get('chapters', [])
-                print(f"[Export] 从目录页解析到章节数量: {len(chapters)}")
+                info("System", f"[Export] 从目录页解析到章节数量: {len(chapters)}")
         
         if not chapters:
             # 提供更详细的错误信息
@@ -1623,7 +1708,7 @@ def start_export():
                 error_msg += "\n3. 页面结构变化"
                 
             # 打印完整的 toc 结构以便调试
-            print(f"[Export Debug] TOC 完整内容: {toc}")
+            info("Export Debug", f"TOC 完整内容: {toc}")
             
             return jsonify({"status": "error", "msg": error_msg})
         
@@ -1635,7 +1720,7 @@ def start_export():
             'language': 'zh'
         }
         
-        print(f"[Export] 启动导出任务，章节数: {len(chapters)}")
+        info("System", f"[Export] 启动导出任务，章节数: {len(chapters)}")
         
         # 检查是否是续传
         resume_task_id = data.get('resume_task_id')
@@ -1657,7 +1742,7 @@ def start_export():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"[Export Start Error] {e}")
+        info("Export Start Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})
 
 @core_bp.route('/api/export/status')
@@ -1788,7 +1873,7 @@ def check_unfinished_export():
             return jsonify({"status": "success", "has_unfinished": False})
     
     except Exception as e:
-        print(f"[Export Check Error] {e}")
+        info("Export Check Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})
 
 @core_bp.route('/api/cluster/latency_stats')
@@ -1830,7 +1915,7 @@ def api_latency_stats():
         })
     
     except Exception as e:
-        print(f"[Latency Stats Error] {e}")
+        info("Latency Stats Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})
 
 @core_bp.route('/api/cluster/latency_update', methods=['POST'])
@@ -1877,7 +1962,7 @@ def api_latency_update():
         })
     
     except Exception as e:
-        print(f"[Latency Update Error] {e}")
+        info("Latency Update Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})
 
 @core_bp.route('/api/cluster/latency_reset', methods=['POST'])
@@ -1918,5 +2003,5 @@ def api_latency_reset():
         return jsonify({"status": "success", "msg": msg})
     
     except Exception as e:
-        print(f"[Latency Reset Error] {e}")
+        info("Latency Reset Error", f"{e}")
         return jsonify({"status": "error", "msg": str(e)})

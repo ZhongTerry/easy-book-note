@@ -3,7 +3,7 @@
 提供全文下载、增量更新、删除、查询等功能
 """
 from flask import Blueprint, request, jsonify, session, render_template
-from shared import login_required
+from shared import login_required, debug, info, warn, error
 from managers import fulltext_cache_manager, db
 from spider_core import crawler_instance as crawler
 

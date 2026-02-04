@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from shared import pro_required, is_safe_url
+from shared import pro_required, is_safe_url, debug, info, warn, error
 from managers import offline_manager
 
 # 假设你把爬虫逻辑移到了 spider_core.py，并实例化了 crawler_instance
@@ -25,7 +25,7 @@ def api_pro_download_book():
         return jsonify({"status": "error", "msg": "Illegal URL"}), 403
 
     def download_task(u_key, start_url):
-        print(f"[Pro] 启动离线任务: {u_key}")
+        info("Pro", f"启动离线任务: {u_key}")
         
         toc = None
         real_toc_url = None
@@ -40,24 +40,24 @@ def api_pro_download_book():
         
         # 2. 校验逻辑：如果没抓到，或者抓到的章节少于 20 章 (防止误判“最新章节列表”)
         if not toc or len(toc['chapters']) < 20:
-            print(f"[Pro] URL 似乎不是全本目录 (仅 {len(toc['chapters']) if toc else 0} 章)，尝试寻找真实目录...")
+            info("Pro", f"URL 似乎不是全本目录 (仅 {len(toc['chapters']) if toc else 0} 章)，尝试寻找真实目录...")
             
             # 访问当前页面，寻找“目录”按钮的链接
             page_data = crawler.run(start_url)
             if page_data and page_data.get('toc_url'):
                 real_toc_url = page_data['toc_url']
-                print(f"[Pro] 🎯 定位到真实目录: {real_toc_url}")
+                info("Pro", f"🎯 定位到真实目录: {real_toc_url}")
                 # 再次尝试抓取目录
                 toc = crawler.get_toc(real_toc_url)
             else:
-                print("[Pro] ❌ 无法定位目录页，任务终止。")
+                error("Pro", "❌ 无法定位目录页，任务终止。")
                 return
 
         if not toc or not toc['chapters']: 
-            print("[Pro] ❌ 目录解析失败或为空")
+            error("Pro", "❌ 目录解析失败或为空")
             return
         
-        print(f"[Pro] ✅ 目录获取成功，共 {len(toc['chapters'])} 章，开始并发下载...")
+        info("Pro", f"✅ 目录获取成功，共 {len(toc['chapters'])} 章，开始并发下载...")
 
         # 3. 并发下载全书
         full_data = {}
@@ -79,11 +79,11 @@ def api_pro_download_book():
                 
                 done += 1
                 if done % 50 == 0:
-                    print(f"[Pro] 下载进度: {done}/{total}")
+                    info("Pro", f"下载进度: {done}/{total}")
         
         # 4. 保存
         offline_manager.save_book(u_key, full_data)
-        print(f"[Pro] 🎉 离线下载完成: {u_key} (最终缓存 {len(full_data)} 章)")
+        info("System", f"[Pro] 🎉 离线下载完成: {u_key} (最终缓存 {len(full_data)} 章)")
 
     threading.Thread(target=download_task, args=(book_key, input_url)).start()
     return jsonify({"status": "success", "msg": "🚀 全本离线任务已启动，正在后台高速下载..."})

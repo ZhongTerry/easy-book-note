@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import session, g, has_request_context
-from shared import USER_DATA_DIR, CACHE_DIR, DL_DIR
+from shared import USER_DATA_DIR, CACHE_DIR, DL_DIR, debug, info, warn, error
 import shared
 
 # ==========================================
@@ -64,7 +64,7 @@ class BaseJsonManager:
             conn.commit()
             if not has_request_context(): conn.close()
         except Exception as e:
-            print(f"DB Save Error ({self.module_type}): {e}")
+            error("DB", f"Save Error ({self.module_type}): {e}")
 
 # ==========================================
 # 2. 角色管理 (System Config)
@@ -156,17 +156,43 @@ class IsolatedBooklistManager(BaseJsonManager):
     def load(self, username=None):
         return super().load(username)
 
-class IsolatedTagManager(BaseJsonManager):
-    def __init__(self): super().__init__('tags')
+class IsolatedTagManager:
+    """标签管理 (V2：存储在书籍的 content.tags 中)"""
+    def update_tags(self, key, tags, username=None):
+        u = username or get_current_user()
+        content = db.get_raw_book(u, key)
+        if not content: return []
+        
+        new_tags = [t.strip() for t in tags if t.strip()] if tags else []
+        content['tags'] = new_tags
+        db.save_raw_book(u, key, content)
+        return new_tags
     
-    def update_tags(self, key, tags):
-        d = self.load()
-        if tags: d[key] = [t.strip() for t in tags if t.strip()]
-        elif key in d: del d[key]
-        self.save(d)
-        return d.get(key, [])
-    
-    def get_all(self): return self.load()
+    def get_all(self, username=None):
+        u = username or get_current_user()
+        try:
+            all_info = db.list_all()
+            if all_info['status'] == 'success':
+                result = {}
+                with get_db() as conn:
+                    cursor = conn.execute("SELECT content FROM books_v2 WHERE username=?", (u,))
+                    for row in cursor.fetchall():
+                        c = json.loads(row[0])
+                        if c.get('key') and c.get('tags'):
+                            result[c['key']] = c['tags']
+                return result
+        except: pass
+        return {}
+
+    def load(self, username=None): return self.get_all(username)
+    def save(self, data, username=None):
+        # 兼容旧代码批量保存标签的逻辑
+        u = username or get_current_user()
+        for k, tags in data.items():
+            content = db.get_raw_book(u, k)
+            if content:
+                content['tags'] = tags
+                db.save_raw_book(u, k, content)
 
 class UpdateManager(BaseJsonManager):
     def __init__(self): super().__init__('updates')
@@ -261,15 +287,25 @@ class IsolatedStatsManager(BaseJsonManager):
 # managers.py -> IsolatedDB 类 (请替换整个类)
 
 class IsolatedDB:
-    def _get_db_conn(self):
-        username = session.get('user', {}).get('username', 'default_user')
-        db_path = os.path.join(USER_DATA_DIR, f"{username}.sqlite")
-        conn = sqlite3.connect(db_path)
-        return conn
+    def __init__(self):
+        self._ensure_table()
 
-    def _ensure_history_table(self):
+    def _ensure_table(self):
+        """确保 books_v2 表存在"""
         try:
-            with get_db() as conn:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute('''CREATE TABLE IF NOT EXISTS books_v2 (
+                                id TEXT PRIMARY KEY,
+                                username TEXT NOT NULL,
+                                book_key TEXT NOT NULL,
+                                content TEXT NOT NULL,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                UNIQUE(username, book_key)
+                            )''')
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_books_v2_username ON books_v2(username)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_books_v2_book_key ON books_v2(book_key)")
+                
                 conn.execute('''CREATE TABLE IF NOT EXISTS book_history (
                                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                                 username TEXT NOT NULL,
@@ -277,189 +313,141 @@ class IsolatedDB:
                                 value TEXT,
                                 recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                             )''')
-                # === [新增] 追更表 ===
-                conn.execute('''CREATE TABLE IF NOT EXISTS book_updates (
-                                book_key TEXT PRIMARY KEY,
-                                username TEXT NOT NULL,
-                                toc_url TEXT,
-                                last_local_id INTEGER DEFAULT 0,
-                                last_remote_id INTEGER DEFAULT 0,
-                                has_update BOOLEAN DEFAULT 0,
-                                updated_at TIMESTAMP
-                            )''')
                 conn.commit()
-        except: pass
-
-    # === 1. 迁移逻辑 (启动时运行) ===
-    def migrate_legacy_data(self):
-        """将旧的纯文本 URL 转换为 JSON 对象"""
-        print("[DB] 检查数据结构版本...")
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT username, book_key, value FROM user_books")
-                rows = cursor.fetchall()
-                
-                count = 0
-                for username, key, val in rows:
-                    if not val or key.startswith('@') or key.endswith(':meta'): continue
-                    
-                    # 检查是否已经是 JSON
-                    is_json = False
-                    try:
-                        d = json.loads(val)
-                        if isinstance(d, dict) and 'url' in d: is_json = True
-                    except: pass
-                    
-                    if not is_json:
-                        # 迁移：纯字符串 -> JSON
-                        new_data = json.dumps({
-                            "url": val,
-                            "cover": "",
-                            "author": "",
-                            "desc": "",
-                            "updated_at": int(time.time())
-                        }, ensure_ascii=False)
-                        cursor.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (new_data, username, key))
-                        count += 1
-                
-                conn.commit()
-                if count > 0: print(f"[DB] ✅ 已迁移 {count} 条旧数据为 JSON 格式")
         except Exception as e:
-            print(f"[DB] 迁移检查跳过: {e}")
+            error("DB", f"Init Error: {e}")
 
-    # === 2. 核心写入逻辑 (自动包装) ===
+    def get_raw_book(self, username, book_key):
+        """获取书籍原始字典（包含 key, value, meta, tags, update_info）"""
+        try:
+            with get_db() as conn:
+                row = conn.execute("SELECT content FROM books_v2 WHERE username=? AND book_key=?", (username, book_key)).fetchone()
+                if row: return json.loads(row[0])
+        except: pass
+        return None
+
+    def save_raw_book(self, username, book_key, content_dict):
+        """保存书籍字典"""
+        try:
+            if 'key' not in content_dict: content_dict['key'] = book_key
+            if 'value' not in content_dict: content_dict['value'] = {}
+            if 'meta' not in content_dict: content_dict['meta'] = {}
+            if 'tags' not in content_dict: content_dict['tags'] = []
+            if 'update_info' not in content_dict: content_dict['update_info'] = {}
+            if 'cache' not in content_dict: content_dict['cache'] = {} # [新增] 缓存字段
+
+            json_str = json.dumps(content_dict, ensure_ascii=False)
+            with get_db() as conn:
+                row = conn.execute("SELECT id FROM books_v2 WHERE username=? AND book_key=?", (username, book_key)).fetchone()
+                if row:
+                    conn.execute("UPDATE books_v2 SET content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json_str, row[0]))
+                else:
+                    b_uuid = str(uuid.uuid4())
+                    conn.execute("INSERT INTO books_v2 (id, username, book_key, content) VALUES (?, ?, ?, ?)", 
+                               (b_uuid, username, book_key, json_str))
+                conn.commit()
+            return True
+        except Exception as e:
+            error("DB", f"Save Error: {e}")
+            return False
+
+    # === [新增] TOC缓存管理 ===
+    def get_toc_cache(self, book_key, username=None):
+        """从 SQLite 获取 TOC 缓存"""
+        u = username or get_current_user()
+        content = self.get_raw_book(u, book_key)
+        if content and 'cache' in content and 'toc' in content['cache']:
+            return content['cache']['toc']
+        return None
+
+    def save_toc_cache(self, book_key, toc_data, username=None):
+        """保存 TOC 缓存和 Meta 到 SQLite"""
+        u = username or get_current_user()
+        content = self.get_raw_book(u, book_key)
+        if not content: return False
+        
+        if 'cache' not in content: content['cache'] = {}
+        content['cache']['toc'] = toc_data
+        content['cache']['updated_at'] = int(time.time())
+        
+        # 顺便更新 meta 信息和 value 信息 (如果显示需要)
+        if toc_data and isinstance(toc_data, dict):
+            # 更新 meta 字段 (纯净元数据)
+            if 'author' in toc_data: content['meta']['author'] = toc_data['author']
+            if 'cover' in toc_data: content['meta']['cover'] = toc_data['cover']
+            if 'desc' in toc_data: content['meta']['desc'] = toc_data['desc']
+            if 'latest' in toc_data: content['meta']['latest'] = toc_data['latest']
+            
+            # 同步更新 value 字段 (前端展示用)
+            if 'title' in toc_data: content['value']['title'] = toc_data['title']
+            if 'author' in toc_data: content['value']['author'] = toc_data['author']
+            if 'cover' in toc_data: content['value']['cover'] = toc_data['cover']
+            if 'chapters' in toc_data: content['value']['total_chapters'] = len(toc_data['chapters'])
+            
+        return self.save_raw_book(u, book_key, content)
+
     def insert(self, key, value, username=None):
         if not key: return {"status": "error", "message": "Key cannot be empty"}
         u = username or get_current_user()
+        final_val = value if isinstance(value, dict) else {"url": value, "updated_at": int(time.time())}
         
-        final_json = ""
-        if isinstance(value, dict):
-            final_json = json.dumps(value, ensure_ascii=False)
-        else:
-            try:
-                temp = json.loads(value)
-                if isinstance(temp, dict) and 'url' in temp: final_json = value
-                else: raise ValueError()
-            except:
-                final_json = json.dumps({
-                    "url": value, 
-                    "updated_at": int(time.time())
-                }, ensure_ascii=False)
-
-        try:
-            with get_db() as conn:
-                conn.execute("INSERT OR REPLACE INTO user_books (username, book_key, value) VALUES (?, ?, ?)", (u, key, final_json))
-                conn.commit()
-            return {"status": "success", "message": f"Saved: {key}", "data": {key: final_json}}
-        except Exception as e: return {"status": "error", "message": str(e)}
+        content = self.get_raw_book(u, key) or {}
+        content['value'] = final_val
+        if self.save_raw_book(u, key, content):
+            return {"status": "success", "message": f"Saved: {key}", "data": {key: final_val}}
+        return {"status": "error", "message": "Save failed"}
 
     def update(self, key, value, username=None):
         u = username or get_current_user()
-        try:
-            conn = get_db()
-            row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
-            
-            # [关键修复] 对于 :meta 结尾的 key，直接存储原始值，不要包装
-            if key.endswith(':meta'):
-                # value 已经是 JSON 字符串，直接存储
-                conn.execute("INSERT OR REPLACE INTO user_books (username, book_key, value) VALUES (?, ?, ?)", 
-                           (u, key, value))
-                conn.commit()
-                return {"status": "success", "message": f"Updated meta: {key}"}
-            
-            # 正常的书籍 key，使用包装逻辑
-            current_data = {}
-            if row and row[0]:
-                try: current_data = json.loads(row[0])
-                except: current_data = {"url": row[0]}
-            
-            if isinstance(value, dict):
-                current_data.update(value)
-            else:
-                current_data['url'] = value
-            
-            current_data['updated_at'] = int(time.time())
-            
-            final_json = json.dumps(current_data, ensure_ascii=False)
-            conn.execute("UPDATE user_books SET value=? WHERE username=? AND book_key=?", (final_json, u, key))
-            conn.commit()
-            return {"status": "success", "message": f"Updated: {key}"}
-        except:
-            return self.insert(key, value, username=username)
-
-    # === 3. 核心读取逻辑 (自动解包 - 兼容旧接口) ===
-    def get_val(self, key, username=None):
-        """默认只返回 URL 字符串，保证旧代码不崩"""
-        # [关键修复] 对于 :meta 结尾的 key，直接返回原始值
         if key.endswith(':meta'):
-            u = username or get_current_user()
-            try:
-                conn = get_db()
-                row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
-                return row[0] if row and row[0] else None
-            except:
-                return None
-        
-        # 正常的书籍 key，使用解包逻辑
+            real_key = key.replace(':meta', '')
+            content = self.get_raw_book(u, real_key) or {}
+            content['meta'] = json.loads(value) if isinstance(value, str) else value
+            self.save_raw_book(u, real_key, content)
+            return {"status": "success", "message": f"Updated meta: {real_key}"}
+
+        content = self.get_raw_book(u, key) or {"value": {}}
+        if isinstance(value, dict): content['value'].update(value)
+        else: content['value']['url'] = value
+        content['value']['updated_at'] = int(time.time())
+        if self.save_raw_book(u, key, content):
+            return {"status": "success", "message": f"Updated: {key}"}
+        return {"status": "error", "message": "Update failed"}
+
+    def get_val(self, key, username=None):
+        if key.endswith(':meta'):
+            real_key = key.replace(':meta', '')
+            c = self.get_raw_book(username or get_current_user(), real_key)
+            return json.dumps(c['meta'], ensure_ascii=False) if c and 'meta' in c else None
         full = self.get_full_data(key, username=username)
         return full.get('url') if full else None
 
     def get_full_data(self, key, username=None):
-        """新接口：获取完整元数据"""
-        u = username or get_current_user()
-        try:
-            conn = get_db()
-            row = conn.execute("SELECT value FROM user_books WHERE username=? AND book_key=?", (u, key)).fetchone()
-            if row and row[0]:
-                try:
-                    d = json.loads(row[0])
-                    return d if isinstance(d, dict) else {"url": row[0]}
-                except: return {"url": row[0]}
-            return None
-        except: return None
+        c = self.get_raw_book(username or get_current_user(), key)
+        return c.get('value') if c else None
 
-    # === 4. 列表查询 (自动解包) ===
     def list_all(self):
         u = get_current_user()
         try:
-            conn = get_db()
-            cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND book_key NOT LIKE '@%' ORDER BY updated_at DESC", (u,))
-            result = {}
-            for row in cursor.fetchall():
-                k, v_str = row[0], row[1]
-                if k.endswith(':meta'): continue
-                try:
-                    obj = json.loads(v_str)
-                    if isinstance(obj, dict): result[k] = obj
-                    else: result[k] = {"url": v_str}
-                except: result[k] = {"url": v_str}
-            return {"status": "success", "data": result}
+            with get_db() as conn:
+                cursor = conn.execute("SELECT content FROM books_v2 WHERE username=? ORDER BY updated_at DESC", (u,))
+                return {"status": "success", "data": {json.loads(r[0])['key']: json.loads(r[0])['value'] for r in cursor.fetchall() if 'key' in json.loads(r[0])}}
         except Exception as e: return {"status": "error", "message": str(e)}
 
-    # ... (find, remove, rename_key, rollback, add_version, get_versions 保持不变) ...
     def find(self, term):
         u = get_current_user()
         try:
             t = f'%{term}%'
-            conn = get_db()
-            cursor = conn.execute("SELECT book_key, value FROM user_books WHERE username=? AND (book_key LIKE ? OR value LIKE ?)", (u, t, t))
-            result = {}
-            for row in cursor.fetchall():
-                k, v_str = row[0], row[1]
-                if k.endswith(':meta'): continue
-                try:
-                    obj = json.loads(v_str)
-                    result[k] = obj if isinstance(obj, dict) else {"url": obj}
-                except: result[k] = {"url": v_str}
-            return {"status": "success", "data": result}
+            with get_db() as conn:
+                cursor = conn.execute("SELECT content FROM books_v2 WHERE username=? AND (book_key LIKE ? OR content LIKE ?)", (u, t, t))
+                return {"status": "success", "data": {json.loads(r[0])['key']: json.loads(r[0])['value'] for r in cursor.fetchall()}}
         except Exception as e: return {"status": "error", "message": str(e)}
 
     def remove(self, key):
         u = get_current_user()
         try:
             with get_db() as conn:
-                conn.execute("DELETE FROM user_books WHERE username=? AND book_key=?", (u, key))
+                conn.execute("DELETE FROM books_v2 WHERE username=? AND (book_key=? OR id=?)", (u, key, key))
                 conn.commit()
             return {"status": "success", "message": f"Removed: {key}"}
         except Exception as e: return {"status": "error", "message": str(e)}
@@ -469,33 +457,28 @@ class IsolatedDB:
         u = get_current_user()
         try:
             with get_db() as conn:
-                exists = conn.execute("SELECT 1 FROM user_books WHERE username=? AND book_key=?", (u, new_key)).fetchone()
-                if exists: return {"status": "error", "message": f"目标 Key [{new_key}] 已存在"}
-                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
-                conn.execute("UPDATE user_books SET book_key=? WHERE username=? AND book_key=?", (f"{new_key}:meta", u, f"{old_key}:meta"))
-                conn.execute("UPDATE book_history SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
-                conn.commit()
+                exists = conn.execute("SELECT 1 FROM books_v2 WHERE username=? AND book_key=?", (u, new_key)).fetchone()
+                if exists: return {"status": "error", "message": f"Target Key [{new_key}] exists"}
+                content = self.get_raw_book(u, old_key)
+                if content:
+                    content['key'] = new_key
+                    conn.execute("UPDATE books_v2 SET book_key=?, content=? WHERE username=? AND book_key=?", (new_key, json.dumps(content, ensure_ascii=False), u, old_key))
+                    conn.execute("UPDATE book_history SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
+                    conn.commit()
             
-            tags_data = tag_manager.load(u)
-            if old_key in tags_data:
-                tags_data[new_key] = tags_data.pop(old_key)
-                tag_manager.save(tags_data, u)
-            
-            updates_data = update_manager.load(u)
-            if old_key in updates_data:
-                updates_data[new_key] = updates_data.pop(old_key)
-                update_manager.save(updates_data, u)
+            # 更新书单 (仍然存在于 user_modules)
+            try:
+                bl_data = booklist_manager.load(u)
+                changed = False
+                for lid in bl_data:
+                    for b in bl_data[lid].get('books', []):
+                        if b['key'] == old_key:
+                            b['key'] = new_key
+                            changed = True
+                if changed: booklist_manager.save(bl_data, u)
+            except: pass
 
-            bl_data = booklist_manager.load(u)
-            changed = False
-            for lid in bl_data:
-                for b in bl_data[lid].get('books', []):
-                    if b['key'] == old_key:
-                        b['key'] = new_key
-                        changed = True
-            if changed: booklist_manager.save(bl_data, u)
-
-            return {"status": "success", "message": f"已将 [{old_key}] 重命名为 [{new_key}]"}
+            return {"status": "success", "message": f"Renamed [{old_key}] to [{new_key}]"}
         except Exception as e: return {"status": "error", "message": str(e)}
 
     def rollback(self): return {"status": "error", "message": "Use version history instead"}
@@ -529,93 +512,71 @@ class IsolatedDB:
         except: return []
 
 class UpdateRecordManager:
-    """管理自动追更的数据库操作"""
-    def __init__(self):
-        self._ensure_table() # [修复] 初始化时自动建表
-        pass
-
-    def _ensure_table(self):
-        """确保 book_updates 表存在"""
-        try:
-            # 这里调用 get_db() 可能会因为没有 request context 报错
-            # 但我们在 __init__ 里调用时通常是在 import 阶段，也不行
-            # 所以只能把建表逻辑通过独立的连接来做，或者每次操作前检查
-            
-            # 使用独立连接建表，防止 Flask context 报错
-            conn = sqlite3.connect(DB_PATH) 
-            conn.execute('''CREATE TABLE IF NOT EXISTS book_updates (
-                            book_key TEXT PRIMARY KEY,
-                            username TEXT NOT NULL,
-                            toc_url TEXT,
-                            last_local_id INTEGER DEFAULT 0,
-                            last_remote_id INTEGER DEFAULT 0,
-                            has_update BOOLEAN DEFAULT 0,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )''')
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"[DB Init] 自动建表失败 (不用担心，可能是文件锁定): {e}")
-
+    """管理自动追更 (V2：存储在书籍的 content.update_info 中)"""
     def subscribe(self, username, book_key, toc_url, current_id):
-        """开启追更"""
-        # 为了双重保险，如果 __init__ 失败了，这里再试一次
-        try: self._ensure_table()
-        except: pass
-        
-        with get_db() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO book_updates 
-                (book_key, username, toc_url, last_local_id, has_update, updated_at)
-                VALUES (?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-            """, (book_key, username, toc_url, current_id))
-            conn.commit()
+        content = db.get_raw_book(username, book_key)
+        if not content: return
+        content['update_info'] = {
+            "toc_url": toc_url,
+            "last_local_id": current_id,
+            "last_remote_id": current_id,
+            "has_update": False,
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        db.save_raw_book(username, book_key, content)
 
-    def unsubscribe(self, book_key):
-        """取消追更"""
-        with get_db() as conn:
-            conn.execute("DELETE FROM book_updates WHERE book_key=?", (book_key,))
-            conn.commit()
+    def unsubscribe(self, book_key, username=None):
+        u = username or get_current_user()
+        content = db.get_raw_book(u, book_key)
+        if content and 'update_info' in content:
+            content['update_info'] = {}
+            db.save_raw_book(u, book_key, content)
 
-    def is_subscribed(self, book_key):
-        with get_db() as conn:
-            row = conn.execute("SELECT 1 FROM book_updates WHERE book_key=?", (book_key,)).fetchone()
-            return bool(row)
+    def is_subscribed(self, book_key, username=None):
+        u = username or get_current_user()
+        c = db.get_raw_book(u, book_key)
+        return bool(c and c.get('update_info') and c['update_info'].get('toc_url'))
 
-    # [新增] 获取更详细的状态，供前端渲染红点
-    def get_book_status(self, book_key):
-        with get_db() as conn:
-            row = conn.execute("SELECT has_update, last_remote_id FROM book_updates WHERE book_key=?", (book_key,)).fetchone()
-            if row:
-                return {"subscribed": True, "has_update": bool(row['has_update']), "remote_id": row['last_remote_id']}
-            return {"subscribed": False, "has_update": False}
+    def get_book_status(self, book_key, username=None):
+        u = username or get_current_user()
+        c = db.get_raw_book(u, book_key)
+        if c and c.get('update_info') and c['update_info'].get('toc_url'):
+            up = c['update_info']
+            return {"subscribed": True, "has_update": bool(up.get('has_update')), "remote_id": up.get('last_remote_id', 0)}
+        return {"subscribed": False, "has_update": False}
     
-    def update_status(self, book_key, remote_id, has_u):
-        with get_db() as conn:
-            conn.execute("UPDATE book_updates SET last_remote_id=?, has_update=?, updated_at=CURRENT_TIMESTAMP WHERE book_key=?", 
-                         (remote_id, 1 if has_u else 0, book_key))
-            conn.commit()
+    def update_status(self, book_key, remote_id, has_u, username=None):
+        u = username or get_current_user()
+        content = db.get_raw_book(u, book_key)
+        if content and content.get('update_info'):
+            content['update_info']['last_remote_id'] = remote_id
+            content['update_info']['has_update'] = has_u
+            content['update_info']['updated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            db.save_raw_book(u, book_key, content)
 
     def get_all_updates(self, username):
-        """获取某用户所有有更新的书"""
-        with get_db() as conn:
-            rows = conn.execute("SELECT book_key FROM book_updates WHERE username=? AND has_update=1", (username,)).fetchall()
-            return [r[0] for r in rows]
+        res = []
+        try:
+            with get_db() as conn:
+                cursor = conn.execute("SELECT content FROM books_v2 WHERE username=?", (username,))
+                for row in cursor.fetchall():
+                    c = json.loads(row[0])
+                    if c.get('update_info') and c['update_info'].get('has_update'):
+                        res.append(c['key'])
+        except: pass
+        return res
 
-    # [新增] 获取某用户所有已订阅的书 (用于 api_get_updates_status 确定检查范围)
     def get_all_subscribed(self, username):
-        """获取某用户所有开启了自动追更的书"""
-        with get_db() as conn:
-            rows = conn.execute("SELECT book_key FROM book_updates WHERE username=?", (username,)).fetchall()
-            return [r[0] for r in rows]
-
-    def get_all_tasks(self):
-        """后台线程用：获取所有任务"""
-        # 注意：这里可能是在 request 上下文之外调用的，所以不能用 get_db()，要手动连
-        # 但因为 DB 是按用户分文件的，我们这里需要遍历所有用户的 DB 文件？
-        # 简化策略：目前单机版很多逻辑还没做完全的用户隔离，我们先只处理主DB
-        # 或者修正逻辑：schedule_auto_check 负责遍历文件
-        pass
+        res = []
+        try:
+            with get_db() as conn:
+                cursor = conn.execute("SELECT content FROM books_v2 WHERE username=?", (username,))
+                for row in cursor.fetchall():
+                    c = json.loads(row[0])
+                    if c.get('update_info') and c['update_info'].get('toc_url'):
+                        res.append(c['key'])
+        except: pass
+        return res
 
 # ==========================================
 # 5. 文件/缓存管理
@@ -656,7 +617,7 @@ class CacheManager:
             with open(fp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
         except Exception as e:
-            print(f"[Cache] Write Error: {e}")
+            error("Cache", f"Write Error: {e}")
             
     def cleanup_expired(self):
         now = time.time(); count = 0; size = 0
@@ -692,24 +653,40 @@ class FullTextCacheManager:
     
     def _init_redis(self):
         """初始化 Redis 连接"""
+        # [优化] 如果没有检测到全局 Redis 配置，就不进行盲目连接尝试
+        redis_url = os.environ.get('REDIS_URL')
+        if not redis_url:
+            warn("FullTextCache", "ℹ️ 未配置 REDIS_URL，跳过连接探测")
+            self.use_redis = False
+            return
+
         try:
-            # 尝试连接到本地 Redis
+            # 解析 URL 获取 host/port/db
+            from urllib.parse import urlparse
+            url = urlparse(redis_url)
+            host = url.hostname or '127.0.0.1'
+            port = url.port or 6379
+            
+            # 使用 127.0.0.1 避免 Windows localhost 解析延迟
+            if host == "localhost": host = "127.0.0.1"
+
             test_client = redis.Redis(
-                host='localhost',
-                port=6379,
+                host=host,
+                port=port,
                 db=0,
                 decode_responses=True,
-                socket_connect_timeout=2,
-                socket_timeout=2
+                socket_connect_timeout=1,
+                socket_timeout=1,
+                retry_on_timeout=False
             )
             # 测试连接
             test_client.ping()
             self.redis_client = test_client
             self.use_redis = True
-            print("[FullTextCache] ✅ Redis 连接成功，使用 Redis 存储任务数据")
+            info("FullTextCache", "✅ Redis 连接成功，使用 Redis 存储任务数据")
         except (redis.ConnectionError, redis.TimeoutError, Exception) as e:
             self.use_redis = False
-            print(f"[FullTextCache] ⚠️  Redis 不可用 ({e})，使用内存模式")
+            warn("FullTextCache", f"⚠️  Redis 不可用 ({e})，使用内存模式")
     
     def _load_tasks_from_redis(self):
         """从 Redis 加载活动任务"""
@@ -739,9 +716,9 @@ class FullTextCacheManager:
                     # 如果任务未完成，标记为暂停
                     if self.active_tasks[task_id]['status'] not in ['completed', 'cancelled', 'error']:
                         self.active_tasks[task_id]['status'] = 'paused'
-            print(f"[FullTextCache] 从 Redis 恢复 {len(self.active_tasks)} 个任务")
+            info("FullTextCache", f"从 Redis 恢复 {len(self.active_tasks)} 个任务")
         except Exception as e:
-            print(f"[FullTextCache] 从 Redis 加载任务失败: {e}")
+            error("FullTextCache", f"从 Redis 加载任务失败: {e}")
     
     def _ensure_table(self):
         """确保全文缓存表存在"""
@@ -765,7 +742,7 @@ class FullTextCacheManager:
                 )''')
                 conn.commit()
         except Exception as e:
-            print(f"[FullTextCache] 建表失败: {e}")
+            error("FullTextCache", f"建表失败: {e}")
     
     @staticmethod
     def extract_chapter_index(title):
@@ -841,7 +818,7 @@ class FullTextCacheManager:
                 }
             return {'exists': False}
         except Exception as e:
-            print(f"[FullTextCache] 获取状态失败: {e}")
+            error("FullTextCache", f"获取状态失败: {e}")
             return {'exists': False, 'error': str(e)}
     
     def get_chapter_from_cache(self, book_key, chapter_url, username=None):
@@ -866,7 +843,7 @@ class FullTextCacheManager:
                     }
             return None
         except Exception as e:
-            print(f"[FullTextCache] 读取缓存失败: {e}")
+            error("FullTextCache", f"读取缓存失败: {e}")
             return None
     
     def start_full_download(self, book_key, book_name, toc_url, chapters, crawler_instance, 
@@ -946,7 +923,7 @@ class FullTextCacheManager:
             # 设置过期时间（7天）
             self.redis_client.expire(redis_key, 604800)
         except Exception as e:
-            print(f"[FullTextCache] 保存任务到 Redis 失败: {e}")
+            error("FullTextCache", f"保存任务到 Redis 失败: {e}")
     
     def _update_task_in_redis(self, task_id):
         """更新任务状态到 Redis"""
@@ -964,7 +941,7 @@ class FullTextCacheManager:
                 if 'error' in task:
                     self.redis_client.hset(redis_key, 'error', str(task['error']))
             except Exception as e:
-                print(f"[FullTextCache] 更新 Redis 任务状态失败: {e}")
+                error("FullTextCache", f"更新 Redis 任务状态失败: {e}")
     
     def _delete_task_from_redis(self, task_id):
         """从 Redis 删除任务"""
@@ -973,7 +950,7 @@ class FullTextCacheManager:
                 redis_key = f'fulltext_task:{task_id}'
                 self.redis_client.delete(redis_key)
             except Exception as e:
-                print(f"[FullTextCache] 从 Redis 删除任务失败: {e}")
+                error("FullTextCache", f"从 Redis 删除任务失败: {e}")
     
     def _download_worker(self, task_id):
         """下载工作线程（支持暂停/继续/取消）"""
@@ -1012,7 +989,7 @@ class FullTextCacheManager:
                 with open(cache_path, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
                     cache_data['chapters'] = existing_data.get('chapters', [])
-                    print(f"[FullTextCache] 发现已有缓存，继续下载...")
+                    debug("FullTextCache", "发现已有缓存，继续下载...")
             except:
                 pass
         
@@ -1026,7 +1003,7 @@ class FullTextCacheManager:
             # 检查取消标志
             if task.get('cancel_flag'):
                 task['status'] = 'cancelled'
-                print(f"[FullTextCache] ❌ 任务已取消: {book_name}")
+                error("FullTextCache", f"❌ 任务已取消: {book_name}")
                 return
             
             # 等待暂停解除
@@ -1063,7 +1040,7 @@ class FullTextCacheManager:
                     task['failed'] += 1
                     
             except Exception as e:
-                print(f"[FullTextCache] 下载章节失败 {ch.get('title', '')}: {e}")
+                error("FullTextCache", f"下载章节失败 {ch.get('title', '')}: {e}")
                 task['failed'] += 1
             
             # 定期保存（每10章或最后一章）
@@ -1086,7 +1063,7 @@ class FullTextCacheManager:
             if self.use_redis:
                 self._update_task_in_redis(task_id)
             
-            print(f"[FullTextCache] ✅ 下载完成: {book_name}, 成功 {len(cache_data['chapters'])}/{len(chapters)} 章")
+            info("FullTextCache", f"✅ 下载完成: {book_name}, 成功 {len(cache_data['chapters'])}/{len(chapters)} 章")
             
         except Exception as e:
             task['status'] = 'error'
@@ -1096,7 +1073,7 @@ class FullTextCacheManager:
             if self.use_redis:
                 self._update_task_in_redis(task_id)
             
-            print(f"[FullTextCache] ❌ 保存失败: {e}")
+            error("FullTextCache", f"❌ 保存失败: {e}")
     
     def _save_cache(self, cache_path, cache_data, username, book_key, book_name, toc_url, total_chapters):
         """保存缓存到文件和数据库"""
@@ -1161,7 +1138,7 @@ class FullTextCacheManager:
                 return {'status': 'success', 'message': '已是最新，无需更新', 'new_count': 0}
             
             # 下载新章节
-            print(f"[FullTextCache] 发现 {len(new_chapters)} 个新章节，开始下载...")
+            info("FullTextCache", f"发现 {len(new_chapters)} 个新章节，开始下载...")
             
             for ch in new_chapters:
                 try:
@@ -1177,7 +1154,7 @@ class FullTextCacheManager:
                             'size': len(content)
                         })
                 except Exception as e:
-                    print(f"[FullTextCache] 更新章节失败: {e}")
+                    error("FullTextCache", f"更新章节失败: {e}")
             
             # 重新计算统计信息
             max_index = max([ch.get('index', 0) for ch in cache_data['chapters'] if ch.get('index')], default=0)
@@ -1310,7 +1287,7 @@ class FullTextCacheManager:
             if self.use_redis:
                 self._update_task_in_redis(task_id)
         
-        print(f"[FullTextCache] ⏸️ 任务已暂停: {task['book_name']}")
+        info("FullTextCache", f"⏸️ 任务已暂停: {task['book_name']}")
         return {'status': 'success', 'message': '任务已暂停'}
     
     def resume_task(self, task_id):
@@ -1330,7 +1307,7 @@ class FullTextCacheManager:
             if self.use_redis:
                 self._update_task_in_redis(task_id)
         
-        print(f"[FullTextCache] ▶️ 任务已继续: {task['book_name']}")
+        info("FullTextCache", f"▶️ 任务已继续: {task['book_name']}")
         return {'status': 'success', 'message': '任务已继续'}
     
     def cancel_task(self, task_id):
@@ -1351,7 +1328,7 @@ class FullTextCacheManager:
             if self.use_redis:
                 self._update_task_in_redis(task_id)
         
-        print(f"[FullTextCache] ❌ 任务已取消: {task['book_name']}")
+        error("FullTextCache", f"❌ 任务已取消: {task['book_name']}")
         return {'status': 'success', 'message': '任务已取消'}
     
     def update_task_settings(self, task_id, interval=None, max_workers=None):
@@ -1453,7 +1430,7 @@ class ExportManager:
                             task['created_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
                         self.exports[task_id] = task
             except Exception as e:
-                print(f"[ExportManager] 加载任务失败: {e}")
+                error("Export", f"加载任务失败: {e}")
     
     def _save_task(self, task_id):
         """保存单个任务到文件"""
@@ -1468,7 +1445,7 @@ class ExportManager:
             with open(self.task_file, 'w', encoding='utf-8') as f:
                 json.dump(all_tasks, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[ExportManager] 保存任务失败: {e}")
+            error("Export", f"保存任务失败: {e}")
     
     def find_unfinished_task(self, book_name):
         """查找指定书籍的未完成任务"""
@@ -1489,7 +1466,7 @@ class ExportManager:
             task = self.exports[task_id]
             task['status'] = 'running'
             task['delay'] = delay  # 更新延迟设置
-            print(f"[Export] 续传任务 {task_id}，已完成 {len(task.get('completed_chapters', []))} 章")
+            info("Export", f"续传任务 {task_id}，已完成 {len(task.get('completed_chapters', []))} 章")
         else:
             # 新任务
             task_id = hashlib.md5((book_name + str(time.time())).encode()).hexdigest()
@@ -1553,10 +1530,10 @@ class ExportManager:
         use_cluster = cluster_manager.use_redis and len(cluster_manager.get_active_nodes()) > 0
         
         if use_cluster:
-            print(f"[Export] 🚀 启用集群并行爬取模式（{len(cluster_manager.get_active_nodes())} 个节点在线）")
+            info("Manager", f"[Export] 🚀 启用集群并行爬取模式（{len(cluster_manager.get_active_nodes())} 个节点在线）")
             results = self._cluster_parallel_fetch(task_id, chapters, completed, results, delay)
         else:
-            print(f"[Export] 🐢 使用本地并发模式（集群不可用）")
+            info("Export", f"🐢 使用本地并发模式（集群不可用）")
             # 原有的本地并发逻辑
             pending_chapters = [(i, c) for i, c in enumerate(chapters) if i not in completed]
             
@@ -1569,7 +1546,7 @@ class ExportManager:
                 for future in as_completed(future_to_index):
                     # 检查暂停标志
                     if task.get('paused'):
-                        print(f"[Export] 任务 {task_id} 已暂停")
+                        info("Export", f"任务 {task_id} 已暂停")
                         # 取消所有未完成的任务
                         for f in future_to_index:
                             f.cancel()
@@ -1648,7 +1625,7 @@ class ExportManager:
         if not pending_chapters:
             return results
         
-        print(f"[Cluster] 📦 待爬取章节: {len(pending_chapters)} 章")
+        info("Manager", f"[Cluster] 📦 待爬取章节: {len(pending_chapters)} 章")
         
         # 批量推送任务到队列
         task_mapping = {}  # {task_uuid: chapter_index}
@@ -1656,7 +1633,7 @@ class ExportManager:
         for idx, chapter in pending_chapters:
             # 检查暂停标志
             if task.get('paused'):
-                print(f"[Cluster] 任务 {task_id} 已暂停，停止推送")
+                info("Cluster", f"任务 {task_id} 已暂停，停止推送")
                 break
                 
             task_uuid = str(uuid_lib.uuid4())
@@ -1670,9 +1647,9 @@ class ExportManager:
             try:
                 cluster_manager.r.lpush("crawler:queue:pending", json.dumps(task_package))
                 task_mapping[task_uuid] = idx
-                print(f"[Cluster] ✅ 已推送: 第{idx+1}章 ({chapter.get('name', '无标题')})")
+                info("Cluster", f"✅ 已推送: 第{idx+1}章 ({chapter.get('name', '无标题')})")
             except Exception as e:
-                print(f"[Cluster] ❌ 推送失败: {e}")
+                error("Cluster", f"❌ 推送失败: {e}")
                 # 失败的章节标记为错误
                 results[idx] = {
                     'title': chapter.get('name', f'第{idx+1}章'),
@@ -1680,7 +1657,7 @@ class ExportManager:
                 }
                 completed.add(idx)
         
-        print(f"[Cluster] ⏳ 等待节点处理 {len(task_mapping)} 个任务...")
+        info("Manager", f"[Cluster] ⏳ 等待节点处理 {len(task_mapping)} 个任务...")
         
         # 轮询等待结果
         start_time = time.time()
@@ -1690,7 +1667,7 @@ class ExportManager:
         while task_mapping and (time.time() - start_time < timeout):
             # 检查暂停标志
             if task.get('paused'):
-                print(f"[Cluster] 任务 {task_id} 已暂停")
+                info("Cluster", f"任务 {task_id} 已暂停")
                 break
             
             completed_tasks = []
@@ -1712,7 +1689,7 @@ class ExportManager:
                                 'content': '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
                             }
                             completed.add(idx)
-                            print(f"[Cluster] ✅ 完成: 第{idx+1}章 (Worker: {json_res.get('worker_uuid', 'unknown')[:8]}...)")
+                            info("Cluster", f"✅ 完成: 第{idx+1}章 (Worker: {json_res.get('worker_id', 'Unknown')[:8]}...)")
                         else:
                             results[idx] = {
                                 'title': chapters[idx].get('name', f'第{idx+1}章'),
@@ -1726,7 +1703,7 @@ class ExportManager:
                             'content': f'爬取失败: {json_res.get("msg", "未知错误")}'
                         }
                         completed.add(idx)
-                        print(f"[Cluster] ❌ 失败: 第{idx+1}章")
+                        error("Cluster", f"❌ 失败: 第{idx+1}章")
                     
                     completed_tasks.append(task_uuid)
             
@@ -1750,7 +1727,7 @@ class ExportManager:
         
         # 超时或暂停后，标记剩余章节为超时
         if task_mapping:
-            print(f"[Cluster] ⚠️ {len(task_mapping)} 个章节超时或被暂停")
+            warn("Manager", f"[Cluster] ⚠️ {len(task_mapping)} 个章节超时或被暂停")
             for task_uuid, idx in task_mapping.items():
                 if idx not in completed:
                     results[idx] = {
@@ -1759,7 +1736,7 @@ class ExportManager:
                     }
                     completed.add(idx)
         
-        print(f"[Cluster] 🎉 集群爬取完成: {len(completed)}/{len(chapters)} 章")
+        info("Manager", f"[Cluster] 🎉 集群爬取完成: {len(completed)}/{len(chapters)} 章")
         return results
     
     def _generate_txt(self, task, results):
@@ -1852,14 +1829,21 @@ class ClusterManager:
 
         if self.redis_url:
             try:
-                self.r = redis.from_url(self.redis_url, decode_responses=True)
+                # [优化] 127.0.0.1 + 1s 超时，彻底解决连接挂起
+                self.r = redis.from_url(
+                    self.redis_url.replace("localhost", "127.0.0.1"), 
+                    decode_responses=True,
+                    socket_connect_timeout=1,
+                    socket_timeout=1,
+                    retry_on_timeout=False
+                )
                 self.r.ping() # 测试连接
                 self.use_redis = True
-                print("✅ [Cluster] Redis 连接成功，集群模式已就绪")
+                info("Manager", "✅ [Cluster] Redis 连接成功，集群模式已就绪")
             except Exception as e:
-                print(f"⚠️ [Cluster] Redis 连接失败 ({e})，降级为内存模式")
+                error("Manager", f"⚠️ [Cluster] Redis 连接失败 ({e})，降级为内存模式")
         else:
-            print("ℹ️ [Cluster] 未配置 REDIS_URL，使用内存模式 (重启后节点信息丢失)")
+            info("Manager", "ℹ️ [Cluster] 未配置 REDIS_URL，使用内存模式 (重启后节点信息丢失)")
     # managers.py -> ClusterManager 类
 
     # ... (前面的方法保持不变) ...
@@ -1897,12 +1881,12 @@ class ClusterManager:
                 if latency_ms > threshold:
                     # 钳制到均值+2倍标准差（保留一定惩罚，但不至于过度）
                     clamped = mean + 2 * std
-                    print(f"[Latency] 异常值过滤: {domain} {worker_uuid} {latency_ms}ms -> {clamped:.0f}ms (均值{mean:.0f})")
+                    debug("Manager", f"[Latency] 异常值过滤: {domain} {worker_uuid} {latency_ms}ms -> {clamped:.0f}ms (均值{mean:.0f})")
                     latency_ms = clamped
             
             # === 2. 熔断保护（超时直接降权） ===
             if latency_ms > 15000:  # 超过15秒视为严重超时
-                print(f"[Latency] 熔断触发: {domain} {worker_uuid} {latency_ms}ms")
+                debug("Latency", f"熔断触发: {domain} {worker_uuid} {latency_ms}ms")
                 latency_ms = 15000  # 钳制到15秒上限
             
             # === 3. EWMA平滑处理（核心算法） ===
@@ -1927,7 +1911,7 @@ class ClusterManager:
             # print(f"[Latency] {domain} {worker_uuid}: {latency_ms}ms -> {smoothed_latency:.0f}ms")
             
         except Exception as e:
-            print(f"[Latency] 记录失败: {e}")
+            error("Latency", f"记录失败: {e}")
     def _get_speed_coefficient(self, latency):
         """
         延迟转权重系数（平滑曲线，避免阶梯式跳变）
@@ -2093,7 +2077,7 @@ class ClusterManager:
                 # 30秒过期
                 self.r.setex(f"crawler:node:{uuid}", 30, json.dumps(node_data))
             except Exception as e:
-                print(f"❌ [Cluster] Redis Write Error: {e}")
+                error("Manager", f"❌ [Cluster] Redis Write Error: {e}")
         else:
             self.nodes[uuid] = node_data
 
@@ -2113,7 +2097,7 @@ class ClusterManager:
                         if v:
                             nodes.append(json.loads(v))
             except Exception as e:
-                print(f"❌ [Cluster] Redis Read Error: {e}")
+                error("Manager", f"❌ [Cluster] Redis Read Error: {e}")
                 return []
         else:
             # 内存模式：清理过期节点
@@ -2197,14 +2181,21 @@ class TaskManager:
         self.r = None
         if self.redis_url:
             try:
-                self.r = redis.from_url(self.redis_url, decode_responses=True)
+                # [优化] 127.0.0.1 + 1s 超时
+                self.r = redis.from_url(
+                    self.redis_url.replace("localhost", "127.0.0.1"), 
+                    decode_responses=True,
+                    socket_connect_timeout=1,
+                    socket_timeout=1,
+                    retry_on_timeout=False
+                )
                 self.r.ping()
                 self.use_redis = True
-                print("✅ [TaskMgr] Redis 连接成功，任务状态持久化启用")
+                info("Manager", "✅ [TaskMgr] Redis 连接成功，任务状态持久化启用")
             except Exception as e:
-                print(f"⚠️ [TaskMgr] Redis 连接失败 ({e})，降级为内存模式")
+                error("Manager", f"⚠️ [TaskMgr] Redis 连接失败 ({e})，降级为内存模式")
         else:
-            print("ℹ️ [TaskMgr] 未配置 REDIS_URL，使用内存任务状态")
+            info("Manager", "ℹ️ [TaskMgr] 未配置 REDIS_URL，使用内存任务状态")
 
     def _redis_key(self, task_id):
         return f"task:{task_id}"
@@ -2221,7 +2212,7 @@ class TaskManager:
             self.r.hset(self._redis_key(task_id), mapping=payload)
             self.r.expire(self._redis_key(task_id), expire)
         except Exception as e:
-            print(f"[TaskMgr] Redis 写入失败: {e}")
+            error("TaskMgr", f"Redis 写入失败: {e}")
             self.tasks[task_id] = data
 
     def _get_task(self, task_id):
@@ -2249,7 +2240,7 @@ class TaskManager:
                 except: pass
             return data
         except Exception as e:
-            print(f"[TaskMgr] Redis 读取失败: {e}")
+            error("TaskMgr", f"Redis 读取失败: {e}")
             return self.tasks.get(task_id)
 
     def submit(self, func, *args, **kwargs):
@@ -2282,7 +2273,7 @@ class TaskManager:
         return updater
 
     def _worker(self, task_id, func, *args, **kwargs):
-        print(f"[Task] Starting {task_id}")
+        info("Task", f"Starting {task_id}")
         callback = kwargs.pop('_task_update_cb', None)
         try:
             data = self._get_task(task_id) or {}
@@ -2308,9 +2299,9 @@ class TaskManager:
             data["status"] = "completed"
             data["progress"] = 100
             self._set_task(task_id, data)
-            print(f"[Task] Completed {task_id}")
+            info("Task", f"Completed {task_id}")
         except Exception as e:
-            print(f"[Task Error] {task_id}: {e}")
+            info("Task Error", f"{task_id}: {e}")
             import traceback
             traceback.print_exc()
             data = self._get_task(task_id) or {}
@@ -2322,7 +2313,7 @@ class TaskManager:
         # Debug: print keys if not found
         t = self._get_task(task_id)
         if not t:
-            print(f"[TaskMgr] Checking {task_id} -> Not Found")
+            info("TaskMgr", f"Checking {task_id} -> Not Found")
         return t
 
     def cleanup(self):
@@ -2388,7 +2379,7 @@ class MemoManager:
                 )''')
                 conn.commit()
         except Exception as e:
-            print(f"[MemoManager] 建表失败: {e}")
+            error("MemoManager", f"建表失败: {e}")
     
     def get_all_memos(self, username):
         """获取用户所有备忘录"""

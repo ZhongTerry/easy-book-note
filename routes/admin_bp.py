@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, render_template
 import os
 import psutil # 记得 pip install psutil
 import platform
-from shared import CACHE_DIR, USER_DATA_DIR, admin_required
+from shared import CACHE_DIR, USER_DATA_DIR, admin_required, debug, info, warn, error
 from managers import role_manager, get_db, cluster_manager
 from datetime import datetime, timedelta
 import json
@@ -40,7 +40,7 @@ def fetch_task():
             if task_json:
                 return jsonify({"status": "success", "task": json.loads(task_json)})
     except Exception as e:
-        print(f"Redis Error: {e}")
+        error("System", f"Redis Error: {e}")
     try:
         req_data = request.json or {}
         node_uuid = req_data.get('uuid')
@@ -58,7 +58,7 @@ def fetch_task():
         if req_data.get('uuid') and 'config' in req_data and 'status' in req_data:
             # 如果有完整数据，直接调用管理器进行全量更新！
             # 这样 CPU、内存、任务数都会被写入 Redis
-            print("获取到了整体数据")
+            info("System", "获取到了整体数据")
             managers.cluster_manager.update_heartbeat(req_data, real_ip)
         elif node_uuid and managers.cluster_manager.use_redis:
             key = f"crawler:node:{node_uuid}"
@@ -98,10 +98,10 @@ def fetch_task():
                     "last_seen": time.time()
                 }
                 managers.cluster_manager.r.setex(key, 60, json.dumps(new_node_data))
-                print(f"➕ [Cluster] 被动注册新节点: {node_uuid}")
+                info("System", f"➕ [Cluster] 被动注册新节点: {node_uuid}")
 
     except Exception as e:
-        print(f"Keep-alive error: {e}")
+        error("System", f"Keep-alive error: {e}")
     return jsonify({"status": "empty"}) # 没任务，让 Worker 歇会儿
 
 @admin_bp.route('/api/cluster/submit_result', methods=['POST'])
@@ -142,7 +142,7 @@ def submit_result():
                 start_time = meta.get('start_time', 0)
                 # 超过 5.5 秒 (给0.5秒网络宽容度) 拒收
                 if time.time() - start_time > 5.5:
-                    print(f"⏱️ [Cluster] 拒收超时测速结果: {task_id}")
+                    info("System", f"⏱️ [Cluster] 拒收超时测速结果: {task_id}")
                     return jsonify({"status": "ignored", "msg": "Timeout"})
             else:
                 # 元数据没了说明任务早过期了
@@ -203,11 +203,11 @@ def handle_heartbeat():
     system_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
     if not system_token:
         return jsonify({"status": "error", "msg": "Server token not configured"}), 503
-    print("----------------------------------------")
+    info("System", "----------------------------------------")
     # 使用 repr() 可以把看不见的空格、换行符显示出来
-    print(f"🔍 [Debug] 收到 Header: {repr(auth_header)}")
-    print(f"🔍 [Debug] 系统 期望值: {repr(f'Bearer {system_token}')}")
-    print("----------------------------------------")
+    debug("System", f"🔍 [Debug] 收到 Header: {repr(auth_header)}")
+    debug("System", f"🔍 [Debug] 系统 期望值: {repr(f'Bearer {system_token}')}")
+    info("System", "----------------------------------------")
     
     if auth_header != f"Bearer {system_token}":
         return jsonify({"status": "error", "msg": "Forbidden"}), 403
@@ -317,10 +317,10 @@ def api_admin_system_summary():
     try:
         with get_db() as conn:
             # 1. 统计总用户数
-            user_count = conn.execute("SELECT COUNT(DISTINCT username) FROM user_books").fetchone()[0]
+            user_count = conn.execute("SELECT COUNT(DISTINCT username) FROM books_v2").fetchone()[0]
             
-            # 2. 统计总藏书量（排除 meta 和系统键）
-            book_count = conn.execute("SELECT COUNT(*) FROM user_books WHERE book_key NOT LIKE '@%' AND book_key NOT LIKE '%:meta'").fetchone()[0]
+            # 2. 统计总藏书量 (books_v2 中每一行就是一本书)
+            book_count = conn.execute("SELECT COUNT(*) FROM books_v2").fetchone()[0]
             
             # 3. 统计全站活跃数据
             rows = conn.execute("SELECT json_content FROM user_modules WHERE module_type='stats'").fetchall()
@@ -381,11 +381,13 @@ def api_admin_user_detail(username):
             stats = json.loads(stats_row[0]) if stats_row else {"daily_stats": {}}
             
             # B. 获取历史记录 (取前 5)
-            hist_row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type='history'", (username,)).fetchone()
-            history = json.loads(hist_row[0]).get('records', [])[:5] if hist_row else []
+            # hist_row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type='history'", (username,)).fetchone()
+            # history = json.loads(hist_row[0]).get('records', [])[:5] if hist_row else []
+            # 兼容旧版本调用，实际应该从 books_v2 统计
+            history = []
             
             # C. 获取藏书总数
-            book_count = conn.execute("SELECT COUNT(*) FROM user_books WHERE username=? AND book_key NOT LIKE '@%'", (username,)).fetchone()[0]
+            book_count = conn.execute("SELECT COUNT(*) FROM books_v2 WHERE username=?", (username,)).fetchone()[0]
             
             # 计算总时长和总字数
             total_time = sum(d.get('time', 0) for d in stats.get('daily_stats', {}).values())
@@ -446,8 +448,8 @@ def api_admin_users():
     try:
         from managers import get_db
         with get_db() as conn:
-            # 从 user_books 表中获取所有不重复的用户名
-            cursor = conn.execute("SELECT DISTINCT username FROM user_books")
+            # 从 books_v2 表中获取所有不重复的用户名
+            cursor = conn.execute("SELECT DISTINCT username FROM books_v2")
             usernames = [row[0] for row in cursor.fetchall()]
             
             for uname in usernames:
@@ -461,7 +463,7 @@ def api_admin_users():
                 
                 users.append({"username": uname, "role": role})
     except Exception as e:
-        print(f"Admin API Error: {e}")
+        error("System", f"Admin API Error: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
     return jsonify({"status": "success", "users": users})

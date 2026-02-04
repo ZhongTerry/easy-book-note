@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ebooklib import epub
 from werkzeug.utils import secure_filename
 # [确保这里有 CACHE_DIR]
-from shared import BASE_DIR, LIB_DIR, CACHE_DIR
+from shared import BASE_DIR, LIB_DIR, CACHE_DIR, debug, info, warn, error
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
 # ==========================================
@@ -58,7 +58,7 @@ def _remote_request(endpoint, payload):
     try:
         cluster_manager.r.lpush("crawler:queue:pending", json.dumps(task_package))
     except Exception as e:
-        print(f"[Cluster] Redis 写入失败: {e}")
+        error("Cluster", f"Redis 写入失败: {e}")
         return None
 
     # 4. 阻塞等待结果 (轮询 Redis) - 记录延迟
@@ -83,7 +83,7 @@ def _remote_request(endpoint, payload):
                 url = payload.get('url', '')
                 if url and worker_uuid != 'unknown':
                     cluster_manager.record_latency(url, worker_uuid, latency_ms)
-                    print(f"[Cluster] ✅ 任务完成 {task_id[:8]} 耗时{latency_ms}ms by {worker_uuid[:8]}")
+                    info("Cluster", f"✅ 任务完成 {task_id[:8]} 耗时{latency_ms}ms by {worker_uuid[:8]}")
                 
                 return data
             else:
@@ -92,12 +92,12 @@ def _remote_request(endpoint, payload):
                 url = payload.get('url', '')
                 if url and worker_uuid != 'unknown':
                     cluster_manager.record_latency(url, worker_uuid, -1)  # -1表示错误
-                    print(f"[Cluster] ❌ 任务失败 {task_id[:8]} by {worker_uuid[:8]}")
+                    error("Cluster", f"❌ 任务失败 {task_id[:8]} by {worker_uuid[:8]}")
                 return None
         
         time.sleep(0.2) # 每 0.2 秒看一眼
 
-    print(f"[Cluster] ⚠️ 任务 {task_id[:8]} 等待超时 (无 Worker 接单)")
+    warn("Spider", f"[Cluster] ⚠️ 任务 {task_id[:8]} 等待超时 (无 Worker 接单)")
     return None
 def parse_chapter_id(text):
     if not text: return -1
@@ -174,7 +174,7 @@ class AdapterManager:
 
     def load_plugins(self):
         self.adapters = []
-        print(f"📂 [AdapterManager] 扫描目录: {self.folder}")
+        info("Spider", f"📂 [AdapterManager] 扫描目录: {self.folder}")
 
         for f in os.listdir(self.folder):
             if f.endswith(".py") and f != "__init__.py":
@@ -210,7 +210,7 @@ class AdapterManager:
                                     # 3. 鸭子类型检查：必须有 can_handle 方法
                                     if hasattr(instance, 'can_handle'):
                                         self.adapters.append(instance)
-                                        print(f"✅ [Adapter] 成功挂载: {n} (来自 {f})")
+                                        info("Spider", f"✅ [Adapter] 成功挂载: {n} (来自 {f})")
                                         found_in_file = True
                                     else:
                                         # print(f"    ⚠️ {n} 缺少 can_handle 方法，跳过")
@@ -229,21 +229,21 @@ class AdapterManager:
                         pass
                         
                 except Exception as e:
-                    print(f"❌ [Adapter] 加载文件 {f} 崩溃: {e}")
+                    error("Spider", f"❌ [Adapter] 加载文件 {f} 崩溃: {e}")
         
-        print(f"[AdapterManager] 插件扫描完成，共生效 {len(self.adapters)} 个适配器")
+        info("Spider", f"[AdapterManager] 插件扫描完成，共生效 {len(self.adapters)} 个适配器")
 
     def find_match(self, url):
-        print("url", url)
+        info("Spider", f"url: {url}")
         if not url: return None
         for a in self.adapters:
             try:
-                print(url)
+                info("Spider", url)
                 if a.can_handle(url): 
-                    print(f"🎯 适配器命中: {a.__class__.__name__}")
+                    info("Spider", f"🎯 适配器命中: {a.__class__.__name__}")
                     return a
             except: 
-                print("Err")
+                error("Spider", "Err")
                 pass
         return None
 
@@ -336,7 +336,7 @@ class SearchHelper:
 
     def search_concurrent(self, keyword, callback=None):
         """[异步版] 并发搜索"""
-        print(f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+        info("Spider", f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
 
         # 定义搜索源 (函数, 名称, 权重)
         search_sources = [
@@ -376,7 +376,7 @@ class SearchHelper:
 
                     msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
                 except Exception as e:
-                    print(f"[Search Error] {name}: {e}")
+                    info("Search Error", f"{name}: {e}")
                     msg = f"{name} 搜索失败"
 
                 completed_count += 1
@@ -482,7 +482,7 @@ class SearchHelper:
         return results
 
     def search(self, keyword):
-        print(f"[Plugin] 🚀 启动笔趣阁聚合搜索 ({len(self.sites)}个源)...")
+        info("Spider", f"[Plugin] 🚀 启动笔趣阁聚合搜索 ({len(self.sites)}个源)...")
         all_results = []
         
         # 线程池并发搜索所有源
@@ -503,7 +503,7 @@ class SearchHelper:
             os.makedirs(plugin_dir)
             return
 
-        print(f"[System] 正在加载搜索插件...")
+        info("System", f"正在加载搜索插件...")
         for filename in os.listdir(plugin_dir):
             if filename.endswith(".py") and filename != "__init__.py":
                 try:
@@ -519,11 +519,11 @@ class SearchHelper:
                     if hasattr(module, 'SourceWorker'):
                         plugin_instance = module.SourceWorker()
                         self.plugins.append(plugin_instance)
-                        print(f"  -> 已加载源: {plugin_instance.source_name}")
+                        info("Spider", f"  -> 已加载源: {plugin_instance.source_name}")
                 except Exception as e:
-                    print(f"  -> 插件 {filename} 加载失败: {e}")
+                    error("Spider", f"  -> 插件 {filename} 加载失败: {e}")
         
-        print(f"[System] 共加载 {len(self.plugins)} 个直连搜索源")
+        info("Spider", f"[System] 共加载 {len(self.plugins)} 个直连搜索源")
     
     def get_pinyin_key(self, text):
         clean = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', text)
@@ -609,7 +609,7 @@ class SearchHelper:
     # 引擎 1: 360搜索 (SoNovels)
     # ==========================================
     def _do_so_search(self, keyword):
-        print(f"[Search] 🔍 启动 Owllook-360 引擎: {keyword}")
+        info("Search", f"🔍 启动 Owllook-360 引擎: {keyword}")
         url = "https://www.so.com/s"
         # Owllook 参数: ie=utf-8, src=noscript_home, shb=1
         params = {'q': keyword, 'ie': 'utf-8', 'src': 'noscript_home', 'shb': 1, 'pn': 1}
@@ -624,7 +624,7 @@ class SearchHelper:
                 raw_results = []
                 # Owllook 选择器: .res-list
                 items = soup.select('.res-list')
-                print(len(items))
+                info("Spider", len(items))
                 for item in items:
                     try:
                         title_tag = item.select_one('h3 a')
@@ -655,7 +655,7 @@ class SearchHelper:
                     if len(raw_results) >= 10: break
             return self._concurrent_resolve(res)
         except Exception as e:
-            print(f"[Search] So Error: {e}")
+            error("Search", f"So Error: {e}")
             return []
             
 
@@ -705,7 +705,7 @@ class SearchHelper:
     # 引擎 2: 百度搜索 (BaiduNovels)
     # ==========================================
     def _do_baidu_search(self, keyword):
-        print(f"[Search] 🔍 启动 Owllook-Baidu 引擎: {keyword}")
+        info("Search", f"🔍 启动 Owllook-Baidu 引擎: {keyword}")
         url = "https://www.baidu.com/s"
         
         # [Owllook 参数]
@@ -723,7 +723,7 @@ class SearchHelper:
             resp = cffi_requests.get(url, params=params, headers=headers, impersonate=self.impersonate, timeout=8)
             
             if "安全验证" in resp.text or "wappass" in resp.url:
-                print("[Search] 百度触发验证码")
+                info("Search", "百度触发验证码")
                 return []
                 
             soup = BeautifulSoup(resp.content, 'html.parser')
@@ -758,13 +758,13 @@ class SearchHelper:
             return self._concurrent_resolve(raw_results)
 
         except Exception as e:
-            print(f"[Search] Baidu Error: {e}")
+            error("Search", f"Baidu Error: {e}")
             return []
     # ==========================================
     # 引擎 3: 必应搜索 (BingNovels)
     # ==========================================
     def _do_bing_search(self, keyword):
-        print(f"[Search] 🔍 启动 Owllook-Bing 引擎: {keyword}")
+        info("Search", f"🔍 启动 Owllook-Bing 引擎: {keyword}")
         url = "https://www.bing.com/search"
         
         # [Owllook 参数]
@@ -811,13 +811,13 @@ class SearchHelper:
             return results
 
         except Exception as e:
-            print(f"[Search] Bing Error: {e}")
+            error("Search", f"Bing Error: {e}")
             return []
     def _do_direct_source_search(self, keyword):
         if not self.plugins:
             return []
             
-        print(f"[Search] 🧱 启动直连插件搜索 (共{len(self.plugins)}个): {keyword}")
+        info("Spider", f"[Search] 🧱 启动直连插件搜索 (共{len(self.plugins)}个): {keyword}")
         all_results = []
         
         # 使用线程池并发调用所有插件
@@ -831,7 +831,7 @@ class SearchHelper:
                 plugin = future_to_plugin[future]
                 try:
                     res = future.result()
-                    print(plugin.source_name, res)
+                    info("Spider", f"{plugin.source_name}: {res}")
                     if res:
                         # 给结果补上 pinyin_key (插件里可能没加)
                         for item in res:
@@ -839,9 +839,9 @@ class SearchHelper:
                                 item['suggested_key'] = self.get_pinyin_key(keyword)
                         all_results.extend(res)
                         debug_log(f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
-                        print(f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
+                        info("Spider", f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
                 except Exception as e:
-                    print(f"  -> {plugin.source_name} 运行时异常: {e}")
+                    info("Spider", f"  -> {plugin.source_name} 运行时异常: {e}")
 
         return all_results
     # ==========================================
@@ -849,7 +849,7 @@ class SearchHelper:
     # ==========================================
     def _concurrent_resolve(self, raw_results):
         if not raw_results: return []
-        print(f"[Search] 并发解析 {len(raw_results)} 个链接...")
+        info("Spider", f"[Search] 并发解析 {len(raw_results)} 个链接...")
         
         final_results = []
         with ThreadPoolExecutor(max_workers=8) as exe:
@@ -879,7 +879,7 @@ class SearchHelper:
 
     # === [核心升级] 全网并发聚合搜索 (Aggregated Search) ===
     def search_bing(self, keyword):
-        print(f"\n[Search] 🚀 启动全网并发聚合搜索: {keyword}")
+        info("Spider", f"\n[Search] 🚀 启动全网并发聚合搜索: {keyword}")
         start_time = time.time()
         
         # 1. 定义参赛选手
@@ -942,7 +942,7 @@ class SearchHelper:
         # 执行排序
         all_results.sort(key=get_priority)
 
-        print(f"[Search] 聚合完成，耗时 {time.time() - start_time:.2f}s，共 {len(all_results)} 条结果")
+        info("Spider", f"[Search] 聚合完成，耗时 {time.time() - start_time:.2f}s，共 {len(all_results)} 条结果")
         return all_results
 
 
@@ -967,7 +967,7 @@ class SearchHelperOld:
     # === [核心新增] Owllook 聚合搜索 (基于 HTML 解析) ===
     # === Owllook 聚合搜索 (标准 Requests 版) ===
     def _do_owllook_search(self, keyword):
-        print(f"[Search] 🦉 尝试 Owllook 聚合搜索: {keyword}")
+        info("Search", f"🦉 尝试 Owllook 聚合搜索: {keyword}")
         url = "https://www1.owlook.com.cn/search"
         params = {'wd': keyword}
         
@@ -1032,7 +1032,7 @@ class SearchHelperOld:
             return results
 
         except Exception as e:
-            print(f"[Search] Owllook Error: {e}")
+            error("Search", f"Owllook Error: {e}")
             return []
     def _is_valid_novel_site(self, url):
         """
@@ -1089,7 +1089,7 @@ class SearchHelperOld:
         """
         [新增] Bing 国内版专用引擎 (直连可用)
         """
-        print(f"[Search] Trying Bing CN (Direct): {keyword}")
+        info("Spider", f"[Search] Trying Bing CN (Direct): {keyword}")
         # 关键词强制加上 "笔趣阁"，这在国内最好用
         query = f"{keyword} 笔趣阁 在线阅读"
         url = "https://cn.bing.com/search"
@@ -1125,13 +1125,13 @@ class SearchHelperOld:
                 if len(results) >= 8: break
             return results
         except Exception as e:
-            print(f"[Search] Bing CN Error: {e}")
+            error("Search", f"Bing CN Error: {e}")
             return []
     def _do_360_search(self, keyword):
         """
         [主力] 360搜索 + 多线程并发解密
         """
-        print(f"[Search] 🔍 [调试模式] 仅尝试 360搜索: {keyword}")
+        info("Search", f"🔍 [调试模式] 仅尝试 360搜索: {keyword}")
         url = "https://www.so.com/s"
         # 关键词加“目录”，结果更精准
         params = {'q': f"{keyword} 免费阅读 目录"} 
@@ -1174,21 +1174,21 @@ class SearchHelperOld:
                 if len(raw_results) >= 8: break
             
             if not raw_results:
-                print("[Search] 360 未找到初步结果")
+                info("Search", "360 未找到初步结果")
                 return []
 
             # 多线程并发解密真实 URL
-            print(f"[Search] 正在并发解析 {len(raw_results)} 个 360 链接...")
+            info("Spider", f"[Search] 正在并发解析 {len(raw_results)} 个 360 链接...")
             final_results = []
             
             # ... 前面的代码保持不变 ...
             
             if not raw_results:
-                print("[Search] 360 未找到初步结果")
+                info("Search", "360 未找到初步结果")
                 return []
 
             # [修改] 改为单线程串行解析
-            print(f"[Search] 正在顺序解析 {len(raw_results)} 个 360 链接...")
+            info("Spider", f"[Search] 正在顺序解析 {len(raw_results)} 个 360 链接...")
             final_results = []
             
             for item in raw_results:
@@ -1206,13 +1206,13 @@ class SearchHelperOld:
                         # print(f"[Search] 丢弃无效链接: {real_url}") # 调试用
                         pass
                 except Exception as e:
-                    print(f"[Search] 单项解析出错: {e}")
+                    info("Search", f"单项解析出错: {e}")
                     pass
             
             return final_results
 
         except Exception as e:
-            print(f"[Search] 360 Error: {e}")
+            error("Search", f"360 Error: {e}")
             return []
     # def _resolve_real_url(url) :
         # print("[fff]")
@@ -1228,7 +1228,7 @@ class SearchHelperOld:
             return url
             
         try:
-            print("111")
+            info("Spider", "111")
             # 1. 第一次尝试：禁止重定向，看 Header
             # 这里的 timeout 设置稍长一点，防止网络波动
             resp = cffi_requests.get(
@@ -1241,9 +1241,9 @@ class SearchHelperOld:
             # 情况 A: 标准 301/302 跳转
             if resp.status_code in [301, 302]:
                 real_url = resp.headers.get('Location') or resp.headers.get('location')
-                print(real_url)
+                info("Spider", real_url)
                 if real_url:
-                    print(f"[Resolve] 302跳转成功: {real_url[:40]}...")
+                    info("Resolve", f"302跳转成功: {real_url[:40]}...")
                     return real_url
             
             # 情况 B: 200 OK，但是是一个中间跳转页 (360 经常干这个)
@@ -1255,25 +1255,25 @@ class SearchHelperOld:
                 js_match = re.search(r"window\.location\.replace\(['\"](.+?)['\"]", html)
                 if js_match:
                     real_url = js_match.group(1)
-                    print(f"[Resolve] JS提取成功: {real_url[:40]}...")
+                    info("Resolve", f"JS提取成功: {real_url[:40]}...")
                     return real_url
                 
                 # B2. 尝试提取 Meta Refresh: <meta http-equiv="refresh" content="0;url=...">
                 meta_match = re.search(r'url=([^"]+)"', html, re.IGNORECASE)
                 if meta_match:
                     real_url = meta_match.group(1)
-                    print(f"[Resolve] Meta提取成功: {real_url[:40]}...")
+                    info("Resolve", f"Meta提取成功: {real_url[:40]}...")
                     return real_url
 
         except Exception as e:
-            print(f"[Resolve] 解析出错: {e}")
+            info("Resolve", f"解析出错: {e}")
             pass
             
         # 如果所有手段都失效，为了防止前端报错，还是返回原链接
         # 但大概率这个链接前端也打不开，所以最好是在 _do_360_search 里过滤掉
         return url
     def _do_sogou_search(self, keyword):
-        print(f"[Search] 🚀 Bing 失败，正在尝试搜狗搜索: {keyword}")
+        error("Search", f"🚀 Bing 失败，正在尝试搜狗搜索: {keyword}")
         query = f"{keyword} 笔趣阁"
         url = "https://www.sogou.com/web"
         params = {'query': query}
@@ -1318,7 +1318,7 @@ class SearchHelperOld:
                 if len(results) >= 8: break
             return results
         except Exception as e:
-            print(f"[Search] Sogou Error: {e}")
+            error("Search", f"Sogou Error: {e}")
             return []
     def _do_bing_search(self, keyword):
         url = "https://www.bing.com/search"
@@ -1394,7 +1394,7 @@ class SearchHelperOld:
 
     def search_concurrent(self, keyword, callback=None):
         """[异步版] 并发搜索"""
-        print(f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+        info("Spider", f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
         
         # 定义搜索源 (函数, 名称, 权重)
         search_sources = [
@@ -1437,7 +1437,7 @@ class SearchHelperOld:
                     
                     msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
                 except Exception as e:
-                    print(f"[Search Error] {name}: {e}")
+                    info("Search Error", f"{name}: {e}")
                     msg = f"{name} 搜索失败"
 
                 completed_count += 1
@@ -1458,7 +1458,7 @@ class SearchHelperOld:
 
     def search_concurrent(self, keyword, callback=None):
         """[异步版] 并发搜索"""
-        print(f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+        info("Spider", f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
         
         # 定义搜索源 (函数, 名称, 权重)
         search_sources = [
@@ -1501,7 +1501,7 @@ class SearchHelperOld:
                     
                     msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
                 except Exception as e:
-                    print(f"[Search Error] {name}: {e}")
+                    info("Search Error", f"{name}: {e}")
                     msg = f"{name} 搜索失败"
 
                 completed_count += 1
@@ -1522,7 +1522,7 @@ class SearchHelperOld:
     @lru_cache(maxsize=100)
     def search_bing_cached(self, keyword):
         """带缓存的搜索入口，避免重复联网"""
-        print(f"[Search Cache] Miss, fetching: {keyword}")
+        info("Search Cache", f"Miss, fetching: {keyword}")
         return self.search_bing(keyword)
     def search_bing(self, keyword):
         # 1. 优先尝试 Owllook (聚合源，质量最高，且提供直链)
@@ -1567,7 +1567,7 @@ class SearchHelperOld:
 
     # === [核心新增 2] 百度搜索 (Baidu) - 收录最全，作为备用 ===
     def _do_baidu_search(self, keyword):
-        print(f"[Search] 🔍 尝试 百度搜索: {keyword}")
+        info("Search", f"🔍 尝试 百度搜索: {keyword}")
         url = "https://www.baidu.com/s"
         # 技巧：wd 必须带 "最新章节"，否则全是贴吧
         params = {'wd': f"{keyword} 小说 最新章节"}
@@ -1588,7 +1588,7 @@ class SearchHelperOld:
             
             # 检测是否被百度拦截
             if "wappass.baidu.com" in resp.url or "验证码" in resp.text:
-                print("[Search] ⚠️ 触发百度验证码，跳过")
+                warn("Search", "⚠️ 触发百度验证码，跳过")
                 return []
 
             soup = BeautifulSoup(resp.content, 'html.parser')
@@ -1623,7 +1623,7 @@ class SearchHelperOld:
             return self._concurrent_resolve(raw_results)
 
         except Exception as e:
-            print(f"[Search] Baidu Error: {e}")
+            error("Search", f"Baidu Error: {e}")
             return []
 # ==========================================
 # 3. 小说爬虫 (NovelCrawler - 修复KeyError版)
@@ -1713,7 +1713,7 @@ class NovelCrawler:
                     'match_score': best.get('match_score', 0)
                 }
         except Exception as e:
-            print(f"[Meta] Qidian search failed: {e}")
+            error("Meta", f"Qidian search failed: {e}")
         return None
 
     def _fetch_fanqie_meta(self, book_name):
@@ -1734,7 +1734,7 @@ class NovelCrawler:
                 meta['match_score'] = best.get('match_score', 0)
                 return meta
         except Exception as e:
-            print(f"[Meta] Fanqie search failed: {e}")
+            error("Meta", f"Fanqie search failed: {e}")
         return None
 
     def get_meta_from_qidian_fanqie(self, book_name):
@@ -1752,7 +1752,7 @@ class NovelCrawler:
     # ==========================================
     # === [调试增强版] 搜索并返回可用源列表 ===
     def search_alternative_sources(self, book_name, target_chapter_id):
-        print(f"\n[Switch] 🚀 极速换源: 《{book_name}》 (ID: {target_chapter_id})")
+        info("Spider", f"\n[Switch] 🚀 极速换源: 《{book_name}》 (ID: {target_chapter_id})")
         
         # 1. 搜索 (带缓存)
         from spider_core import searcher 
@@ -1762,7 +1762,7 @@ class NovelCrawler:
         if not search_results:
             return []
 
-        print(f"[Switch] 🔍 缓存/搜索返回 {len(search_results)} 个源，开始极速验证...")
+        info("Spider", f"[Switch] 🔍 缓存/搜索返回 {len(search_results)} 个源，开始极速验证...")
         valid_sources = []
         
         # 2. 验证任务 (极速版)
@@ -1802,7 +1802,7 @@ class NovelCrawler:
                 if res:
                     valid_sources.append(res)
         
-        print(f"[Switch] 🏁 耗时操作结束，找到 {len(valid_sources)} 个有效源")
+        info("Spider", f"[Switch] 🏁 耗时操作结束，找到 {len(valid_sources)} 个有效源")
         return valid_sources
 
     def find_best_match(self, toc_url, target_id, target_title):
@@ -1813,13 +1813,13 @@ class NovelCrawler:
         2. 其次尝试 ID 匹配 (ID Match) - 解决标题被改名问题
         3. 失败则返回第一章
         """
-        print(f"[Switch] 🔎 正在新源 {toc_url} 查找章节: ID={target_id}, Title={target_title}")
+        info("Switch", f"🔎 正在新源 {toc_url} 查找章节: ID={target_id}, Title={target_title}")
         
         try:
             # 快速获取目录 (fast_mode, 超时较短)
             toc = self.get_toc(toc_url, fast_mode=True)
             if not toc or not toc.get('chapters'):
-                print("[Switch] ❌ 目录获取失败或为空")
+                error("Switch", "❌ 目录获取失败或为空")
                 return None 
 
             chapters = toc['chapters']
@@ -1849,7 +1849,7 @@ class NovelCrawler:
                         
                         # A. 完全包含 (极高置信度，例如 "大战三百回合" vs "大战三百回合(修)")
                         if clean_target == clean_chap and len(clean_target) > 1:
-                            print(f"[Switch] ✅ 标题完全一致: {chap['title']}")
+                            info("Switch", f"✅ 标题完全一致: {chap['title']}")
                             return chap['url']
                         
                         # B. 相似度计算
@@ -1862,23 +1862,23 @@ class NovelCrawler:
                             best_title_found = chap['title']
                     
                     if best_url:
-                        print(f"[Switch] ✅ 标题相似度命中 ({best_ratio:.2f}): [{target_title}] vs [{best_title_found}]")
+                        info("Spider", f"[Switch] ✅ 标题相似度命中 ({best_ratio:.2f}): [{target_title}] vs [{best_title_found}]")
                         return best_url
 
             # === 2. 其次尝试 ID 匹配 ===
             if target_id and target_id > 0:
-                print(f"[Switch] ⚠️ 标题匹配未命中，尝试 ID 匹配: {target_id}")
+                warn("Switch", f"⚠️ 标题匹配未命中，尝试 ID 匹配: {target_id}")
                 for chap in reversed(chapters):
                     if chap.get('id') == target_id:
-                        print(f"[Switch] ✅ ID 精确命中: {chap['title']}")
+                        info("Switch", f"✅ ID 精确命中: {chap['title']}")
                         return chap['url']
 
             # === 3. 兜底策略：返回第一章 ===
-            print(f"[Switch] ⚠️ 全部匹配失败，回退到第一章")
+            error("Switch", f"⚠️ 全部匹配失败，回退到第一章")
             return chapters[0]['url']
             
         except Exception as e:
-            print(f"[Switch] 匹配过程出错: {e}")
+            info("Switch", f"匹配过程出错: {e}")
             return None
 
 # ...existing code...
@@ -1932,7 +1932,7 @@ class NovelCrawler:
                     # 匹配单引号或双引号包裹的第三个参数
                     match = re.search(r"lastread\.set\([^,]+,[^,]+,\s*['\"]([^'\"]+)['\"]", script.string)
                     if match:
-                        print(f"[Smart Title] 🎯 从 JS lastread 提取成功: {match.group(1)}")
+                        info("Spider", f"[Smart Title] 🎯 从 JS lastread 提取成功: {match.group(1)}")
                         candidate = _clean_candidate(match.group(1))
                         if candidate and not _is_noise(candidate):
                             return candidate
@@ -1977,7 +1977,7 @@ class NovelCrawler:
                     # 它是书名的概率很大，但要排除作者名
                     # 我们可以配合 meta keywords 验证
                     if kw_content and p in kw_content:
-                        print(f"[Smart Title] 🎯 从 Title+Keywords 锁定书名: {p}")
+                        info("Smart Title", f"🎯 从 Title+Keywords 锁定书名: {p}")
                         return p
                     
                     # 如果没有meta验证，简单的长度判断
@@ -2035,7 +2035,7 @@ class NovelCrawler:
         """
         根据书名和目标章节ID，全网搜索备选源，并寻找匹配的章节链接
         """
-        print(f"[Switch] 正在为《{book_name}》第 {target_chapter_id} 章寻找新源...")
+        info("Switch", f"正在为《{book_name}》第 {target_chapter_id} 章寻找新源...")
         
         # 1. 全网搜索备选源 (复用 SearchHelper)
         # 搜索关键词加上 "目录"，提高命中率
@@ -2043,7 +2043,7 @@ class NovelCrawler:
         search_results = searcher.search_bing(book_name)
         
         if not search_results:
-            print("[Switch] 未搜索到任何结果")
+            info("Switch", "未搜索到任何结果")
             return None
 
         # 2. 定义单个源的验证任务
@@ -2064,7 +2064,7 @@ class NovelCrawler:
                 # 因为我们已经排好序了，理论上二分更快，但列表不长，遍历也行
                 for chap in toc['chapters']:
                     if chap.get('id') == target_chapter_id:
-                        print(f"[Switch] ✅ 在 [{domain}] 找到匹配章节: {chap['name']}")
+                        info("Switch", f"✅ 在 [{domain}] 找到匹配章节: {chap['name']}")
                         return {
                             "new_url": chap['url'],
                             "source_name": domain,
@@ -2098,7 +2098,7 @@ class NovelCrawler:
         """
         if url.startswith('epub:'):
             return url
-        print(f"[SmartURL] Analyzing: {url}")
+        info("SmartURL", f"Analyzing: {url}")
         
         # 1. 特征预判：如果 URL  以 .html 结尾且包含数字，大概率是章节，直接返回
         # (这能节省一次网络请求)
@@ -2116,7 +2116,7 @@ class NovelCrawler:
             # 如果抓到了大量章节，说明它确实是目录
             if toc_data and len(toc_data['chapters']) > 5:
                 first_chap = toc_data['chapters'][0]['url']
-                print(f"[SmartURL] 检测到目录页，自动跳转第一章: {first_chap}")
+                info("SmartURL", f"检测到目录页，自动跳转第一章: {first_chap}")
                 return first_chap
                 
             # 如果不是目录，说明可能是一个不带 .html 后缀的章节页 (如 xbqg77)
@@ -2124,7 +2124,7 @@ class NovelCrawler:
             return url
             
         except Exception as e:
-            print(f"[SmartURL] Resolve Error: {e}")
+            error("SmartURL", f"Resolve Error: {e}")
             return url
     def _fetch_page_smart(self, url, retry=None, timeout=None):
         """
@@ -2307,7 +2307,7 @@ class NovelCrawler:
         og_desc = soup.find('meta', property='og:description')
         if og_desc: meta['desc'] = og_desc.get('content', '')[:100] + '...'
 
-        print(f"[Meta] cover={'Y' if meta['cover'] else 'N'} author={meta['author']} desc_len={len(meta['desc'])}")
+        info("Meta", f"cover={meta['cover']}")
         return meta
     def get_toc(self, url, fast_mode=False, no_cache=False):
         """
@@ -2328,14 +2328,18 @@ class NovelCrawler:
                     with open(cache_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                         if data and data.get('chapters'):
-                            print(f"[Crawler] ✅ 命中本地目录缓存: {url}")
+                            info("Crawler", f"✅ 命中本地目录缓存: {url}")
                             return data
              except: pass
              
         # 2. 尝试远程集群获取目录
-        remote_data = _remote_request('toc', {'url': url})
+        payload = {'url': url}
+        if no_cache:
+            payload['no_cache'] = True
+            
+        remote_data = _remote_request('toc', payload)
         if remote_data:
-            print(f"[Crawler] 📥 远程获取目录成功，写入本地缓存")
+            info("Crawler", f"📥 远程获取目录成功，写入本地缓存")
             # 写入缓存
             try:
                 with open(cache_path, 'w', encoding='utf-8') as f:
@@ -2344,15 +2348,15 @@ class NovelCrawler:
             return remote_data
         
         # 3. 降级到本地获取
-        print(f"[Crawler] 🌐 远程不可用，本地获取目录 (强制刷新={no_cache}): {url}")
+        info("Spider", f"[Crawler] 🌐 远程不可用，本地获取目录 (强制刷新={no_cache}): {url}")
         
         # 参数设置
         timeout = 5 if fast_mode else 15
         retry = 1 if fast_mode else 3
 
-        print("fff", url)
+        info("Spider", f"fff: {url}")
         adapter = plugin_mgr.find_match(url)
-        print(adapter)
+        info("Spider", adapter)
         if adapter: 
             # 注意：如果适配器里的 get_toc 调用了 _fetch_page_smart，
             # 我们需要修改适配器才能生效，或者我们在这里 monkey patch 一下？
@@ -2361,7 +2365,7 @@ class NovelCrawler:
             
             old_timeout = self.timeout
             self.timeout = timeout # 临时修改全局超时
-            print("ttt")
+            info("Spider", "ttt")
             try:
                 data = adapter.get_toc(self, url)
             finally:
@@ -2387,12 +2391,12 @@ class NovelCrawler:
             if adapter: 
                 # 1. 调用适配器获取目录 (标准操作)
                 data = adapter.get_toc(self, url)
-                print(f"[TOC] adapter={adapter.__class__.__name__} data={'Y' if data else 'N'}")
+                info("TOC", f"adapter={adapter.__class__.__name__} data={data}")
                 
                 # 2. [新增功能] 检查并调用适配器的 get_meta 方法
                 if hasattr(adapter, 'get_meta'):
                     try:
-                        print(f"[Crawler] ⚡ 优先调用适配器元数据接口: {adapter.__class__.__name__}")
+                        info("Crawler", f"⚡ 优先调用适配器元数据接口: {adapter.__class__.__name__}")
                         plugin_meta = adapter.get_meta(self, url)
                         
                         if plugin_meta:
@@ -2401,25 +2405,25 @@ class NovelCrawler:
                             if plugin_meta.get('author'): final_meta['author'] = plugin_meta['author']
                             if plugin_meta.get('desc'): final_meta['desc'] = plugin_meta['desc']
                             if plugin_meta.get('tags'): final_meta['tags'] = plugin_meta['tags']
-                            print(f"[Meta] adapter_meta cover={'Y' if final_meta['cover'] else 'N'} author={final_meta['author']} desc_len={len(final_meta['desc'])}")
+                            info("Meta", f"adapter_meta cover={final_meta['cover']}")
                     except Exception as e:
-                        print(f"[Crawler] ⚠️ 适配器 get_meta 执行出错: {e}")
+                        warn("Crawler", f"⚠️ 适配器 get_meta 执行出错: {e}")
 
                 # 3. 兜底：如果 get_meta 没实现或没返回，尝试从 get_toc 的结果里找
                 if data:
                     if not final_meta['cover'] and data.get('cover'): final_meta['cover'] = data['cover']
                     if not final_meta['author'] and data.get('author'): final_meta['author'] = data['author']
                     if not final_meta['desc'] and data.get('desc'): final_meta['desc'] = data.get('desc')
-                    print(f"[Meta] toc_meta cover={'Y' if final_meta['cover'] else 'N'} author={final_meta['author']} desc_len={len(final_meta['desc'])}")
+                    info("Meta", f"toc_meta cover={final_meta['cover']}")
             else:
                 # 通用逻辑
                 data = self._general_toc_logic(url)
-                print(f"[TOC] general data={'Y' if data else 'N'}")
+                info("TOC", f"general data={data}")
                 if data:
                     final_meta['cover'] = data.get('cover', '')
                     final_meta['author'] = data.get('author', '')
                     final_meta['desc'] = data.get('desc', '')
-                    print(f"[Meta] general_meta cover={'Y' if final_meta['cover'] else 'N'} author={final_meta['author']} desc_len={len(final_meta['desc'])}")
+                    info("Meta", f"general_meta cover={final_meta['cover']}")
 
         except Exception as e:
             return None
@@ -2427,7 +2431,7 @@ class NovelCrawler:
             self.timeout = old_timeout
 
         if not data or not data.get('chapters'):
-            print(f"[TOC] empty or no chapters: data={'Y' if data else 'N'} url={url}")
+            info("TOC", f"empty or no chapters: data={data}")
             return None
         
         if data.get('manual_sort') is True: return data
@@ -2482,7 +2486,7 @@ class NovelCrawler:
             return toc['chapters'][-1]
         return None
 
-    def run(self, url):
+    def run(self, url, no_cache=False):
         """
         智能爬取：自动去重 + 结果共享
         如果同一 URL 正在被其他请求爬取，则等待结果而非重复爬取
@@ -2494,7 +2498,7 @@ class NovelCrawler:
         from managers import fulltext_cache_manager, db
         from flask import session
         
-        if not url.startswith('epub:') and session and 'user' in session:
+        if not no_cache and not url.startswith('epub:') and session and 'user' in session:
             try:
                 # 尝试从当前用户的书架中找到对应的 book_key
                 # 这需要我们能够从 URL 找到对应的书籍
@@ -2507,7 +2511,7 @@ class NovelCrawler:
                             book_key, url
                         )
                         if cached_chapter:
-                            print(f"[Crawler] 🎯 命中全文缓存: {book_key} - {url[:50]}")
+                            info("Crawler", f"🎯 命中全文缓存: {book_key} - {url[:50]}")
                             return {
                                 'content': cached_chapter['content'].split('\\n'),
                                 'title': cached_chapter['title'],
@@ -2520,22 +2524,24 @@ class NovelCrawler:
         
         # 1. 其次：检查临时本地缓存
         from managers import cache
-        if not url.startswith('epub:'):
+        if not no_cache and not url.startswith('epub:'):
             cached_data = cache.get(url)
             if cached_data:
-                print(f"[Crawler] ✅ 命中临时缓存: {url}")
+                info("Crawler", f"✅ 命中临时缓存: {url}")
                 return cached_data
         
         # 1. [核心去重] 检查是否有正在进行的任务
         import threading
         with self._task_lock:
-            if url in self._active_tasks:
-                print(f"[Crawler] 🔄 检测到重复请求 {url[:80]}，等待已有任务完成...")
+            # [关键修复] 如果是强制刷新（no_cache=True），且已有任务记录已经携带了结果（上一次爬取的残余），
+            # 则不应进入“等待者”模式，而应该创建新任务重新爬取。
+            if url in self._active_tasks and (not no_cache or self._active_tasks[url]['result'] is None):
+                info("Crawler", f"🔄 检测到重复请求 {url[:80]}，等待已有任务完成...")
                 task_info = self._active_tasks[url]
                 is_waiter = True
             else:
-                # 创建新任务记录
-                print(f"[Crawler] 🆕 创建新爬取任务: {url[:80]}")
+                # 创建新任务记录（如果 no_cache=True 且已有结果，则会被这里覆盖）
+                info("Crawler", f"🆕 创建新爬取任务: {url[:80]}")
                 task_info = {
                     'event': threading.Event(),
                     'result': None,
@@ -2548,25 +2554,25 @@ class NovelCrawler:
         if is_waiter:
             task_info['event'].wait(timeout=30)  # 最多等待 30 秒
             if task_info['result'] is not None:
-                print(f"[Crawler] ✅ 获得共享结果: {url[:80]}")
+                info("Crawler", f"✅ 获得共享结果: {url[:80]}")
                 return task_info['result']
             elif task_info['error'] is not None:
-                print(f"[Crawler] ❌ 主任务失败: {task_info['error']}")
+                error("Crawler", f"❌ 主任务失败: {task_info['error']}")
                 return None
             else:
-                print(f"[Crawler] ⏰ 等待超时，尝试自己爬取")
+                info("Crawler", f"⏰ 等待超时，尝试自己爬取")
                 # 超时后尝试自己爬取（防止死锁）
         
         # 3. 我们是执行者，开始实际爬取
         try:
-            result = self._do_actual_crawl(url)
+            result = self._do_actual_crawl(url, no_cache=no_cache)
             
             # 保存结果并通知所有等待者
             with self._task_lock:
                 if url in self._active_tasks:
                     self._active_tasks[url]['result'] = result
                     self._active_tasks[url]['event'].set()
-                    print(f"[Crawler] 📢 爬取完成，通知等待者: {url[:80]}")
+                    info("Crawler", f"📢 爬取完成，通知等待者: {url[:80]}")
             
             return result
         
@@ -2576,7 +2582,7 @@ class NovelCrawler:
                 if url in self._active_tasks:
                     self._active_tasks[url]['error'] = str(e)
                     self._active_tasks[url]['event'].set()
-            print(f"[Crawler] ❌ 爬取失败: {e}")
+            error("Crawler", f"❌ 爬取失败: {e}")
             return None
         
         finally:
@@ -2588,9 +2594,9 @@ class NovelCrawler:
         with self._task_lock:
             if url in self._active_tasks:
                 del self._active_tasks[url]
-                print(f"[Crawler] 🧹 清理任务记录: {url[:80]}")
+                info("Crawler", f"🧹 清理任务记录: {url[:80]}")
     
-    def _do_actual_crawl(self, url):
+    def _do_actual_crawl(self, url, no_cache=False):
         """
         实际执行爬取的逻辑（原 run 方法的核心部分）
         """
@@ -2598,26 +2604,30 @@ class NovelCrawler:
         from managers import cache
         
         # 1. 尝试远程集群爬取 (Pull/Push 模式通用)
-        remote_data = _remote_request('run', {'url': url})
+        payload = {'url': url}
+        if no_cache:
+            payload['no_cache'] = True
+            
+        remote_data = _remote_request('run', payload)
         
         if remote_data:
-            print(f"[Crawler] 📥 远程抓取成功，写入本地缓存")
+            info("Crawler", f"📥 远程抓取成功，写入本地缓存")
             cache.set(url, remote_data)
             return remote_data
         
         # 2. 降级回本地爬取 (原有逻辑)
-        print(f"[Run] 🐢 远程不可用或未配置，开始本地爬取: {url}")
-        print(f"\n[Run] 🚀 开始处理 URL: {url}")
+        info("Run", f"🐢 远程不可用或未配置，开始本地爬取: {url}")
+        info("Spider", f"\n[Run] 🚀 开始处理 URL: {url}")
         
         # 3. 尝试匹配插件
         adapter = plugin_mgr.find_match(url)
         if adapter:
-            print(f"[Run] ✨ 匹配到适配器: {adapter.__class__.__name__}")
+            info("Run", f"✨ 匹配到适配器: {adapter.__class__.__name__}")
             result = adapter.run(self, url)
-            print(f"[Run] 📦 插件返回书名: {result.get('book_name', '未获取')}")
+            info("Run", f"📦 插件返回书名: {result.get('book_name', '未知')}")
             return result
         
-        print(f"[Run] 🌐 未找到插件，使用通用逻辑...")
+        info("Run", f"🌐 未找到插件，使用通用逻辑...")
         # 4. 如果没插件，执行通用逻辑
         return self._general_run_logic(url)
     
@@ -2685,7 +2695,7 @@ class NovelCrawler:
                 return first_page_meta
             return None
         except Exception as e:
-            print(f"[Run] General logic error: {e}")
+            error("Run", f"General logic error: {e}")
             return None
 
     def get_first_chapter(self, toc_url):
@@ -2694,7 +2704,7 @@ class NovelCrawler:
             if res and res.get('chapters') and len(res['chapters']) > 0:
                 return res['chapters'][0].get('url')
         except Exception as e:
-            print(f"[Crawler] get_first_chapter error: {e}")
+            error("Crawler", f"get_first_chapter error: {e}")
         return None
 
 # ... (EpubHandler 保持不变) ...
@@ -2772,7 +2782,7 @@ class EpubHandler:
 
             return {'title': title, 'chapters': chapters}
         except Exception as e: 
-            print(f"EPUB TOC Error: {e}")
+            error("Spider", f"EPUB TOC Error: {e}")
             return None
 
     def get_chapter_content(self, filename, item_identifier, page_index=0):

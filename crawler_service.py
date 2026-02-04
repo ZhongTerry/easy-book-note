@@ -1,3 +1,4 @@
+from shared import debug, info, warn, error
 import os
 import time
 import requests
@@ -111,7 +112,7 @@ def run_speedtest_async(task):
     """
     payload = task['payload']
     target_url = payload.get('url')
-    print(f"🚀 [SpeedTest] 后台启动测速: {target_url}")
+    info("Crawler", f"🚀 [SpeedTest] 后台启动测速: {target_url}")
     
     try:
         import time
@@ -135,7 +136,7 @@ def run_speedtest_async(task):
             error_msg = str(req_e)
         
         latency = int((time.time() - t_start) * 1000)
-        print("[latency]", latency)
+        info("latency", "")
         # 构造结果
         result = {
             "is_speedtest": True,
@@ -160,7 +161,7 @@ def run_speedtest_async(task):
         # print(f"✅ [SpeedTest] 结果已回传: {latency}ms")
         
     except Exception as e:
-        print(f"❌ [SpeedTest] 线程出错: {e}")
+        error("Crawler", f"❌ [SpeedTest] 线程出错: {e}")
 def do_work(task):
     """执行具体任务"""
     global CURRENT_TASKS # 声明全局变量
@@ -168,7 +169,7 @@ def do_work(task):
     payload = task['payload']
     url = payload.get('url')
     
-    print(f"⚡ [Job] 执行: {endpoint} -> {url}")
+    info("Crawler", f"⚡ [Job] 执行: {endpoint} -> {url}")
     
     result = {"status": "failed", "msg": "Unknown error", "worker_uuid": NODE_UUID}
     
@@ -202,7 +203,7 @@ def do_work(task):
             try:
                 json.dumps(data) 
             except TypeError:
-                print("⚠️ 检测到不可序列化数据，执行深度清洗...")
+                warn("Crawler", "⚠️ 检测到不可序列化数据，执行深度清洗...")
                 data = clean_data(data)
 
             result = {"status": "success", "data": data, "worker_uuid": NODE_UUID}
@@ -210,7 +211,7 @@ def do_work(task):
             result = {"status": "failed", "msg": "Empty data from crawler", "worker_uuid": NODE_UUID}
             
     except Exception as e:
-        print(f"❌ 任务出错: {e}")
+        error("Crawler", f"❌ 任务出错: {e}")
         # import traceback; traceback.print_exc() # 调试用
         result = {"status": "error", "msg": str(e), "worker_uuid": NODE_UUID}
     finally:
@@ -230,10 +231,10 @@ def clean_data(obj):
         return str(obj) 
 
 def worker_loop():
-    print(f"🚀 Worker [{NODE_NAME}] 启动 (Pull Mode)")
-    print(f"🆔 UUID: {NODE_UUID}")
-    print(f"🔗 连接 Master: {MASTER_URL}")
-    print(f"🛡️  Mock层已就绪，全量实时爬取")
+    info("Crawler", f"🚀 Worker [{NODE_NAME}] 启动 (Pull Mode)")
+    info("Crawler", f"🆔 UUID: {NODE_UUID}")
+    info("Crawler", f"🔗 连接 Master: {MASTER_URL}")
+    info("Crawler", f"🛡️  Mock层已就绪，全量实时爬取")
     
     session = requests.Session()
     session.headers.update({
@@ -247,7 +248,7 @@ def worker_loop():
             resp = session.post(f"{MASTER_URL}/api/cluster/fetch_task", json=get_node_payload(), timeout=10)
             
             if resp.status_code == 403:
-                print("🔒 Token 错误")
+                error("Crawler", "🔒 Token 错误")
                 time.sleep(10); continue
             
             try:
@@ -275,12 +276,12 @@ def worker_loop():
                         "task_id": task_id,
                         "result": crawl_result
                     })
-                    print(f"✅ [Job] 任务 {task_id} 完成")
+                    info("Crawler", f"✅ [Job] 任务 {task_id} 完成")
             else:
                 time.sleep(1) # 没任务，休息
                 
         except Exception as e:
-            print(f"⚠️ 网络波动: {e}")
+            warn("Crawler", f"⚠️ 网络波动: {e}")
             time.sleep(5)
 
 # 独立心跳线程 (作为补充)

@@ -1,3 +1,4 @@
+from shared import debug, info, warn, error
 import re
 import requests
 import json
@@ -42,8 +43,8 @@ class FanqieLocalAdapter:
     def __init__(self):
         # 初始化时检查Token配置
         if not self.API_TOKEN:
-            print("⚠️ [FanqieAdapter] 未配置 FANQIE_API_TOKEN，微服务调用可能失败")
-            print("   请在 config.env 中设置: FANQIE_API_TOKEN=your-secret-token")
+            error("System", "⚠️ [FanqieAdapter] 未配置 FANQIE_API_TOKEN，微服务调用可能失败")
+            info("System", "   请在 config.env 中设置: FANQIE_API_TOKEN=your-secret-token")
     
     def _get_headers(self):
         """构造带鉴权的请求头"""
@@ -108,7 +109,7 @@ class FanqieLocalAdapter:
             )
             
             if resp.status_code in [401, 403]:
-                print(f"❌ [FanqieAdapter] 目录接口鉴权失败")
+                error("System", f"❌ [FanqieAdapter] 目录接口鉴权失败")
                 return None
             
             json_data = resp.json()
@@ -176,7 +177,7 @@ class FanqieLocalAdapter:
                 }
                 
         except Exception as e:
-            print(f"[FanqieLocal] Detail 获取失败: {e}")
+            error("FanqieLocal", f"Detail 获取失败: {e}")
             return None
         
         return None
@@ -190,7 +191,7 @@ class FanqieLocalAdapter:
         # aid=1967 是番茄 App 的标识，通常这个接口无需签名即可访问
         api_url = f"https://novel.snssdk.com/api/novel/book/directory/detail/v/?item_ids={item_id}&aid=1967"
         try:
-            print(f"[FanqieLocal] 正在通过 API 反查 BookID: {item_id}")
+            info("FanqieLocal", f"正在通过 API 反查 BookID: {item_id}")
             # 使用 crawler 发送请求以利用其 header/proxy 配置
             json_str = crawler._fetch_page_smart(api_url)
             
@@ -201,16 +202,16 @@ class FanqieLocalAdapter:
                     info_list = data['data']
                     if isinstance(info_list, list) and len(info_list) > 0:
                         bid = info_list[0].get('book_id')
-                        print(f"[FanqieLocal] API 反查成功: {bid}")
+                        info("FanqieLocal", f"API 反查成功: {bid}")
                         return bid
         except Exception as e:
-            print(f"[FanqieLocal] API 反查失败: {e}")
+            error("FanqieLocal", f"API 反查失败: {e}")
 
         # --- 策略 B: 网页源码提取 (兜底) ---
         # 如果 API 挂了，我们直接请求 PC 版阅读页，HTML 里一定藏着 book_id
         page_url = f"https://fanqienovel.com/reader/{item_id}"
         try:
-            print(f"[FanqieLocal] API 失败，尝试解析网页源码: {page_url}")
+            error("FanqieLocal", f"API 失败，尝试解析网页源码: {page_url}")
             html = crawler._fetch_page_smart(page_url)
             if html:
                 # 1. 尝试匹配 window.__INITIAL_STATE__ 里的 bookId
@@ -218,7 +219,7 @@ class FanqieLocalAdapter:
                 match = re.search(r'"bookId":"(\d+)"', html)
                 if match:
                     bid = match.group(1)
-                    print(f"[FanqieLocal] 网页源码正则匹配成功: {bid}")
+                    info("FanqieLocal", f"网页源码正则匹配成功: {bid}")
                     return bid
                 
                 # 2. 尝试匹配面包屑链接
@@ -226,11 +227,11 @@ class FanqieLocalAdapter:
                 match_link = re.search(r'href="/page/(\d+)"', html)
                 if match_link:
                     bid = match_link.group(1)
-                    print(f"[FanqieLocal] 网页链接匹配成功: {bid}")
+                    info("FanqieLocal", f"网页链接匹配成功: {bid}")
                     return bid
 
         except Exception as e:
-            print(f"[FanqieLocal] 网页解析失败: {e}")
+            error("FanqieLocal", f"网页解析失败: {e}")
 
         return None
 
@@ -248,7 +249,7 @@ class FanqieLocalAdapter:
             )
             
             if resp.status_code in [401, 403]:
-                print(f"❌ [FanqieAdapter] 目录列表接口鉴权失败")
+                error("System", f"❌ [FanqieAdapter] 目录列表接口鉴权失败")
                 return []
             
             data = resp.json()
@@ -282,7 +283,7 @@ class FanqieLocalAdapter:
                 })
             return chapter_list
         except Exception as e:
-            print(f"[FanqieLocal] 获取目录失败: {e}")
+            error("FanqieLocal", f"获取目录失败: {e}")
             return []
 
     def get_toc(self, crawler, toc_url):
@@ -302,7 +303,7 @@ class FanqieLocalAdapter:
 
         # 3. 获取列表
         chapters = self._fetch_toc_list(book_id)
-        print(f"[FanqieLocal] 目录获取成功，共 {len(chapters)} 章，前500个字符：{str(chapters)[:500]}")
+        info("System", f"[FanqieLocal] 目录获取成功，共 {len(chapters)} 章，前500个字符：{str(chapters)[:500]}")
         
         # 4. [修复] 获取真实书名 (从微服务详情接口)
         book_title = "番茄小说"  # 默认值
@@ -315,7 +316,7 @@ class FanqieLocalAdapter:
             )
             
             if resp.status_code in [401, 403]:
-                print(f"❌ [FanqieAdapter] 书籍详情接口鉴权失败")
+                error("System", f"❌ [FanqieAdapter] 书籍详情接口鉴权失败")
                 return None
             
             json_data = resp.json()
@@ -329,7 +330,7 @@ class FanqieLocalAdapter:
                 data = json_data.get('data', {})
                 book_title = data.get('book_name') or book_title
         except Exception as e:
-            print(f"[FanqieLocal] 获取书名失败，使用默认值: {e}")
+            error("FanqieLocal", f"获取书名失败，使用默认值: {e}")
         
         return {
             'title': book_title,
@@ -360,7 +361,7 @@ class FanqieLocalAdapter:
             )
             
             if resp.status_code in [401, 403]:
-                print(f"❌ [FanqieAdapter] 章节内容接口鉴权失败")
+                error("System", f"❌ [FanqieAdapter] 章节内容接口鉴权失败")
                 return None
             
             data = resp.json()
@@ -371,7 +372,7 @@ class FanqieLocalAdapter:
                 if raw_text:
                     content_data = [line.strip() for line in raw_text.split('\n') if line.strip()]
         except Exception as e:
-            print(f"[FanqieLocal] 正文请求错误: {e}")
+            error("FanqieLocal", f"正文请求错误: {e}")
 
         # [关键修复] 即使内容为空，也要返回基本结构和 page_type 标记
         # 避免被误判为目录页
@@ -384,7 +385,6 @@ class FanqieLocalAdapter:
         # 注意：这一步可能会增加请求耗时，但为了用户体验是值得的。
         
         book_id = self._get_book_id(url) # URL里通常没有
-        print("ttttttt", book_id)
         if not book_id:
             book_id = self._resolve_book_id_by_item(crawler, current_item_id)
             
@@ -407,7 +407,7 @@ class FanqieLocalAdapter:
                 )
                 
                 if resp.status_code in [401, 403]:
-                    print(f"❌ [FanqieAdapter] 书名获取接口鉴权失败")
+                    error("System", f"❌ [FanqieAdapter] 书名获取接口鉴权失败")
                 else:
                     json_data = resp.json()
                     if isinstance(json_data, str):
@@ -420,7 +420,7 @@ class FanqieLocalAdapter:
                         data = json_data.get('data', {})
                         book_name = data.get('book_name') or book_name
             except Exception as e:
-                print(f"[FanqieLocal] 获取书名失败: {e}")
+                error("FanqieLocal", f"获取书名失败: {e}")
             
             # 获取全书目录列表
             toc_list = self._fetch_toc_list(book_id)

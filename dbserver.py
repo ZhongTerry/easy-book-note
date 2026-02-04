@@ -12,7 +12,7 @@ import threading
 import time
 from spider_core import crawler_instance
 # 导入配置
-from shared import USER_DATA_DIR
+from shared import USER_DATA_DIR, debug, info, warn, error
 import managers
 import json
 # 导入蓝图 (这时候 .env 已经加载好了，core_bp 能读到正确的 SERVER)
@@ -29,7 +29,7 @@ app = Flask(__name__)
 secret_key = os.environ.get('FLASK_SECRET_KEY')
 if not secret_key:
     secret_key = os.urandom(32)
-    print("[Security] FLASK_SECRET_KEY 未配置，已使用随机临时密钥（重启后会失效）")
+    info("Security", "FLASK_SECRET_KEY 未配置，已使用随机临时密钥（重启后会失效）")
 app.secret_key = secret_key
 app.permanent_session_lifetime = timedelta(days=30)
 app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
@@ -46,7 +46,7 @@ app.register_blueprint(cache_bp)
 @app.before_request
 def basic_csrf_guard():
     # [调试] 打印所有请求信息
-    print(f"[Request] {request.method} {request.path} | User: {session.get('user', {}).get('username', 'None')}")
+    info("Request", f"{request.method} {request.path} | User: {session.get('user', {}).get('username', 'None')}")
     
     # [核心] 只拦截非 GET 请求
     if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and session.get('user'):
@@ -65,10 +65,10 @@ def basic_csrf_guard():
                 return h
             
             if normalize_host(origin_host) != normalize_host(request_host):
-                print(f"[CSRF] ❌ Blocked: {origin_host} != {request_host}")
+                error("CSRF", f"❌ Blocked: {origin_host} != {request_host}")
                 return jsonify({"status": "error", "msg": "CSRF blocked"}), 403
         
-        print(f"[CSRF] ✅ Passed: {request.method} {request.path}")
+        info("CSRF", f"✅ Passed: {request.method} {request.path}")
 
 def schedule_cache_cleanup():
     time.sleep(10)
@@ -91,7 +91,7 @@ def schedule_auto_check():
     time.sleep(60) # 启动后等一会再跑
     
     while True:
-        print("[AutoCheck] 🕒 开始后台追更检查...")
+        info("AutoCheck", "🕒 开始后台追更检查...")
         try:
             # 1. 扫描 data.sqlite (针对主数据库模式)
             # 或者扫描 user_data/ 下的所有 .sqlite 文件
@@ -110,16 +110,33 @@ def schedule_auto_check():
                         conn.close()
                         continue
 
-                    # 获取所有订阅
-                    cursor.execute("SELECT book_key, toc_url, last_local_id FROM book_updates")
-                    tasks = cursor.fetchall()
+                    # 获取所有订阅 (V2: 从 books_v2.content 解析)
+                    cursor.execute("SELECT book_key, content, username FROM books_v2")
+                    all_books = cursor.fetchall()
                     
-                    print(f"[AutoCheck] 发现 {len(tasks)} 个追更任务 (DB: {db_f})")
+                    tasks = []
+                    for b in all_books:
+                        try:
+                            c = json.loads(b['content'])
+                            u_info = c.get('update_info')
+                            if u_info and u_info.get('toc_url'):
+                                tasks.append({
+                                    "book_key": b['book_key'],
+                                    "toc_url": u_info['toc_url'],
+                                    "last_local_id": u_info.get('last_local_id', 0),
+                                    "username": b['username'],
+                                    "content": c
+                                })
+                        except: continue
+
+                    info("Server", f"[AutoCheck] 发现 {len(tasks)} 个追更任务 (DB: {db_f})")
                     
                     for task in tasks:
                         key = task['book_key']
                         toc_url = task['toc_url']
                         local_id = task['last_local_id']
+                        username = task['username']
+                        content = task['content']
                         
                         if not toc_url: continue
                         
@@ -159,7 +176,7 @@ def schedule_auto_check():
                                      remote_seq = raw_id
                                 elif remote_seq == -1:
                                      # 如果解析不出章节号，且 raw_id 太大或为 0，直接跳过此次检查
-                                     print(f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}, raw_id={raw_id}")
+                                     error("Server", f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}, raw_id={raw_id}")
                                      continue
 
                                 # 决策入库 ID
@@ -171,29 +188,33 @@ def schedule_auto_check():
                                 has_u = False
                                 if id_to_save > local_id:
                                     has_u = True
-                                    print(f"   🔥 [UPDATE] {key}: 本地{local_id} -> 远程{id_to_save}")
+                                    info("Server", f"   🔥 [UPDATE] {key}: 本地{local_id} -> 远程{id_to_save}")
                                 
-                                # 无论有无更新，都刷新 last_remote_id，确保下次比较的基础是正确的
-                                # 否则如果数据库里已经是错的 3亿，这里不 update 回去，就永远是错的
-                                cursor.execute("UPDATE book_updates SET last_remote_id=?, has_update=?, updated_at=CURRENT_TIMESTAMP WHERE book_key=?", 
-                                             (id_to_save, 1 if has_u else 0, key))
+                                # 无论有无更新，都刷新 last_remote_id (V2: 更新 content 字段)
+                                content['update_info']['last_remote_id'] = id_to_save
+                                content['update_info']['has_update'] = has_u
+                                content['update_info']['updated_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
+                                
+                                cursor.execute("UPDATE books_v2 SET content=?, updated_at=CURRENT_TIMESTAMP WHERE username=? AND book_key=?", 
+                                             (json.dumps(content, ensure_ascii=False), username, key))
                                 conn.commit()
+
                             
                             # 随机休眠
                             time.sleep(random.uniform(3, 8))
                             
                         except Exception as e:
-                            print(f"   ❌ 检查失败 {key}: {e}")
+                            error("Server", f"   ❌ 检查失败 {key}: {e}")
                             
                     conn.close()
                 except Exception as e:
-                    print(f"Db Error: {e}")
+                    error("Server", f"Db Error: {e}")
 
         except Exception as e:
-            print(f"[AutoCheck] 线程出错: {e}")
+            info("AutoCheck", f"线程出错: {e}")
             
         # 休眠 5 小时 (18000 秒)
-        print("[AutoCheck] 休眠 5 小时...")
+        info("AutoCheck", "休眠 5 小时...")
         time.sleep(18000)
 
 # 在 main 中启动
@@ -207,8 +228,8 @@ if __name__ == '__main__':
                   os.environ.get('DEBUG', '').lower() in ('true', '1', 'yes')
     
     if is_dev_mode:
-        print("🔧 [Dev Mode] 开发者模式已启用（支持代码热重载）")
+        info("Server", "🔧 [Dev Mode] 开发者模式已启用（支持代码热重载）")
         app.run(debug=True, port=5000, host='0.0.0.0')
     else:
-        print("🚀 [Production Mode] 生产模式运行")
+        info("Server", "🚀 [Production Mode] 生产模式运行")
         app.run(debug=False, port=5000, host='0.0.0.0')

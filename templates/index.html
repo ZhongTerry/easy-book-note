@@ -120,6 +120,12 @@
         .book-title-card { font-size: 16px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.2); overflow: hidden; }
         .book-info-row { padding: 8px; background: white; display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: #666; border-top: 1px solid #f0f0f0; }
 
+        /* [新增] 进度条样式 */
+        .progress-container { margin: 8px 0; width: 100%; }
+        .progress-bg { height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #4f46e5; transition: width 0.3s ease; }
+        .progress-text { font-size: 11px; color: #9ca3af; margin-top: 4px; display: block; }
+
         /* 拖拽上传样式 */
         #value.drag-over { border-color: #10b981 !important; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
         /* --- 移动端适配补丁 --- */
@@ -951,6 +957,19 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
     </div>
 </div>
+
+<!-- === [新增] 标记章节模态框 === -->
+<div id="markedModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 500px; max-height: 80vh; overflow-y: auto;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px; position: sticky; top: -20px; background: white; z-index: 10; padding: 10px 0;">
+            <h3 style="margin:0" id="markedModalTitle">📌 标记章节</h3>
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('markedModal')">✕</button>
+        </div>
+        <div id="markedChaptersList">
+            <!-- 标记列表将在这里加载 -->
+        </div>
+    </div>
+</div>
 <!-- 历史记录模态框 -->
 <div id="historyModal" class="p-modal">
     <div class="p-modal-content" style="max-width: 500px;">
@@ -1209,6 +1228,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 
     // 生成菜单项 (图标 + 文字)
     const items = [
+        { icon: '🌟', text: '标记章节', click: asyncAct(`openMarkedModal('${safeKey}', '${safeTitle}')`) },
         { icon: '🔖', text: '加入书单', click: asyncAct(`openAddToListModal('${safeKey}', '${safeTitle}')`) },
         { icon: '🏷️', text: '编辑标签', click: asyncAct(`openTagModal('${safeKey}')`) },
         { icon: '✏️', text: '重命名', click: asyncAct(`renameKey('${safeKey}')`) },
@@ -1241,6 +1261,53 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 
     container.innerHTML = html;
     PureUI.modal.open('moreMenuModal');
+}
+
+// --- 标记章节模态框 ---
+async function openMarkedModal(key, title) {
+    document.getElementById('markedModalTitle').innerText = "📌 [" + title + "] 的标记章节";
+    const container = document.getElementById('markedChaptersList');
+    container.innerHTML = '<div style="text-align:center; padding:20px;">加载中...</div>';
+    PureUI.modal.open('markedModal');
+
+    try {
+        const res = await fetch("/api/book/find?key=" + encodeURIComponent(key));
+        const json = await res.json();
+        if (json.status !== 'success' || !json.data) {
+            container.innerHTML = '<div style="color:red; padding:10px;">获取数据失败</div>';
+            return;
+        }
+
+        const book = json.data;
+        const marks = book.marked_chapters || [];
+        
+        if (marks.length === 0) {
+            container.innerHTML = '<div style="color:#888; text-align:center; padding:30px;">暂无标记章节<br/><small>在阅读界面点击“标记”按钮可收藏章节</small></div>';
+            return;
+        }
+
+        let html = '<div class="marked-list">';
+        marks.forEach((item) => {
+            const timeStr = item.time ? new Date(item.time * 1000).toLocaleString() : '';
+            html += `
+                <div class="marked-item" style="padding: 12px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="window.open('/read?url=${encodeURIComponent(item.url)}&key=${encodeURIComponent(key)}', '_blank')">
+                    <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        <span style="font-weight: bold; color: #333;">${item.title}</span>
+                        <div style="font-size: 11px; color: #999; margin-top: 4px;">${timeStr}</div>
+                    </div>
+                    <div style="margin-left: 10px; color: #0078d4;">
+                        <span class="p-btn p-btn-sm" style="background: transparent; color: #0078d4; border: 1px solid #0078d4; padding: 2px 8px;">跳转</span>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+        container.innerHTML = html;
+
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = '<div style="color:red; padding:10px;">网络请求出错</div>';
+    }
 }
 
 // 🔥 重命名书签Key
@@ -2102,12 +2169,19 @@ function renderTable(data) {
 
         const userTags = globalTags[k] || []; // 用户标签
         // 兼容旧数据
+        let lastReadTitle = "";
+        let lastReadIndex = 0;
+
         if (typeof valObj === 'object' && valObj !== null) {
             url = valObj.url || "";
             cover = valObj.cover || "";
             author = valObj.author || "未知";
             desc = valObj.desc || "暂无简介";
             lastRead = valObj.last_read_at || 0;
+            // [新增] 读取 SQLite 中的进阶进度
+            lastReadTitle = valObj.last_read_title || "";
+            lastReadIndex = valObj.last_read_index || 0;
+            totalChapters = valObj.total_chapters || 0;
         } else {
             url = valObj;
         }
@@ -2181,8 +2255,19 @@ function renderTable(data) {
                     <div class="book-meta">
                         <span>👤 ${author}</span>
                         ${lastRead ? `<span>🕒 ${formatTime(lastRead).split(' ')[0]}</span>` : ''}
+                        ${lastReadIndex ? `<span style="color:#4f46e5; font-weight:600;">📖 第 ${lastReadIndex} 章</span>` : ''}
                     </div>
-                    <div class="book-desc">${desc}</div>
+                    
+                    ${totalChapters && lastReadIndex ? `
+                    <div class="progress-container">
+                        <div class="progress-bg">
+                            <div class="progress-bar-fill" style="width: ${Math.min(100, Math.round((lastReadIndex/totalChapters)*100))}%"></div>
+                        </div>
+                        <span class="progress-text">进度: ${Math.round((lastReadIndex/totalChapters)*100)}% (${lastReadIndex}/${totalChapters})</span>
+                    </div>
+                    ` : ''}
+
+                    <div class="book-desc">${lastReadTitle ? `<span style="color:#666; font-size:12px;">上次读到: ${lastReadTitle}</span>` : desc}</div>
                 </div>
             </div>
             ${actionGroup}
@@ -3515,7 +3600,7 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
                 // 填充到输入框
                 document.getElementById('key').value = key;
                 document.getElementById('value').value = value;
-                showMsg(`✅ 已填入：${title}，可点击保存`, 'success');
+                // showMsg(`✅ 已填入：${title}，可点击保存`, 'success');
             // } else {
             //     // 普通点击，如果是链接则打开阅读页面，否则复制值
             //     if (value.startsWith('http') || value.startsWith('epub:')) {

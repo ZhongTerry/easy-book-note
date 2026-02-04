@@ -374,6 +374,10 @@
                     <button class="p-btn p-btn-sm" onclick="openSourceModal()">⇄ 换源</button>
                     <!-- [新增] 追更按钮 -->
                     <button class="p-btn p-btn-sm" id="subBtn" onclick="toggleSubscribe()">🔔 追更</button>
+                    <!-- [新增] 标记按钮 -->
+                    <button class="p-btn p-btn-sm" id="markBtn" onclick="toggleBookMark()" style="background:{% if is_marked %}#d97706{% else %}#f59e0b{% endif %}; color:white; border:none;">
+                        {% if is_marked %}📌 已标记{% else %}📌 标记{% endif %}
+                    </button>
                     
                     <button class="p-btn p-btn-sm" onclick="jumpToSource()" style="background:#f0f0f0; color:#666;">🔗 原文</button>
                 </div>
@@ -438,7 +442,37 @@
 <script>
     // 注入后端变量
     const dbKey = "{{ db_key }}";
+    let chapterTitle = {{ (article.title or "")|tojson }};
     let currentUrl = "{{ current_url }}"; // AJAX 翻页后需更新
+
+    async function toggleBookMark() {
+        try {
+            const res = await fetch('/api/book/toggle_mark', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: dbKey,
+                    url: currentUrl,
+                    title: chapterTitle,
+                    cid: localChapterId
+                })
+            });
+            const d = await res.json();
+            if (d.status === 'success') {
+                showToast(d.message);
+                const btn = document.getElementById('markBtn');
+                if (d.is_marked) {
+                    btn.innerHTML = `📌 已标记`;
+                    btn.style.background = "#d97706";
+                } else {
+                    btn.innerHTML = `📌 标记`;
+                    btn.style.background = "#f59e0b";
+                }
+            }
+        } catch (e) {
+            showToast("请求失败");
+        }
+    }
     let tocUrl = "{{ article.toc_url }}";
     let localChapterId = parseInt("{{ chapter_id }}") || -1;
 
@@ -966,8 +1000,18 @@
                      localChapterId = parseInt(json.chapter_id) || -1;
                      console.log(`[AJAX] 更新章节ID: ${localChapterId}`);
                  }
+
+                 // [新增] 更新标记按钮状态
+                 if(json.is_marked !== undefined) {
+                     const b = document.getElementById('markBtn');
+                     if(b) {
+                         b.style.background = json.is_marked ? "#d97706" : "#f59e0b";
+                         b.innerText = json.is_marked ? "📌 已标记" : "📌 标记";
+                     }
+                 }
                  
                  // 3. Update DOM
+                 if (data.title) chapterTitle = data.title;
                  document.title = data.title;
                  const h1 = document.getElementById('chapter-title');
                  if(h1) h1.textContent = data.title;

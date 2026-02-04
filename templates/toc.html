@@ -45,6 +45,11 @@
         .chap-id { color: #9ca3af; font-size: 13px; margin-right: 8px; min-width: 40px; font-weight: bold; }
         .chap-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 
+        /* [新增] 已读高亮 */
+        .chapter-item.is-read { background: #f3f4f6; opacity: 0.8; }
+        .chapter-item.is-last-read { border: 2px solid #4f46e5; background: #eef2ff; }
+        .chapter-item.is-last-read::after { content: '上次阅读'; position: absolute; right: 5px; top: 2px; font-size: 10px; color: #4f46e5; font-weight: bold; }
+
         /* 下载弹窗 */
         #dl-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
         .modal-box { background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; }
@@ -70,8 +75,16 @@
     </div>
 
     <div class="chapter-grid">
+        {% set last_idx = progress.last_read_index|default(-1)|int %}
         {% for chapter in toc.chapters %}
-            <a href="/read?url={{ chapter.url }}&key={{ db_key }}" class="chapter-item" title="{{ chapter.raw_title or chapter.title }}">
+            {% set chap_idx = chapter.id|default(-1)|int %}
+            {% set is_last = (chap_idx == last_idx and last_idx != -1) or (chapter.url == progress.last_read_url) %}
+            {% set is_read = (chap_idx <= last_idx and last_idx != -1) %}
+            
+            <a href="/read?url={{ chapter.url }}&key={{ db_key }}" 
+               class="chapter-item {% if is_last %}is-last-read{% elif is_read %}is-read{% endif %}" 
+               title="{{ chapter.raw_title or chapter.title }}"
+               style="position: relative;">
                 {% if chapter.id is defined and chapter.id > 0 %}
                     <span class="chap-id">{{ chapter.id }}</span>
                     <span class="chap-name">{{ chapter.name }}</span>

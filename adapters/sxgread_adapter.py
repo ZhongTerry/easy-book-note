@@ -1,3 +1,4 @@
+from shared import debug, info, warn, error
 import re
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
@@ -97,7 +98,7 @@ class SxgreadAdapter:
             # 3. 按照 data-id 进行升序排列
             chapter_list.sort(key=lambda x: x['id'])
             
-            print(f"[SxgreadAdapter] 成功通过 data-id 重排 {len(chapter_list)} 个章节")
+            info("System", f"[SxgreadAdapter] 成功通过 data-id 重排 {len(chapter_list)} 个章节")
             return {
                 'title': title,
                 'chapters': chapter_list,
@@ -105,7 +106,7 @@ class SxgreadAdapter:
             }
             
         else:
-            print("[SxgreadAdapter] 未找到 #newlist，尝试通用解析")
+            info("SxgreadAdapter", "未找到 #newlist，尝试通用解析")
             # 如果改版了找不到 newlist，回退到通用逻辑
             return crawler._general_toc_logic(toc_url)
     # === [新增] 获取元数据函数 ===
@@ -117,7 +118,7 @@ class SxgreadAdapter:
         html = crawler._fetch_page_smart(url)
         if not html: return None
         soup = BeautifulSoup(html, 'html.parser')
-        print(url)
+        info("System", url)
         # 2. 提取数据
         meta = {}
 
