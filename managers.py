@@ -317,6 +317,10 @@ class IsolatedDB:
         except Exception as e:
             error("DB", f"Init Error: {e}")
 
+    def _ensure_history_table(self):
+        """兼容性方法"""
+        pass
+
     def get_raw_book(self, username, book_key):
         """获取书籍原始字典（包含 key, value, meta, tags, update_info）"""
         try:
