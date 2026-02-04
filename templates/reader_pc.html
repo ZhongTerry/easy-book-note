@@ -1635,16 +1635,26 @@ body.dark-mode #settingsModal input.p-input {
         list.innerHTML = force ? '正在刷新目录，请稍候...' : '正在加载...';
         
         const normCurrent = normalizeUrl(currentUrl);
+        console.log('[TOC Debug] 当前URL:', normCurrent);
 
         fetch(`/toc?url={{ article.toc_url }}&key=${dbKey}&api=true${force ? '&force=true' : ''}`)
         .then(r => r.json())
         .then(d => {
-            if(d.chapters && d.chapters.length > 0) {
+            // [兼容性修复] 处理新的后端返回结构 {"toc": data, "progress": ...}
+            const tocData = d.toc || d;
+            
+            if(tocData.chapters && tocData.chapters.length > 0) {
                 // 强制排序
-                d.chapters.sort((a, b) => (a.id || 0) - (b.id || 0));
+                tocData.chapters.sort((a, b) => (a.id || 0) - (b.id || 0));
                 
-                list.innerHTML = d.chapters.map(c => {
-                    const isCurrent = normalizeUrl(c.url) === normCurrent;
+                list.innerHTML = tocData.chapters.map(c => {
+                    const normChapterUrl = normalizeUrl(c.url);
+                    // [增强匹配] 优先使用 ID 匹配 (最准确)，URL 匹配作为兜底
+                    const isIdMatch = (c.id > 0 && localChapterId > 0 && c.id === localChapterId);
+                    const isUrlMatch = normChapterUrl === normCurrent;
+                    const isCurrent = isIdMatch || isUrlMatch;
+                    
+                    if(isCurrent) console.log('[TOC Debug] 匹配到当前章节:', { title: c.title, method: isIdMatch ? 'ID' : 'URL' });
                     
                     // [修复] 优先使用 title，解决 undefined 问题
                     let nameText = c.title || c.name || c.raw_title || "无标题";

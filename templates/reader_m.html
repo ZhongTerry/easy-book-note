@@ -692,12 +692,18 @@
         try {
             // 强制刷新：添加 force=true 参数
             const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true&force=true`);
-            const data = await res.json();
+            const d = await res.json();
             
+            // [兼容性修复] 处理新的后端返回结构
+            const data = d.toc || d;
+
             if(data && data.chapters) {
                 const normCurrent = normalizeUrl(currentUrl);
                 list.innerHTML = data.chapters.map(c => {
-                    const isCurrent = normalizeUrl(c.url) === normCurrent; 
+                    // [增强匹配] ID 优先，URL 兜底
+                    const isIdMatch = (c.id > 0 && localChapterId > 0 && c.id === localChapterId);
+                    const isUrlMatch = normalizeUrl(c.url) === normCurrent;
+                    const isCurrent = isIdMatch || isUrlMatch;
                     const activeClass = isCurrent ? 'active' : '';
                     return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
                 }).join('');
@@ -708,7 +714,9 @@
                 // 自动滚动到当前章节
                 setTimeout(() => {
                     const active = list.querySelector('.active');
-                    if(active) active.scrollIntoView({block: 'center'});
+                    if(active) {
+                        active.scrollIntoView({block: 'center', behavior: 'smooth'});
+                    }
                 }, 100);
                 
                 showToast("✅ 目录已更新");
@@ -743,13 +751,17 @@
                     const list = document.getElementById('tocList');
                     
                     const res = await fetch(`/toc?url=${encodeURIComponent(tocUrl)}&key=${encodeURIComponent(dbKey)}&api=true`);
-                    const data = await res.json();
+                    const d = await res.json();
                     
+                    const data = d.toc || d;
+
                     if(data.chapters) {
                         const normCurrent = normalizeUrl(currentUrl);
                         list.innerHTML = data.chapters.map(c => {
-                            // 简单高亮当前章节
-                            const isCurrent = normalizeUrl(c.url) === normCurrent; 
+                            // [增强匹配] ID 优先，URL 兜底
+                            const isIdMatch = (c.id > 0 && localChapterId > 0 && c.id === localChapterId);
+                            const isUrlMatch = normalizeUrl(c.url) === normCurrent;
+                            const isCurrent = isIdMatch || isUrlMatch;
                             const activeClass = isCurrent ? 'active' : '';
                             return `<div class="drawer-item ${activeClass}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
                         }).join('');
@@ -758,7 +770,9 @@
                         // 自动滚动到当前章节
                         setTimeout(() => {
                             const active = list.querySelector('.active');
-                            if(active) active.scrollIntoView({block: 'center'});
+                            if(active) {
+                                active.scrollIntoView({block: 'center', behavior: 'smooth'});
+                            }
                         }, 100);
                     }
                 } catch(e) {
