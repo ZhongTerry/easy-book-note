@@ -241,18 +241,27 @@ class FanqieLocalAdapter:
         返回: [{'item_id': '...', 'title': '...', 'url': '...'}, ...]
         """
         try:
+            url = f"{self.API_HOST}/get_catalog"
+            info("FanqieLocal", f"请求目录: {url} | BookID: {book_id}")
             resp = requests.get(
-                f"{self.API_HOST}/get_catalog", 
+                url, 
                 params={"book_id": book_id}, 
                 headers=self._get_headers(),
                 timeout=10
             )
             
-            if resp.status_code in [401, 403]:
-                error("System", f"❌ [FanqieAdapter] 目录列表接口鉴权失败")
+            if resp.status_code != 200:
+                error("FanqieLocal", f"❌ 目录接口返回非200状态码: {resp.status_code}")
+                debug("FanqieLocal", f"响应内容前100字符: {resp.text[:100]}")
                 return []
             
-            data = resp.json()
+            try:
+                data = resp.json()
+            except Exception as json_err:
+                error("FanqieLocal", f"❌ 目录接口返回了非 JSON 内容: {json_err}")
+                debug("FanqieLocal", f"原始响应文本: {resp.text[:500]}")
+                return []
+
             if isinstance(data, str): data = json.loads(data) # 防双重序列化
 
             if data.get('code') != 0: return []
@@ -308,27 +317,31 @@ class FanqieLocalAdapter:
         # 4. [修复] 获取真实书名 (从微服务详情接口)
         book_title = "番茄小说"  # 默认值
         try:
+            detail_url = f"{self.API_HOST}/get_detail"
             resp = requests.get(
-                f"{self.API_HOST}/get_detail", 
+                detail_url, 
                 params={"book_id": book_id}, 
                 headers=self._get_headers(),
                 timeout=10
             )
             
-            if resp.status_code in [401, 403]:
-                error("System", f"❌ [FanqieAdapter] 书籍详情接口鉴权失败")
-                return None
-            
-            json_data = resp.json()
-            if isinstance(json_data, str):
-                try: 
-                    json_data = json.loads(json_data)
-                except: 
-                    pass
-            
-            if json_data.get('code') == 0:
-                data = json_data.get('data', {})
-                book_title = data.get('book_name') or book_title
+            if resp.status_code == 200:
+                try:
+                    json_data = resp.json()
+                    if isinstance(json_data, str):
+                        try: 
+                            json_data = json.loads(json_data)
+                        except: 
+                            pass
+                    
+                    if json_data.get('code') == 0:
+                        data = json_data.get('data', {})
+                        book_title = data.get('book_name') or book_title
+                except Exception as json_err:
+                    error("FanqieLocal", f"详情接口 JSON 解析失败: {json_err}")
+            else:
+                error("FanqieLocal", f"详情接口返回错误: {resp.status_code}")
+
         except Exception as e:
             error("FanqieLocal", f"获取书名失败，使用默认值: {e}")
         
@@ -349,8 +362,9 @@ class FanqieLocalAdapter:
         # 2. 并行获取内容 (Microservice)
         content_data = None
         try:
+            content_url = f"{self.API_HOST}/get_content"
             resp = requests.get(
-                f"{self.API_HOST}/get_content", 
+                content_url, 
                 params={
                     "item_id": current_item_id,
                     "text_mode": 1,
@@ -360,17 +374,20 @@ class FanqieLocalAdapter:
                 timeout=10
             )
             
-            if resp.status_code in [401, 403]:
-                error("System", f"❌ [FanqieAdapter] 章节内容接口鉴权失败")
-                return None
-            
-            data = resp.json()
-            if isinstance(data, str): data = json.loads(data)
-            # print(data)
-            if data.get('code') == 0:
-                raw_text = data.get('data', {}).get('content', '')
-                if raw_text:
-                    content_data = [line.strip() for line in raw_text.split('\n') if line.strip()]
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    if isinstance(data, str): data = json.loads(data)
+                    # print(data)
+                    if data.get('code') == 0:
+                        raw_text = data.get('data', {}).get('content', '')
+                        if raw_text:
+                            content_data = [line.strip() for line in raw_text.split('\n') if line.strip()]
+                except Exception as json_err:
+                    error("FanqieLocal", f"内容接口 JSON 解析失败: {json_err}")
+            else:
+                error("FanqieLocal", f"内容接口返回错误: {resp.status_code}")
+                
         except Exception as e:
             error("FanqieLocal", f"正文请求错误: {e}")
 
