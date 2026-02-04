@@ -183,11 +183,12 @@ def do_work(task):
         os.environ['FORCE_LOCAL_CRAWL'] = '1'
         
         try:
+            no_cache = payload.get('no_cache', False)
             # 强制爬取逻辑
             if endpoint == 'run':
-                data = crawler.run(url)
+                data = crawler.run(url, no_cache=no_cache)
             elif endpoint == 'toc':
-                data = crawler.get_toc(url)
+                data = crawler.get_toc(url, no_cache=no_cache)
             elif endpoint == 'search':
                 data = searcher.search_bing(payload.get('keyword'))
         finally:

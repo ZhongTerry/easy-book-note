@@ -44,6 +44,13 @@ def fetch_task():
     try:
         req_data = request.json or {}
         node_uuid = req_data.get('uuid')
+
+        # [修复] 提前提取 real_ip，避免 UnboundLocalError
+        if request.headers.getlist("X-Forwarded-For"):
+            real_ip = request.headers.getlist("X-Forwarded-For")[0]
+        else:
+            real_ip = request.remote_addr
+
         if node_uuid and managers.cluster_manager.use_redis:
             speed_cmd = managers.cluster_manager.should_dispatch_speedtest(node_uuid)
             if speed_cmd:
@@ -76,12 +83,6 @@ def fetch_task():
                 # 情况 B: 节点不存在 (新节点或已过期)，必须创建一个基础记录！
                 # 注意：这里我们拿不到 CPU/内存信息，只能填默认值
                 # 但至少能让它在 status 列表里显示出来
-                
-                # 尝试获取 IP
-                if request.headers.getlist("X-Forwarded-For"):
-                    real_ip = request.headers.getlist("X-Forwarded-For")[0]
-                else:
-                    real_ip = request.remote_addr
                 
                 new_node_data = {
                     "uuid": node_uuid,

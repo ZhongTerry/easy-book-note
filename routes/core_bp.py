@@ -291,7 +291,8 @@ def read_mode():
             filename = parts[1]
             
             if len(parts) >= 3 and parts[2] == 'toc':
-                return redirect(url_for('core.toc_page', url=u, key=k))
+                # [修复] 保持参数传递
+                return redirect(url_for('core.toc_page', **request.args))
             
             if len(parts) >= 4:
                 identifier = parts[2]
@@ -596,10 +597,11 @@ def toc_page():
                 return jsonify({
                     "status": "redirect",
                     "message": "该URL是章节页而非目录页",
-                    "redirect_url": url_for('core.read_mode', url=u, key=k)
+                    "redirect_url": url_for('core.read_mode', **request.args)
                 })
             # 否则直接重定向到阅读页
-            return redirect(url_for('core.read_mode', url=u, key=k))
+            # [修复] 保持参数传递（如 force=true）
+            return redirect(url_for('core.read_mode', **request.args))
     
     # 获取书籍进度信息 (用于高亮已读章节)
     book_progress = {}
