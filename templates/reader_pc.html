@@ -198,6 +198,31 @@
         }
         .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 20px; }
         .modal-title { font-size: 18px; font-weight: bold; margin: 0; }
+        .memo-input,
+        .memo-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #ffffff;
+            color: #1f2937;
+            font-size: 14px;
+            box-sizing: border-box;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .memo-textarea { resize: vertical; min-height: 84px; }
+        .memo-input:focus,
+        .memo-textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+        }
+        body.dark-mode .memo-input,
+        body.dark-mode .memo-textarea {
+            background: #1f2937;
+            border-color: #374151;
+            color: #e5e7eb;
+        }
 
         /* 设置内部样式 */
         .setting-row { margin-bottom: 25px; }
@@ -1094,9 +1119,9 @@ body.dark-mode .context-menu button {
         </div>
         <div style="padding: 15px;">
             <div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">用逗号或空格分隔标签</div>
-            <input id="memoTagInput" type="text" class="p-input" placeholder="例如: 设定 伏笔" style="width: 100%;">
+            <input id="memoTagInput" type="text" class="memo-input" placeholder="例如: 设定 伏笔">
             <div style="font-size: 12px; color: #6b7280; margin: 10px 0 6px;">备忘评论</div>
-            <textarea id="memoCommentInput" class="p-textarea" rows="3" placeholder="可选，写点你的想法..."></textarea>
+            <textarea id="memoCommentInput" class="memo-textarea" rows="3" placeholder="可选，写点你的想法..."></textarea>
             <div style="text-align: right; margin-top: 12px;">
                 <button class="btn-action" onclick="saveMemoTags()" style="width: auto; padding: 6px 12px;">保存</button>
             </div>
