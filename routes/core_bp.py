@@ -376,8 +376,7 @@ def read_mode():
             page_type = detect_page_type(data)
             if page_type != 'toc':  # 只记录章节页，不记录目录页
                 # [关键修复] 检查 key 是否存在于数据库，避免记录不存在的 key
-                db_value = managers.db.find(k)
-                if db_value and db_value.get('status') == 'success':
+                if managers.db.get_raw_book(managers.get_current_user(), k):
                     # key 存在，记录历史
                     managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
                 else:
@@ -397,21 +396,30 @@ def read_mode():
 
         # [V2 增强] 自动保存阅读进度与序号到 SQLite
         if k and current_chapter_id > 0:
-            # 更新书籍的主记录，方便后续排序和进度追踪
-            managers.db.update(k, {
-                "last_read_index": current_chapter_id,
-                "last_read_url": u,
-                "last_read_title": data.get('title', ''),
-                "last_read_time": int(time.time())
-            })
-            info("DB", f"已同步阅读进度: {k} -> 第 {current_chapter_id} 章")
+            # [核心修复] 实现进度锁定：仅在阅读到更后的章节时才更新主进度
+            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
+            old_index = 0
+            if book_data and 'value' in book_data:
+                old_index = book_data['value'].get('last_read_index', 0)
+            
+            if current_chapter_id >= old_index:
+                # 更新书籍的主记录，方便后续排序和进度追踪
+                managers.db.update(k, {
+                    "last_read_index": current_chapter_id,
+                    "last_read_url": u,
+                    "last_read_title": data.get('title', ''),
+                    "last_read_time": int(time.time())
+                })
+                info("DB", f"已同步阅读进度: {k} -> 第 {current_chapter_id} 章")
+            else:
+                info("DB", f"跳过进度同步 (当前 {current_chapter_id} < 已读 {old_index}): {k}")
 
         # [新增] AJAX 模式支持 (用于前端骨架屏无刷新加载)
         if request.args.get('mode') == 'ajax':
             # 检查当前章节是否已标记
             is_marked_ajax = False
             if k:
-                book_data = managers.db.get_raw_book(get_current_user(), k)
+                book_data = managers.db.get_raw_book(managers.get_current_user(), k)
                 if book_data and 'value' in book_data:
                     marks = book_data['value'].get('marked_chapters', [])
                     is_marked_ajax = any(m.get('url') == u for m in marks)
@@ -425,7 +433,7 @@ def read_mode():
                     'next_url': data.get('next') or data.get('next_url'),
                     'book_name': data.get('book_name') or data.get('book_title') or '',
                     # 尝试推断 toc_url，优先用 data 里的，没有则回退到 key 对应的链接
-                    'toc_url': data.get('toc_url') or (managers.db.find(k)['url'] if k and managers.db.find(k) else '')
+                    'toc_url': data.get('toc_url') or (managers.db.get_val(k) if k else '')
                 },
                 'current_url': u,
                 'chapter_id': current_chapter_id,
@@ -439,7 +447,7 @@ def read_mode():
         # 检查当前章节是否已标记
         is_marked = False
         if k:
-            book_data = managers.db.get_raw_book(get_current_user(), k)
+            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
             if book_data and 'value' in book_data:
                 marks = book_data['value'].get('marked_chapters', [])
                 is_marked = any(m.get('url') == u for m in marks)
@@ -683,20 +691,29 @@ def update():
     title = request.json.get('title', '') 
     is_manual = request.json.get('manual', False)
 
-    # 1. 保存 URL (这是基础 KV 记录)
     final_value = value
     if is_manual and hasattr(crawler, 'resolve_start_url'):
         final_value = crawler.resolve_start_url(value)
+
+    # [核心修复] 实现进度锁定逻辑：
+    # 如果不是手动更新（即来自阅读页自动同步），则只允许章节序号单调递增
+    real_id = calculate_real_chapter_id(key, final_value, title)
+    book_data = managers.db.get_raw_book(managers.get_current_user(), key)
+    old_id = -1
+    if book_data and 'value' in book_data:
+        old_id = book_data['value'].get('last_read_index', -1)
     
+    if not is_manual and real_id > 0 and old_id > 0 and real_id < old_id:
+        info("Sync", f"跳过旧章节同步 (当前 {real_id} < 已读 {old_id}): {key}")
+        # 返回成功但实质跳过数据库写入
+        return jsonify({"status": "success", "message": "已锁定至最大章节进度"})
+
+    # 1. 保存 URL (这是基础 KV 记录)
     res = managers.db.update(key, final_value)
 
-    # 2. 【核心修改点】计算并保存序号
-    real_id = calculate_real_chapter_id(key, final_value, title)
-    
-    # [新增] 调试日志：打印识别结果
+    # 2. 【核心修改点】使用已识别的序号保存到 meta
     info("Sync Debug", f"书籍={key}, 标题={title} -> 识别ID={real_id}")
     
-    # 只有当 real_id 是有效正整数时才更新 meta
     # 如果返回 -1 (未识别)，这里直接跳过，数据库里旧的 meta 会保留
     if real_id > 0:
         try:

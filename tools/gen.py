@@ -40,7 +40,7 @@ def generate_font_icon(size=512):
         print("未找到专业字体，使用系统默认。建议安装 Inter 或使用 Windows 自带 Segoe UI。")
 
     # 3. 文本测量与对齐
-    text = "R"
+    text = "S"
     # 获取文本边框
     left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     text_width = right - left
@@ -57,14 +57,14 @@ def generate_font_icon(size=512):
 
     # 6. 保存导出
     # 导出 PNG 备份
-    img.save('icon.png')
+    img.save('icon_slashbox.png')
     
     # 导出 ICO (Windows 核心格式)
     # 包含从 16px 到 256px 的所有常用尺寸，确保在任何地方都不模糊
-    img.save('icon.ico', format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
+    img.save('icon_slashbox.ico', format='ICO', sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
     print("-------------------------------------------------")
-    print("✅ 已生成 icon.ico (含多尺寸支持)")
-    print("✅ 已生成 icon.png (高精度预览)")
+    print("✅ 已生成 icon_slashbox.ico (含多尺寸支持)")
+    print("✅ 已生成 icon_slashbox.png (高精度预览)")
     print("-------------------------------------------------")
 
 if __name__ == "__main__":
