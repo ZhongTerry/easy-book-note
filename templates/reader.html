@@ -152,9 +152,9 @@
 </div>
 
 <div id="syncAlert" class="sync-alert">
-    <span>📢 其它设备更新了进度</span>
+    <span>📢 远端进度：<span id="syncRemoteChapter">未知</span></span>
     <a id="syncLink" href="#" class="sync-btn">跳转</a>
-    <button onclick="document.getElementById('syncAlert').classList.remove('active')" style="background:none;border:none;color:white;margin-left:10px;cursor:pointer;">×</button>
+    <button onclick="closeSyncAlert()" style="background:none;border:none;color:white;margin-left:10px;cursor:pointer;">×</button>
 </div>
 
 <div class="settings-panel" id="settingsPanel">
@@ -496,19 +496,27 @@ async function confirmSwitch(newUrl) {
     window.onbeforeunload = stopTTS;
 
     // 同步
-    function autoSyncProgress(s=true) {
+    function autoSyncProgress(s=true, forceManual=false) {
         if (!dbKey) return; 
         fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) }).catch(e=>{});
-        fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: currentUrl }) })
+        fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: currentUrl, manual: !!forceManual }) })
         .then(res => res.json()).then(d => { if(d.status==='success' && !s) showToast("💾 已保存"); }).catch(e=>{ if(!s)showToast("❌ 失败"); });
     }
     function syncProgress(s) { autoSyncProgress(s); }
+    function closeSyncAlert() {
+        document.getElementById('syncAlert').classList.remove('active');
+        autoSyncProgress(true, true);
+    }
     function checkRemote() {
         if (!dbKey) return;
         fetch('/api/get_value', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) })
         .then(res => res.json()).then(d => {
             if (d.status === 'success' && d.value && d.value !== currentUrl && decodeURIComponent(d.value) !== decodeURIComponent(currentUrl)) {
                 document.getElementById('syncLink').href = `/read?url=${encodeURIComponent(d.value)}&key=${encodeURIComponent(dbKey)}`;
+                if (d.meta && d.meta.chapter_id > 0) {
+                    const chapterEl = document.getElementById('syncRemoteChapter');
+                    if (chapterEl) chapterEl.innerText = `第 ${d.meta.chapter_id} 章`;
+                }
                 document.getElementById('syncAlert').classList.add('active');
             }
         });

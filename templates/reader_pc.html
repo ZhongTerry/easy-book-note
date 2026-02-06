@@ -739,7 +739,7 @@ body.dark-mode #settingsModal input.p-input {
 <body>
 
     <div id="syncAlert" class="sync-alert">
-        <span>📢 其它设备更新了进度</span>
+        <span>📢 远端进度：<span id="syncRemoteChapter">未知</span></span>
         <!-- [核心修复] 改回 a 标签，并加上 id="syncLink" -->
         <a id="syncLink" href="#" style="background:white; color:var(--accent); text-decoration:none; padding:4px 12px; border-radius:12px; cursor:pointer; margin-left:10px; font-weight:bold; font-size:13px;">
             跳转最新
@@ -1379,12 +1379,12 @@ body.dark-mode #settingsModal input.p-input {
         // remoteMeta.chapter_id 是后端根据存入时的标题算出来的，绝对准确
         // localChapterId 是后端渲染当前页时算出来的，绝对准确
         if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
-            if (remoteMeta.chapter_id > localChapterId) {
-                console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) > 本地ID(${localChapterId}) -> 提示更新`);
+            if (remoteMeta.chapter_id !== localChapterId) {
+                console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) != 本地ID(${localChapterId}) -> 提示更新`);
                 return true;
             }
-            // 远程 <= 本地，说明本地是最新的，无需提示
-            console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) <= 本地ID(${localChapterId}) -> 无需同步`);
+            // 远程 == 本地，无需提示
+            console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) == 本地ID(${localChapterId}) -> 无需同步`);
             return false;
         }
 
@@ -1466,7 +1466,7 @@ body.dark-mode #settingsModal input.p-input {
                 // 传入 meta 数据进行智能对比
                 if (shouldSync(d.value, d.meta)) {
                     console.log("[Sync] 发现更新的远程进度，暂停自动保存。");
-                    showSyncAlert(d.value);
+                    showSyncAlert(d.value, d.meta);
                 } else {
                     // 远程没我新，或者一样 -> 开启自动保存 (覆盖远程)
                     autoSyncProgress();
@@ -1487,7 +1487,7 @@ body.dark-mode #settingsModal input.p-input {
             if (d.status === 'success' && d.value) {
                 // 轮询时也使用智能对比
                 if (shouldSync(d.value, d.meta)) {
-                    showSyncAlert(d.value);
+                    showSyncAlert(d.value, d.meta);
                 } else {
                     // 只要本地 >= 远程，就隐藏提示
                     document.getElementById('syncAlert').classList.remove('active');
@@ -1497,20 +1497,28 @@ body.dark-mode #settingsModal input.p-input {
     }
 
     // 显示同步提示条
-    function showSyncAlert(targetUrl) {
+    function showSyncAlert(targetUrl, remoteMeta) {
         const link = document.getElementById('syncLink');
+        const chapterEl = document.getElementById('syncRemoteChapter');
         if(link) {
             link.href = `/read?url=${encodeURIComponent(targetUrl)}&key=${dbKey}`;
             document.getElementById('syncAlert').classList.add('active');
         }
+        if (chapterEl) {
+            if (remoteMeta && remoteMeta.chapter_id > 0) {
+                chapterEl.innerText = `第 ${remoteMeta.chapter_id} 章`;
+            } else {
+                chapterEl.innerText = '未知';
+            }
+        }
     }
     function closeSyncAlert() {
         document.getElementById('syncAlert').classList.remove('active')
-        autoSyncProgress();
+        autoSyncProgress(true);
     }
     // 执行保存 (更新阅读进度)
     // 执行保存
-    function autoSyncProgress() {
+    function autoSyncProgress(forceManual=false) {
         if(!dbKey) return;
         
         // 获取当前标题 (用于后端计算真实ID)
@@ -1527,7 +1535,8 @@ body.dark-mode #settingsModal input.p-input {
             body: JSON.stringify({ 
                 key: dbKey, 
                 value: currentUrl,
-                title: currentTitle // <--- [新增] 必须带上标题！
+                title: currentTitle, // <--- [新增] 必须带上标题！
+                manual: !!forceManual
             }) 
         });
     }
