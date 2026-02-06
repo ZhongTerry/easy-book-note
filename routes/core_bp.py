@@ -6,6 +6,7 @@ from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, w
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
 import re
+import time
 core_bp = Blueprint('core', __name__)
 DEFAULT_SERVER = 'https://auth.ztrztr.top'
 DEFAULT_CALLBACK = 'https://book.ztrztr.top/callback'
@@ -525,6 +526,36 @@ def toggle_book_mark():
     managers.db.update(k, {"marked_chapters": marked})
     return jsonify({"status": "success", "message": msg, "is_marked": is_marked})
 
+@core_bp.route('/api/book/memo', methods=['POST'])
+@login_required
+def add_book_memo():
+    """记录书籍备忘（按书存储在 books_v2 的 value.memos 中）"""
+    data = request.json or {}
+    k = data.get('key')
+    memo_text = (data.get('text') or '').strip()
+    chapter_id = data.get('chapter_id', -1)
+    chapter_title = data.get('chapter_title', '')
+    url = data.get('url', '')
+
+    if not k or not memo_text:
+        return jsonify({"status": "error", "message": "Missing key or text"}), 400
+
+    book_data = managers.db.get_raw_book(managers.get_current_user(), k)
+    if not book_data or 'value' not in book_data:
+        return jsonify({"status": "error", "message": "Book not found"}), 404
+
+    memos = book_data['value'].get('memos', [])
+    memos.append({
+        "chapter_id": int(chapter_id) if chapter_id is not None else -1,
+        "chapter_title": chapter_title or '',
+        "text": memo_text,
+        "url": url,
+        "time": int(time.time())
+    })
+
+    managers.db.update(k, {"memos": memos})
+    return jsonify({"status": "success", "count": len(memos)})
+
 @core_bp.route('/api/book/find', methods=['GET'])
 @login_required
 def get_book_details():
@@ -681,8 +712,6 @@ def api_quick_save():
         return jsonify({"status": "success", "message": "已保存到书架"})
     else:
         return jsonify({"status": "error", "message": res.get('message', '保存失败')})
-
-import time
 @core_bp.route('/update', methods=['POST'])
 @login_required
 def update():

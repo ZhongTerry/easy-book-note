@@ -242,6 +242,38 @@
             font-size: 14px; opacity: 0; pointer-events: none; transition: 0.3s; z-index: 5000;
         }
         #toast.show { opacity: 1; bottom: 120px; }
+        /* === 右键菜单：备忘 === */
+        .context-menu {
+            position: fixed;
+            z-index: 9999;
+            min-width: 180px;
+            background: var(--menu-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+            display: none;
+            padding: 6px;
+        }
+        .context-menu button {
+            width: 100%;
+            text-align: left;
+            background: none;
+            border: none;
+            padding: 8px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 8px;
+            color: var(--text);
+        }
+        .context-menu button:hover {
+            background: #f3f4f6;
+        }
+        .context-menu .danger {
+            color: #b91c1c;
+        }
+        body.theme-dark .context-menu button:hover {
+            background: #2a2a2a;
+        }
         /* === [修复] 换源弹窗专用遮罩 === */
 #sourceOverlay {
     /* 基础状态：隐藏 */
@@ -292,6 +324,14 @@
             <a id="syncLink" href="#" class="sync-btn">跳转</a>
             <span onclick="closeSyncAlert()" style="margin-left:10px; font-size:20px;">×</span>
         </div>
+    </div>
+
+    <div id="memoContextMenu" class="context-menu">
+        <button data-action="copy-selection">复制选中</button>
+        <button data-action="copy-paragraph">复制段落</button>
+        <button data-action="search">搜索选中内容</button>
+        <button data-action="memo" class="danger">备忘</button>
+        <button data-action="close">取消</button>
     </div>
 
     <!-- 正文容器 -->
@@ -444,6 +484,71 @@
     const dbKey = "{{ db_key }}";
     let chapterTitle = {{ (article.title or "")|tojson }};
     let currentUrl = "{{ current_url }}"; // AJAX 翻页后需更新
+    let memoParagraphText = '';
+    let memoSelectionText = '';
+    let longPressTimer = null;
+    let longPressTriggered = false;
+    let longPressStartX = 0;
+    let longPressStartY = 0;
+
+    function showContextMenu(x, y) {
+        const menu = document.getElementById('memoContextMenu');
+        if (!menu) return;
+        const maxX = window.innerWidth - menu.offsetWidth - 8;
+        const maxY = window.innerHeight - menu.offsetHeight - 8;
+        menu.style.left = Math.min(x, maxX) + 'px';
+        menu.style.top = Math.min(y, maxY) + 'px';
+        menu.style.display = 'block';
+    }
+
+    function hideContextMenu() {
+        const menu = document.getElementById('memoContextMenu');
+        if (menu) menu.style.display = 'none';
+    }
+
+    async function copyText(text) {
+        if (!text) return;
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            showToast('✅ 已复制');
+        } catch (e) {
+            showToast('❌ 复制失败');
+        }
+    }
+
+    async function saveMemo(text) {
+        if (!dbKey || !text) return;
+        try {
+            const res = await fetch('/api/book/memo', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: dbKey,
+                    chapter_id: localChapterId,
+                    chapter_title: chapterTitle,
+                    url: currentUrl,
+                    text: text
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                showToast('✅ 已添加备忘');
+            } else {
+                showToast(json.message || '❌ 备忘失败');
+            }
+        } catch (e) {
+            showToast('❌ 备忘失败');
+        }
+    }
 
     async function toggleBookMark() {
         try {
@@ -546,6 +651,72 @@
             }
         }
     });
+
+    document.addEventListener('click', hideContextMenu);
+    window.addEventListener('scroll', hideContextMenu);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideContextMenu();
+    });
+
+    viewport.addEventListener('touchstart', (e) => {
+        const p = e.target.closest('p');
+        if (!p) return;
+        const touch = e.touches[0];
+        longPressStartX = touch.clientX;
+        longPressStartY = touch.clientY;
+        memoParagraphText = (p.innerText || '').trim();
+        memoSelectionText = (window.getSelection() || '').toString().trim();
+        longPressTriggered = false;
+        clearTimeout(longPressTimer);
+        longPressTimer = setTimeout(() => {
+            longPressTriggered = true;
+            showContextMenu(touch.clientX, touch.clientY);
+        }, 500);
+    }, {passive: true});
+
+    viewport.addEventListener('touchmove', (e) => {
+        if (!longPressTimer) return;
+        const touch = e.touches[0];
+        if (Math.abs(touch.clientX - longPressStartX) > 10 || Math.abs(touch.clientY - longPressStartY) > 10) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+    }, {passive: true});
+
+    viewport.addEventListener('touchend', () => {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    });
+
+    viewport.addEventListener('contextmenu', (e) => {
+        const p = e.target.closest('p');
+        if (!p) return;
+        e.preventDefault();
+        memoParagraphText = (p.innerText || '').trim();
+        memoSelectionText = (window.getSelection() || '').toString().trim();
+        showContextMenu(e.clientX, e.clientY);
+    });
+
+    const memoMenu = document.getElementById('memoContextMenu');
+    if (memoMenu) {
+        memoMenu.addEventListener('click', async (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const text = memoSelectionText || memoParagraphText;
+            if (action === 'copy-selection') {
+                await copyText(memoSelectionText || memoParagraphText);
+            } else if (action === 'copy-paragraph') {
+                await copyText(memoParagraphText);
+            } else if (action === 'search') {
+                const q = encodeURIComponent(text || '');
+                if (q) window.open(`https://www.baidu.com/s?wd=${q}`, '_blank');
+            } else if (action === 'memo') {
+                await saveMemo(text);
+            }
+            hideContextMenu();
+        });
+    }
 
     // === 2. 菜单交互 ===
     function toggleMenu() {

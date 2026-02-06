@@ -118,6 +118,34 @@
         .control-btn:hover { background: #e2e6ea; }
 
         /* === 6. 其他组件 === */
+        .context-menu {
+            position: fixed;
+            z-index: 9999;
+            min-width: 180px;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+            display: none;
+            padding: 6px;
+        }
+        .context-menu button {
+            width: 100%;
+            text-align: left;
+            background: none;
+            border: none;
+            padding: 8px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 8px;
+            color: #111827;
+        }
+        .context-menu button:hover {
+            background: #f3f4f6;
+        }
+        .context-menu .danger {
+            color: #b91c1c;
+        }
         .tts-controls { display: none; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
         #toast { visibility: hidden; min-width: 200px; background-color: #333; color: #fff; text-align: center; border-radius: 4px; padding: 10px 20px; position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 2000; opacity: 0; transition: opacity 0.5s; }
         #toast.show { visibility: visible; opacity: 1; }
@@ -155,6 +183,14 @@
     <span>📢 远端进度：<span id="syncRemoteChapter">未知</span></span>
     <a id="syncLink" href="#" class="sync-btn">跳转</a>
     <button onclick="closeSyncAlert()" style="background:none;border:none;color:white;margin-left:10px;cursor:pointer;">×</button>
+</div>
+
+<div id="memoContextMenu" class="context-menu">
+    <button data-action="copy-selection">复制选中</button>
+    <button data-action="copy-paragraph">复制段落</button>
+    <button data-action="search">搜索选中内容</button>
+    <button data-action="memo" class="danger">备忘</button>
+    <button data-action="close">取消</button>
 </div>
 
 <div class="settings-panel" id="settingsPanel">
@@ -246,6 +282,8 @@
 <script>
     const dbKey = "{{ db_key }}";
     const currentUrl = "{{ current_url }}";
+    const localChapterId = parseInt("{{ chapter_id }}") || -1;
+    const chapterTitle = {{ (article.title or "")|tojson }};
     
     let settings = { theme: 'light', fontSize: 18, speed: 1.0 };
     let synth = window.speechSynthesis;
@@ -254,6 +292,107 @@
     
     // 全局上下文
     let switchContext = {};
+
+    let memoParagraphText = '';
+    let memoSelectionText = '';
+
+    function showContextMenu(x, y) {
+        const menu = document.getElementById('memoContextMenu');
+        if (!menu) return;
+        const maxX = window.innerWidth - menu.offsetWidth - 8;
+        const maxY = window.innerHeight - menu.offsetHeight - 8;
+        menu.style.left = Math.min(x, maxX) + 'px';
+        menu.style.top = Math.min(y, maxY) + 'px';
+        menu.style.display = 'block';
+    }
+
+    function hideContextMenu() {
+        const menu = document.getElementById('memoContextMenu');
+        if (menu) menu.style.display = 'none';
+    }
+
+    async function copyText(text) {
+        if (!text) return;
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            showToast('✅ 已复制');
+        } catch (e) {
+            showToast('❌ 复制失败');
+        }
+    }
+
+    async function saveMemo(text) {
+        if (!dbKey || !text) return;
+        try {
+            const res = await fetch('/api/book/memo', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: dbKey,
+                    chapter_id: localChapterId,
+                    chapter_title: chapterTitle,
+                    url: currentUrl,
+                    text: text
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                showToast('✅ 已添加备忘');
+            } else {
+                showToast(json.message || '❌ 备忘失败');
+            }
+        } catch (e) {
+            showToast('❌ 备忘失败');
+        }
+    }
+
+    document.addEventListener('click', hideContextMenu);
+    window.addEventListener('scroll', hideContextMenu);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideContextMenu();
+    });
+
+    const articleContent = document.getElementById('articleContent');
+    if (articleContent) {
+        articleContent.addEventListener('contextmenu', (e) => {
+            const p = e.target.closest('p');
+            if (!p) return;
+            e.preventDefault();
+            memoParagraphText = (p.innerText || '').trim();
+            memoSelectionText = (window.getSelection() || '').toString().trim();
+            showContextMenu(e.clientX, e.clientY);
+        });
+    }
+
+    const memoMenu = document.getElementById('memoContextMenu');
+    if (memoMenu) {
+        memoMenu.addEventListener('click', async (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const text = memoSelectionText || memoParagraphText;
+            if (action === 'copy-selection') {
+                await copyText(memoSelectionText || memoParagraphText);
+            } else if (action === 'copy-paragraph') {
+                await copyText(memoParagraphText);
+            } else if (action === 'search') {
+                const q = encodeURIComponent(text || '');
+                if (q) window.open(`https://www.baidu.com/s?wd=${q}`, '_blank');
+            } else if (action === 'memo') {
+                await saveMemo(text);
+            }
+            hideContextMenu();
+        });
+    }
 
     async function openSourceModal() {
     const modal = document.getElementById('sourceModal');
