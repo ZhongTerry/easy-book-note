@@ -970,6 +970,18 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
     </div>
 </div>
+<!-- === [新增] 备忘列表模态框 === -->
+<div id="memoModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 600px; max-height: 80vh; overflow-y: auto;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px; position: sticky; top: -20px; background: white; z-index: 10; padding: 10px 0;">
+            <h3 style="margin:0" id="memoModalTitle">📝 备忘</h3>
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('memoModal')">✕</button>
+        </div>
+        <div id="memoList">
+            <!-- 备忘列表将在这里加载 -->
+        </div>
+    </div>
+</div>
 <!-- 历史记录模态框 -->
 <div id="historyModal" class="p-modal">
     <div class="p-modal-content" style="max-width: 500px;">
@@ -1229,6 +1241,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
     // 生成菜单项 (图标 + 文字)
     const items = [
         { icon: '🌟', text: '标记章节', click: asyncAct(`openMarkedModal('${safeKey}', '${safeTitle}')`) },
+        { icon: '📝', text: '备忘', click: asyncAct(`openMemoModal('${safeKey}', '${safeTitle}')`) },
         { icon: '🔖', text: '加入书单', click: asyncAct(`openAddToListModal('${safeKey}', '${safeTitle}')`) },
         { icon: '🏷️', text: '编辑标签', click: asyncAct(`openTagModal('${safeKey}')`) },
         { icon: '✏️', text: '重命名', click: asyncAct(`renameKey('${safeKey}')`) },
@@ -1304,6 +1317,100 @@ async function openMarkedModal(key, title) {
         html += '</div>';
         container.innerHTML = html;
 
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = '<div style="color:red; padding:10px;">网络请求出错</div>';
+    }
+}
+
+// --- 备忘列表模态框 ---
+async function openMemoModal(key, title) {
+    document.getElementById('memoModalTitle').innerText = "📝 [" + title + "] 的备忘";
+    const container = document.getElementById('memoList');
+    container.innerHTML = '<div style="text-align:center; padding:20px;">加载中...</div>';
+    PureUI.modal.open('memoModal');
+
+    try {
+        const res = await fetch("/api/book/find?key=" + encodeURIComponent(key));
+        const json = await res.json();
+        if (json.status !== 'success' || !json.data) {
+            container.innerHTML = '<div style="color:red; padding:10px;">获取数据失败</div>';
+            return;
+        }
+
+        const book = json.data;
+        const memos = (book.memos || []).slice();
+
+        if (memos.length === 0) {
+            container.innerHTML = '<div style="color:#888; text-align:center; padding:30px;">暂无备忘<br/><small>在阅读界面长按段落即可备忘</small></div>';
+            return;
+        }
+
+        memos.sort((a, b) => {
+            const aId = parseInt(a.chapter_id) || -1;
+            const bId = parseInt(b.chapter_id) || -1;
+            if (aId !== bId) {
+                if (aId === -1) return 1;
+                if (bId === -1) return -1;
+                return aId - bId;
+            }
+            return (a.time || 0) - (b.time || 0);
+        });
+
+        container.innerHTML = '';
+        memos.forEach((item) => {
+            const row = document.createElement('div');
+            row.style.padding = '12px';
+            row.style.borderBottom = '1px solid #eee';
+            row.style.display = 'flex';
+            row.style.justifyContent = 'space-between';
+            row.style.alignItems = 'flex-start';
+            row.style.gap = '12px';
+
+            const left = document.createElement('div');
+            left.style.flex = '1';
+
+            const titleLine = document.createElement('div');
+            titleLine.style.fontWeight = 'bold';
+            titleLine.style.color = '#333';
+            const chapTitle = item.chapter_title || (item.chapter_id ? `第 ${item.chapter_id} 章` : '未标注章节');
+            titleLine.textContent = chapTitle;
+
+            const textLine = document.createElement('div');
+            textLine.style.fontSize = '13px';
+            textLine.style.color = '#555';
+            textLine.style.marginTop = '6px';
+            textLine.textContent = item.text || '';
+
+            const timeLine = document.createElement('div');
+            timeLine.style.fontSize = '11px';
+            timeLine.style.color = '#999';
+            timeLine.style.marginTop = '6px';
+            timeLine.textContent = item.time ? new Date(item.time * 1000).toLocaleString() : '';
+
+            left.appendChild(titleLine);
+            left.appendChild(textLine);
+            left.appendChild(timeLine);
+
+            const right = document.createElement('div');
+            if (item.url) {
+                const btn = document.createElement('button');
+                btn.className = 'p-btn p-btn-sm';
+                btn.style.background = 'transparent';
+                btn.style.color = '#0078d4';
+                btn.style.border = '1px solid #0078d4';
+                btn.style.padding = '2px 8px';
+                btn.textContent = '跳转';
+                btn.addEventListener('click', () => {
+                    window.open(`/read?url=${encodeURIComponent(item.url)}&key=${encodeURIComponent(key)}`, '_blank');
+                });
+                right.appendChild(btn);
+            }
+
+            row.appendChild(left);
+            row.appendChild(right);
+            container.appendChild(row);
+        });
     } catch (e) {
         console.error(e);
         container.innerHTML = '<div style="color:red; padding:10px;">网络请求出错</div>';
