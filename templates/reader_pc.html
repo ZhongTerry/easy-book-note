@@ -1379,12 +1379,12 @@ body.dark-mode #settingsModal input.p-input {
         // remoteMeta.chapter_id 是后端根据存入时的标题算出来的，绝对准确
         // localChapterId 是后端渲染当前页时算出来的，绝对准确
         if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
-            if (remoteMeta.chapter_id !== localChapterId) {
-                console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) != 本地ID(${localChapterId}) -> 提示更新`);
+            if (remoteMeta.chapter_id > localChapterId) {
+                console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) > 本地ID(${localChapterId}) -> 提示更新`);
                 return true;
             }
-            // 远程 == 本地，无需提示
-            console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) == 本地ID(${localChapterId}) -> 无需同步`);
+            // 远程 <= 本地，无需提示
+            console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) <= 本地ID(${localChapterId}) -> 无需同步`);
             return false;
         }
 

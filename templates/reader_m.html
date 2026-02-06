@@ -614,7 +614,7 @@
         if (currentUrl.startsWith('epub:')) return false;
         if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) return false;
         if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
-            return remoteMeta.chapter_id !== localChapterId;
+            return remoteMeta.chapter_id > localChapterId;
         }
         return true;
     }
