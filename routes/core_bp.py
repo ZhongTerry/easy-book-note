@@ -690,9 +690,10 @@ def update():
     value = request.json.get('value')
     title = request.json.get('title', '') 
     is_manual = request.json.get('manual', False)
+    do_resolve = request.json.get('resolve', True)
 
     final_value = value
-    if is_manual and hasattr(crawler, 'resolve_start_url'):
+    if is_manual and do_resolve and hasattr(crawler, 'resolve_start_url'):
         final_value = crawler.resolve_start_url(value)
 
     # [核心修复] 实现进度锁定逻辑：
@@ -730,17 +731,8 @@ def update():
             # [关键调试] 打印即将保存的内容
             info("Sync Debug", f"准备保存 - Key={meta_key}, Content={meta}")
             
-            save_result = managers.db.update(meta_key, json.dumps(meta))
-            
-            # [关键调试] 打印保存结果
-            info("Sync Debug", f"保存结果: {save_result}")
-            
-            # 验证保存是否成功（立即读回来检查）
-            verify_str = managers.db.get_val(meta_key)
-            if verify_str:
-                info("Sync", f"✅ 识别并保存成功：{title} -> ID {real_id}, 验证读取: {verify_str}")
-            else:
-                error("Sync", f"❌ 保存失败！无法读回数据")
+            managers.db.update(meta_key, json.dumps(meta))
+            info("Sync", f"✅ 识别并保存成功：{title} -> ID {real_id}")
                 
         except Exception as e:
             error("Sync", f"Meta save error: {e}")

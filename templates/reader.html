@@ -499,7 +499,7 @@ async function confirmSwitch(newUrl) {
     function autoSyncProgress(s=true, forceManual=false) {
         if (!dbKey) return; 
         fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) }).catch(e=>{});
-        fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: currentUrl, manual: !!forceManual }) })
+        fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: currentUrl, manual: !!forceManual, resolve: !forceManual }) })
         .then(res => res.json()).then(d => { if(d.status==='success' && !s) showToast("💾 已保存"); }).catch(e=>{ if(!s)showToast("❌ 失败"); });
     }
     function syncProgress(s) { autoSyncProgress(s); }

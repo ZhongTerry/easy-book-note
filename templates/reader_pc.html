@@ -1536,7 +1536,8 @@ body.dark-mode #settingsModal input.p-input {
                 key: dbKey, 
                 value: currentUrl,
                 title: currentTitle, // <--- [新增] 必须带上标题！
-                manual: !!forceManual
+                manual: !!forceManual,
+                resolve: !forceManual
             }) 
         });
     }

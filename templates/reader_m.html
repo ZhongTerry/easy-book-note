@@ -340,7 +340,7 @@
     <!-- 顶部菜单 -->
     <div class="menu-bar top-menu">
         <i class="ri-arrow-left-line" style="font-size:24px; padding:10px;" onclick="location.href='/'"></i>
-        <div style="font-size:14px; font-weight:600; max-width: 50%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">{{ db_key }}</div>
+        <div style="font-size:14px; font-weight:600; max-width: 70%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">{{ db_key }}: {{ article.title }}</div>
         
         <div style="display:flex; gap:5px;">
             <i class="ri-refresh-line" style="font-size:22px; padding:10px;" onclick="forceRefresh()"></i>
@@ -659,7 +659,7 @@
         fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
         fetch('/update', { 
             method: 'POST', headers: {'Content-Type': 'application/json'}, 
-            body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, manual: !!forceManual }) 
+            body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, manual: !!forceManual, resolve: !forceManual }) 
         });
     }
 
