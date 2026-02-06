@@ -149,6 +149,16 @@
         .tts-controls { display: none; margin-top: 10px; border-top: 1px solid #eee; padding-top: 10px; }
         #toast { visibility: hidden; min-width: 200px; background-color: #333; color: #fff; text-align: center; border-radius: 4px; padding: 10px 20px; position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 2000; opacity: 0; transition: opacity 0.5s; }
         #toast.show { visibility: visible; opacity: 1; }
+        #toast a { color: #93c5fd; text-decoration: underline; margin-left: 6px; }
+        .memo-highlight { background: #e6f2ff; border-radius: 4px; padding: 2px 4px; }
+        #memoTagModal {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 2500;
+            display: none; align-items: center; justify-content: center;
+        }
+        #memoTagModal .memo-tag-box {
+            width: 90%; max-width: 360px; background: #fff;
+            border-radius: 12px; padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
         .sync-alert { position: fixed; top: -60px; left: 0; width: 100%; background-color: var(--accent); color: white; z-index: 2000; display: flex; justify-content: center; align-items: center; padding: 12px 0; box-shadow: 0 4px 10px rgba(0,0,0,0.2); transition: top 0.5s ease-in-out; }
         .sync-alert.active { top: 0; }
         .sync-btn { background: white; color: var(--accent); border: none; padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: bold; cursor: pointer; text-decoration: none; margin-left: 10px; }
@@ -191,6 +201,20 @@
     <button data-action="search">搜索选中内容</button>
     <button data-action="memo" class="danger">备忘</button>
     <button data-action="close">取消</button>
+</div>
+
+<div id="memoTagModal" onclick="if(event.target===this) this.style.display='none'">
+    <div class="memo-tag-box" onclick="event.stopPropagation()">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <strong>编辑标签</strong>
+            <span style="cursor:pointer; font-size:18px;" onclick="document.getElementById('memoTagModal').style.display='none'">×</span>
+        </div>
+        <div style="font-size:12px; color:#666; margin-bottom:8px;">用逗号或空格分隔标签</div>
+        <input id="memoTagInput" type="text" placeholder="例如: 人物 伏笔" style="width:100%; height:36px; border:1px solid #e5e7eb; border-radius:8px; padding:0 10px;">
+        <div style="text-align:right; margin-top:12px;">
+            <button class="p-btn p-btn-sm" onclick="saveMemoTags()">保存</button>
+        </div>
+    </div>
 </div>
 
 <div class="settings-panel" id="settingsPanel">
@@ -295,6 +319,8 @@
 
     let memoParagraphText = '';
     let memoSelectionText = '';
+    let memoParagraphEl = null;
+    let memoTagContext = null;
 
     function showContextMenu(x, y) {
         const menu = document.getElementById('memoContextMenu');
@@ -346,12 +372,63 @@
             });
             const json = await res.json();
             if (json.status === 'success') {
-                showToast('✅ 已添加备忘');
+                if (memoParagraphEl) {
+                    memoParagraphEl.classList.add('memo-highlight');
+                }
+                memoTagContext = {
+                    key: dbKey,
+                    memo_id: json.memo_id,
+                    memo_time: Math.floor(Date.now() / 1000),
+                    memo_text: text
+                };
+                showToastHtml('✅ 已添加备忘 <a href="#" id="memoTagLink">添加标签</a>');
+                const link = document.getElementById('memoTagLink');
+                if (link) {
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        openMemoTagModal();
+                    }, { once: true });
+                }
             } else {
                 showToast(json.message || '❌ 备忘失败');
             }
         } catch (e) {
             showToast('❌ 备忘失败');
+        }
+    }
+
+    function openMemoTagModal() {
+        if (!memoTagContext || !memoTagContext.key) return;
+        const input = document.getElementById('memoTagInput');
+        if (input) input.value = '';
+        document.getElementById('memoTagModal').style.display = 'flex';
+    }
+
+    async function saveMemoTags() {
+        if (!memoTagContext || !memoTagContext.key) return;
+        const input = document.getElementById('memoTagInput');
+        const tagsRaw = input ? input.value : '';
+        try {
+            const res = await fetch('/api/book/memo/tags', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: memoTagContext.key,
+                    memo_id: memoTagContext.memo_id,
+                    memo_time: memoTagContext.memo_time,
+                    memo_text: memoTagContext.memo_text,
+                    tags: tagsRaw
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                showToast('✅ 标签已保存');
+                document.getElementById('memoTagModal').style.display = 'none';
+            } else {
+                showToast(json.message || '❌ 标签保存失败');
+            }
+        } catch (e) {
+            showToast('❌ 标签保存失败');
         }
     }
 
@@ -369,6 +446,7 @@
             e.preventDefault();
             memoParagraphText = (p.innerText || '').trim();
             memoSelectionText = (window.getSelection() || '').toString().trim();
+            memoParagraphEl = p;
             showContextMenu(e.clientX, e.clientY);
         });
     }
@@ -711,8 +789,45 @@ async function confirmSwitch(newUrl) {
                 console.error("解析下一章链接失败", e);
             }
         }
+        refreshMemoHighlights();
     };
-    function showToast(m) { var x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(function(){ x.className=x.className.replace("show",""); },3000); }
+    function showToast(m) { var x=document.getElementById("toast"); x.className="show"; x.textContent=m; setTimeout(function(){ x.className=x.className.replace("show",""); },3000); }
+    function showToastHtml(html) { var x=document.getElementById("toast"); x.className="show"; x.innerHTML=html; setTimeout(function(){ x.className=x.className.replace("show",""); },4000); }
+
+    async function refreshMemoHighlights() {
+        if (!dbKey) return;
+        try {
+            const res = await fetch(`/api/book/find?key=${encodeURIComponent(dbKey)}`);
+            const json = await res.json();
+            if (json.status !== 'success' || !json.data) return;
+            const memos = json.data.memos || [];
+            applyMemoHighlights(memos);
+        } catch (e) {}
+    }
+
+    function applyMemoHighlights(memos) {
+        const body = document.getElementById('articleContent');
+        if (!body || !Array.isArray(memos)) return;
+        const chapterMemos = memos.filter(m => {
+            const cid = parseInt(m.chapter_id) || -1;
+            if (localChapterId > 0 && cid > 0) return cid === localChapterId;
+            if (m.url && currentUrl) return m.url === currentUrl;
+            return false;
+        });
+        if (chapterMemos.length === 0) return;
+        const paragraphs = body.querySelectorAll('p');
+        paragraphs.forEach(p => {
+            const text = (p.innerText || '').trim();
+            if (!text) return;
+            for (const memo of chapterMemos) {
+                const memoText = (memo.text || '').trim();
+                if (memoText && text.includes(memoText)) {
+                    p.classList.add('memo-highlight');
+                    break;
+                }
+            }
+        });
+    }
     // === 核心功能 4: 阅读计时器与防挂机 ===
     let idleTime = 0;
     let accumulatedWords = 0;

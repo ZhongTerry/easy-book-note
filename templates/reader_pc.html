@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <!-- 在 <head> 中添加 -->
+        <!-- <link rel="stylesheet" href="/purecss/pure2.1.css">
+    <script src="/purecss/pure2.1.js"></script> -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <title>{{ article.title }} - Smart NoteDB</title>
     <style>
@@ -270,6 +272,7 @@
         .nav-btn.disabled { opacity: 0.5; pointer-events: none; }
         #toast { visibility: hidden; background: #333; color: #fff; padding: 10px 20px; border-radius: 4px; position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 3000; }
         #toast.show { visibility: visible; }
+        #toast a { color: #93c5fd; text-decoration: underline; margin-left: 6px; }
         .sync-alert { position: fixed; top: -60px; left: 0; width: 100%; background: var(--accent); color: white; padding: 12px; text-align: center; transition: 0.5s; z-index: 2000; }
         .sync-alert.active { top: 0; }
         .header-left, .user-box {
@@ -316,6 +319,11 @@ body.dark-mode .btn-action {
     border-color: #333;
     color: #ccc;
 }
+        .memo-highlight {
+            background: #e6f2ff;
+            border-radius: 4px;
+            padding: 2px 4px;
+        }
         /* --- 修改 1: 增加 Modal 高度 --- */
         .modal-box {
             background: #fff; 
@@ -1078,6 +1086,24 @@ body.dark-mode .context-menu button {
     </div>
 </div>
 
+<div id="memoTagModal" class="modal-overlay" onclick="closeByOverlay(event, 'memoTagModal')">
+    <div class="modal-box" onclick="event.stopPropagation()" style="max-width: 420px;">
+        <div class="modal-header">
+            <h3 class="modal-title">编辑标签</h3>
+            <button onclick="document.getElementById('memoTagModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+        </div>
+        <div style="padding: 15px;">
+            <div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">用逗号或空格分隔标签</div>
+            <input id="memoTagInput" type="text" class="p-input" placeholder="例如: 设定 伏笔" style="width: 100%;">
+            <div style="font-size: 12px; color: #6b7280; margin: 10px 0 6px;">备忘评论</div>
+            <textarea id="memoCommentInput" class="p-textarea" rows="3" placeholder="可选，写点你的想法..."></textarea>
+            <div style="text-align: right; margin-top: 12px;">
+                <button class="btn-action" onclick="saveMemoTags()" style="width: auto; padding: 6px 12px;">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
     let localChapterId = parseInt("{{ chapter_id }}") || -1;
     const dbKey = "{{ db_key }}";
@@ -1087,6 +1113,8 @@ body.dark-mode .context-menu button {
 
     let memoParagraphText = '';
     let memoSelectionText = '';
+    let memoParagraphEl = null;
+    let memoTagContext = null;
 
     function showContextMenu(x, y) {
         const menu = document.getElementById('memoContextMenu');
@@ -1101,6 +1129,30 @@ body.dark-mode .context-menu button {
     function hideContextMenu() {
         const menu = document.getElementById('memoContextMenu');
         if (menu) menu.style.display = 'none';
+    }
+
+    function updateMemoMenuState(p) {
+        const memoBtn = document.querySelector('#memoContextMenu button[data-action="memo"], #memoContextMenu button[data-action="unmemo"]');
+        if (!memoBtn) return;
+        const hasMemo = !!(p && (p.dataset.memoId || p.dataset.memoTime));
+        if (hasMemo) {
+            memoBtn.dataset.action = 'unmemo';
+            memoBtn.textContent = '取消备忘';
+            memoBtn.classList.add('danger');
+        } else {
+            memoBtn.dataset.action = 'memo';
+            memoBtn.textContent = '备忘';
+            memoBtn.classList.add('danger');
+        }
+    }
+
+    function getMemoMetaFromParagraph(p) {
+        if (!p) return null;
+        return {
+            memo_id: p.dataset.memoId ? parseInt(p.dataset.memoId, 10) : null,
+            memo_time: p.dataset.memoTime ? parseInt(p.dataset.memoTime, 10) : null,
+            memo_text: p.dataset.memoText || ''
+        };
     }
 
     async function copyText(text) {
@@ -1138,13 +1190,74 @@ body.dark-mode .context-menu button {
             });
             const json = await res.json();
             if (json.status === 'success') {
-                showToast('✅ 已添加备忘');
+                memoTagContext = {
+                    key: dbKey,
+                    memo_id: json.memo_id,
+                    memo_time: Math.floor(Date.now() / 1000),
+                    memo_text: text,
+                    tags: [],
+                    comment: ''
+                };
+                if (memoParagraphEl) {
+                    memoParagraphEl.classList.add('memo-highlight');
+                    memoParagraphEl.dataset.memoId = String(json.memo_id || '');
+                    memoParagraphEl.dataset.memoTime = String(memoTagContext.memo_time || '');
+                    memoParagraphEl.dataset.memoText = text || '';
+                    memoParagraphEl.dataset.memoComment = '';
+                }
+                showToastHtml('✅ 已添加备忘 <a href="#" id="memoTagLink">添加标签</a>');
+                const link = document.getElementById('memoTagLink');
+                if (link) {
+                    link.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        openMemoTagModal();
+                    }, { once: true });
+                }
             } else {
                 showToast(json.message || '❌ 备忘失败');
             }
         } catch (e) {
             showToast('❌ 备忘失败');
         }
+    }
+
+    async function refreshMemoHighlights() {
+        if (!dbKey) return;
+        try {
+            const res = await fetch(`/api/book/find?key=${encodeURIComponent(dbKey)}`);
+            const json = await res.json();
+            if (json.status !== 'success' || !json.data) return;
+            const memos = json.data.memos || [];
+            applyMemoHighlights(memos);
+        } catch (e) {}
+    }
+
+    function applyMemoHighlights(memos) {
+        const body = document.getElementById('articleBody');
+        if (!body || !Array.isArray(memos)) return;
+        const chapterMemos = memos.filter(m => {
+            const cid = parseInt(m.chapter_id) || -1;
+            if (localChapterId > 0 && cid > 0) return cid === localChapterId;
+            if (m.url && currentUrl) return m.url === currentUrl;
+            return false;
+        });
+        if (chapterMemos.length === 0) return;
+        const paragraphs = body.querySelectorAll('p');
+        paragraphs.forEach(p => {
+            const text = (p.innerText || '').trim();
+            if (!text) return;
+            for (const memo of chapterMemos) {
+                const memoText = (memo.text || '').trim();
+                if (memoText && text.includes(memoText)) {
+                    p.classList.add('memo-highlight');
+                    if (memo.id) p.dataset.memoId = String(memo.id);
+                    if (memo.time) p.dataset.memoTime = String(memo.time);
+                    p.dataset.memoText = memoText;
+                    p.dataset.memoComment = memo.comment || '';
+                    break;
+                }
+            }
+        });
     }
 
     document.addEventListener('click', hideContextMenu);
@@ -1161,6 +1274,8 @@ body.dark-mode .context-menu button {
             e.preventDefault();
             memoParagraphText = (p.innerText || '').trim();
             memoSelectionText = (window.getSelection() || '').toString().trim();
+            memoParagraphEl = p;
+            updateMemoMenuState(p);
             showContextMenu(e.clientX, e.clientY);
         });
     }
@@ -1181,9 +1296,45 @@ body.dark-mode .context-menu button {
                 if (q) window.open(`https://www.baidu.com/s?wd=${q}`, '_blank');
             } else if (action === 'memo') {
                 await saveMemo(text);
+            } else if (action === 'unmemo') {
+                await deleteBookMemo(getMemoMetaFromParagraph(memoParagraphEl));
             }
             hideContextMenu();
         });
+    }
+
+    async function deleteBookMemo(memoMeta) {
+        if (!dbKey || !memoMeta) return;
+        try {
+            const res = await fetch('/api/book/memo/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: dbKey,
+                    memo_id: memoMeta.memo_id,
+                    memo_time: memoMeta.memo_time,
+                    memo_text: memoMeta.memo_text
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                if (memoParagraphEl) {
+                    memoParagraphEl.classList.remove('memo-highlight');
+                    delete memoParagraphEl.dataset.memoId;
+                    delete memoParagraphEl.dataset.memoTime;
+                    delete memoParagraphEl.dataset.memoText;
+                    delete memoParagraphEl.dataset.memoComment;
+                }
+                if (memoTagContext && memoTagContext.memo_id === memoMeta.memo_id) {
+                    memoTagContext = null;
+                }
+                showToast('✅ 已取消备忘');
+            } else {
+                showToast(json.message || '❌ 取消备忘失败');
+            }
+        } catch (e) {
+            showToast('❌ 取消备忘失败');
+        }
     }
 
     async function toggleBookMark() {
@@ -1593,6 +1744,7 @@ body.dark-mode .context-menu button {
         
         // 5. [新增] 检查是否已保存到书架
         checkIfSaved();
+        refreshMemoHighlights();
     };
 
     // === 同步核心逻辑 (Check First, Save Later) ===
@@ -2081,7 +2233,57 @@ body.dark-mode .context-menu button {
         }
     }
 
-    function showToast(m) { const x=document.getElementById("toast"); x.className="show"; x.innerText=m; setTimeout(()=>x.className="", 3000); }
+    function showToast(m) { const x=document.getElementById("toast"); x.className="show"; x.textContent=m; setTimeout(()=>x.className="", 3000); }
+    function showToastHtml(html) { const x=document.getElementById("toast"); x.className="show"; x.innerHTML=html; setTimeout(()=>x.className="", 4000); }
+
+    function openMemoTagModal() {
+        if (!memoTagContext || !memoTagContext.key) return;
+        const input = document.getElementById('memoTagInput');
+        const commentInput = document.getElementById('memoCommentInput');
+        const tags = Array.isArray(memoTagContext.tags) ? memoTagContext.tags : [];
+        if (input) input.value = tags.join(' ');
+        if (commentInput) commentInput.value = memoTagContext.comment || '';
+        document.getElementById('memoTagModal').style.display = 'flex';
+    }
+
+    async function saveMemoTags() {
+        if (!memoTagContext || !memoTagContext.key) return;
+        const input = document.getElementById('memoTagInput');
+        const commentInput = document.getElementById('memoCommentInput');
+        const tagsRaw = input ? input.value : '';
+        const comment = commentInput ? commentInput.value.trim() : '';
+        try {
+            const res = await fetch('/api/book/memo/tags', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: memoTagContext.key,
+                    memo_id: memoTagContext.memo_id,
+                    memo_time: memoTagContext.memo_time,
+                    memo_text: memoTagContext.memo_text,
+                    tags: tagsRaw,
+                    comment: comment
+                })
+            });
+            const json = await res.json();
+            if (json.status === 'success') {
+                memoTagContext.tags = Array.isArray(json.tags) ? json.tags : tagsRaw.split(/[\s,]+/).filter(Boolean);
+                memoTagContext.comment = comment;
+                if (memoParagraphEl && memoTagContext.memo_id) {
+                    memoParagraphEl.dataset.memoId = String(memoTagContext.memo_id || '');
+                    memoParagraphEl.dataset.memoTime = String(memoTagContext.memo_time || '');
+                    memoParagraphEl.dataset.memoText = memoTagContext.memo_text || '';
+                    memoParagraphEl.dataset.memoComment = comment;
+                }
+                showToast('✅ 标签已保存');
+                document.getElementById('memoTagModal').style.display = 'none';
+            } else {
+                showToast(json.message || '❌ 标签保存失败');
+            }
+        } catch (e) {
+            showToast('❌ 标签保存失败');
+        }
+    }
 
     function escapeHtml(str) {
         return String(str)

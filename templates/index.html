@@ -703,6 +703,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
 .book-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .book-title { font-size: 17px; font-weight: 700; color: #1f2937; }
 .tag-badge { font-size: 11px; background: #f3f4f6; color: #6b7280; padding: 2px 6px; border-radius: 4px; }
+.memo-tag { display: inline-block; background: #eef2ff; color: #4338ca; font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
 
 .book-meta { font-size: 13px; color: #6b7280; display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
 .book-desc {
@@ -982,6 +983,22 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         </div>
     </div>
 </div>
+
+<div id="memoTagModal" class="p-modal">
+    <div class="p-modal-content" style="max-width: 420px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+            <h3 style="margin:0">🏷️ 编辑备忘标签</h3>
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('memoTagModal')">✕</button>
+        </div>
+        <div style="font-size:12px; color:#666; margin-bottom:8px;">用逗号或空格分隔标签</div>
+        <input id="memoTagInput" class="p-input" placeholder="例如: 设定 伏笔" />
+        <div style="font-size:12px; color:#666; margin: 10px 0 6px;">备忘评论</div>
+        <textarea id="memoCommentInput" class="p-textarea" rows="3" placeholder="可选，写点你的想法..."></textarea>
+        <div style="text-align:right; margin-top:15px;">
+            <button class="p-btn p-btn-sm p-btn-primary" onclick="saveMemoTagEditor()">保存</button>
+        </div>
+    </div>
+</div>
 <!-- 历史记录模态框 -->
 <div id="historyModal" class="p-modal">
     <div class="p-modal-content" style="max-width: 500px;">
@@ -1192,6 +1209,7 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
         let allBooklists = {};
         let redDotsSet = new Set(); // [新增] 全局红点集合
         let pendingBook = { key: '', title: '' };
+        let memoTagEditContext = null;
     
     // 🔥 重命名书签Key
     async function renameKey(oldKey) {
@@ -1358,7 +1376,7 @@ async function openMemoModal(key, title) {
         });
 
         container.innerHTML = '';
-        memos.forEach((item) => {
+        memos.forEach((item, idx) => {
             const row = document.createElement('div');
             row.style.padding = '12px';
             row.style.borderBottom = '1px solid #eee';
@@ -1382,6 +1400,28 @@ async function openMemoModal(key, title) {
             textLine.style.marginTop = '6px';
             textLine.textContent = item.text || '';
 
+            let commentLine = null;
+            if (item.comment) {
+                commentLine = document.createElement('div');
+                commentLine.style.fontSize = '12px';
+                commentLine.style.color = '#6b7280';
+                commentLine.style.marginTop = '6px';
+                commentLine.textContent = `评论: ${item.comment}`;
+            }
+
+            const tags = Array.isArray(item.tags) ? item.tags : [];
+            let tagsLine = null;
+            if (tags.length > 0) {
+                tagsLine = document.createElement('div');
+                tagsLine.style.marginTop = '6px';
+                tags.forEach(tag => {
+                    const chip = document.createElement('span');
+                    chip.className = 'memo-tag';
+                    chip.textContent = tag;
+                    tagsLine.appendChild(chip);
+                });
+            }
+
             const timeLine = document.createElement('div');
             timeLine.style.fontSize = '11px';
             timeLine.style.color = '#999';
@@ -1390,9 +1430,14 @@ async function openMemoModal(key, title) {
 
             left.appendChild(titleLine);
             left.appendChild(textLine);
+            if (commentLine) left.appendChild(commentLine);
+            if (tagsLine) left.appendChild(tagsLine);
             left.appendChild(timeLine);
 
             const right = document.createElement('div');
+            right.style.display = 'flex';
+            right.style.flexDirection = 'column';
+            right.style.gap = '6px';
             if (item.url) {
                 const btn = document.createElement('button');
                 btn.className = 'p-btn p-btn-sm';
@@ -1407,6 +1452,30 @@ async function openMemoModal(key, title) {
                 right.appendChild(btn);
             }
 
+            const editBtn = document.createElement('button');
+            editBtn.className = 'p-btn p-btn-sm';
+            editBtn.style.background = '#eef2ff';
+            editBtn.style.color = '#4338ca';
+            editBtn.style.border = '1px solid #c7d2fe';
+            editBtn.style.padding = '2px 8px';
+            editBtn.textContent = '标签';
+            editBtn.addEventListener('click', () => {
+                openMemoTagEditor(item, key, title, idx);
+            });
+            right.appendChild(editBtn);
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'p-btn p-btn-sm';
+            delBtn.style.background = '#fef2f2';
+            delBtn.style.color = '#b91c1c';
+            delBtn.style.border = '1px solid #fecaca';
+            delBtn.style.padding = '2px 8px';
+            delBtn.textContent = '删除';
+            delBtn.addEventListener('click', () => {
+                deleteBookMemoFromModal(item, key, title, idx);
+            });
+            right.appendChild(delBtn);
+
             row.appendChild(left);
             row.appendChild(right);
             container.appendChild(row);
@@ -1414,6 +1483,84 @@ async function openMemoModal(key, title) {
     } catch (e) {
         console.error(e);
         container.innerHTML = '<div style="color:red; padding:10px;">网络请求出错</div>';
+    }
+}
+
+async function deleteBookMemoFromModal(memo, key, title, memoIndex) {
+    if (!memo || !key) return;
+    if (!confirm('确定取消该备忘吗？')) return;
+    try {
+        const res = await fetch('/api/book/memo/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                key,
+                memo_id: memo.id,
+                memo_index: memoIndex,
+                memo_time: memo.time,
+                memo_text: memo.text || ''
+            })
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+            PureUI.toast('备忘已删除', 'success');
+            openMemoModal(key, title);
+        } else {
+            PureUI.toast(json.message || '删除失败', 'error');
+        }
+    } catch (e) {
+        PureUI.toast('请求失败', 'error');
+    }
+}
+
+function openMemoTagEditor(memo, key, title, memoIndex) {
+    memoTagEditContext = {
+        key,
+        title,
+        memo_id: memo.id,
+        memo_index: memoIndex,
+        memo_time: memo.time,
+        memo_text: memo.text || '',
+        comment: memo.comment || ''
+    };
+    const input = document.getElementById('memoTagInput');
+    const commentInput = document.getElementById('memoCommentInput');
+    const tags = Array.isArray(memo.tags) ? memo.tags : [];
+    if (input) input.value = tags.join(' ');
+    if (commentInput) commentInput.value = memo.comment || '';
+    PureUI.modal.open('memoTagModal');
+}
+
+async function saveMemoTagEditor() {
+    if (!memoTagEditContext || !memoTagEditContext.key) return;
+    const input = document.getElementById('memoTagInput');
+    const commentInput = document.getElementById('memoCommentInput');
+    const tagsRaw = input ? input.value : '';
+    const comment = commentInput ? commentInput.value.trim() : '';
+    try {
+        const res = await fetch('/api/book/memo/tags', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                key: memoTagEditContext.key,
+                memo_id: memoTagEditContext.memo_id,
+                memo_index: memoTagEditContext.memo_index,
+                memo_time: memoTagEditContext.memo_time,
+                memo_text: memoTagEditContext.memo_text,
+                tags: tagsRaw,
+                comment: comment
+            })
+        });
+        const json = await res.json();
+        if (json.status === 'success') {
+            PureUI.toast('标签已保存', 'success');
+            PureUI.modal.close('memoTagModal');
+            openMemoModal(memoTagEditContext.key, memoTagEditContext.title);
+        } else {
+            PureUI.toast(json.message || '标签保存失败', 'error');
+        }
+    } catch (e) {
+        PureUI.toast('请求失败', 'error');
     }
 }
 

@@ -537,6 +537,16 @@ def add_book_memo():
     chapter_title = data.get('chapter_title', '')
     url = data.get('url', '')
 
+    def normalize_memo_tags(tags_raw):
+        if not tags_raw:
+            return []
+        if isinstance(tags_raw, list):
+            items = tags_raw
+        else:
+            items = re.split(r'[\s,]+', str(tags_raw))
+        tags = [t.strip() for t in items if t and t.strip()]
+        return list(dict.fromkeys(tags))
+
     if not k or not memo_text:
         return jsonify({"status": "error", "message": "Missing key or text"}), 400
 
@@ -545,16 +555,159 @@ def add_book_memo():
         return jsonify({"status": "error", "message": "Book not found"}), 404
 
     memos = book_data['value'].get('memos', [])
+    memo_id = int(time.time() * 1000)
+    tags = normalize_memo_tags(data.get('tags'))
     memos.append({
+        "id": memo_id,
         "chapter_id": int(chapter_id) if chapter_id is not None else -1,
         "chapter_title": chapter_title or '',
         "text": memo_text,
         "url": url,
+        "tags": tags,
+        "comment": (data.get('comment') or '').strip(),
         "time": int(time.time())
     })
 
     managers.db.update(k, {"memos": memos})
-    return jsonify({"status": "success", "count": len(memos)})
+    return jsonify({"status": "success", "count": len(memos), "memo_id": memo_id, "tags": tags})
+
+@core_bp.route('/api/book/memo/tags', methods=['POST'])
+@login_required
+def update_book_memo_tags():
+    """更新书籍备忘标签"""
+    data = request.json or {}
+    k = data.get('key')
+    memo_id = data.get('memo_id')
+    memo_index = data.get('memo_index')
+    memo_time = data.get('memo_time')
+    memo_text = (data.get('memo_text') or '').strip()
+
+    def normalize_memo_tags(tags_raw):
+        if not tags_raw:
+            return []
+        if isinstance(tags_raw, list):
+            items = tags_raw
+        else:
+            items = re.split(r'[\s,]+', str(tags_raw))
+        tags = [t.strip() for t in items if t and t.strip()]
+        return list(dict.fromkeys(tags))
+
+    if not k:
+        return jsonify({"status": "error", "message": "Missing key"}), 400
+
+    book_data = managers.db.get_raw_book(managers.get_current_user(), k)
+    if not book_data or 'value' not in book_data:
+        return jsonify({"status": "error", "message": "Book not found"}), 404
+
+    memos = book_data['value'].get('memos', [])
+    target_idx = None
+
+    if memo_id is not None:
+        try:
+            memo_id = int(memo_id)
+        except (TypeError, ValueError):
+            memo_id = None
+        if memo_id is not None:
+            for i, memo in enumerate(memos):
+                try:
+                    if int(memo.get('id', -1)) == memo_id:
+                        target_idx = i
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+    if target_idx is None and memo_index is not None:
+        try:
+            memo_index = int(memo_index)
+        except (TypeError, ValueError):
+            memo_index = None
+        if memo_index is not None and 0 <= memo_index < len(memos):
+            target_idx = memo_index
+
+    if target_idx is None and memo_time is not None and memo_text:
+        try:
+            memo_time = int(memo_time)
+        except (TypeError, ValueError):
+            memo_time = None
+        if memo_time is not None:
+            for i, memo in enumerate(memos):
+                if memo.get('time') == memo_time and (memo.get('text') or '').strip() == memo_text:
+                    target_idx = i
+                    break
+
+    if target_idx is None:
+        return jsonify({"status": "error", "message": "Memo not found"}), 404
+
+    tags = normalize_memo_tags(data.get('tags'))
+    comment = (data.get('comment') or '').strip()
+    if not memos[target_idx].get('id'):
+        memos[target_idx]['id'] = int(time.time() * 1000)
+    memos[target_idx]['tags'] = tags
+    memos[target_idx]['comment'] = comment
+
+    managers.db.update(k, {"memos": memos})
+    return jsonify({"status": "success", "memo_id": memos[target_idx]['id'], "tags": tags})
+
+@core_bp.route('/api/book/memo/delete', methods=['POST'])
+@login_required
+def delete_book_memo():
+    """删除书籍备忘"""
+    data = request.json or {}
+    k = data.get('key')
+    memo_id = data.get('memo_id')
+    memo_index = data.get('memo_index')
+    memo_time = data.get('memo_time')
+    memo_text = (data.get('memo_text') or '').strip()
+
+    if not k:
+        return jsonify({"status": "error", "message": "Missing key"}), 400
+
+    book_data = managers.db.get_raw_book(managers.get_current_user(), k)
+    if not book_data or 'value' not in book_data:
+        return jsonify({"status": "error", "message": "Book not found"}), 404
+
+    memos = book_data['value'].get('memos', [])
+    target_idx = None
+
+    if memo_id is not None:
+        try:
+            memo_id = int(memo_id)
+        except (TypeError, ValueError):
+            memo_id = None
+        if memo_id is not None:
+            for i, memo in enumerate(memos):
+                try:
+                    if int(memo.get('id', -1)) == memo_id:
+                        target_idx = i
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+    if target_idx is None and memo_index is not None:
+        try:
+            memo_index = int(memo_index)
+        except (TypeError, ValueError):
+            memo_index = None
+        if memo_index is not None and 0 <= memo_index < len(memos):
+            target_idx = memo_index
+
+    if target_idx is None and memo_time is not None and memo_text:
+        try:
+            memo_time = int(memo_time)
+        except (TypeError, ValueError):
+            memo_time = None
+        if memo_time is not None:
+            for i, memo in enumerate(memos):
+                if memo.get('time') == memo_time and (memo.get('text') or '').strip() == memo_text:
+                    target_idx = i
+                    break
+
+    if target_idx is None:
+        return jsonify({"status": "error", "message": "Memo not found"}), 404
+
+    removed = memos.pop(target_idx)
+    managers.db.update(k, {"memos": memos})
+    return jsonify({"status": "success", "memo_id": removed.get('id')})
 
 @core_bp.route('/api/book/find', methods=['GET'])
 @login_required
