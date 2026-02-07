@@ -162,13 +162,13 @@ def schedule_auto_check():
                                 remote_title = latest_chap.get('title', '')
                                 
                                 # [核心修复] 优先解析自然序号 (和 core_bp.py 保持一致)
-                                  remote_seq = parse_chapter_id(remote_title)
-                                  if remote_seq <= 0:
-                                      error("Server", f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}")
-                                      continue
+                                remote_seq = parse_chapter_id(remote_title)
+                                if remote_seq <= 0:
+                                    error("Server", f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}")
+                                    continue
 
-                                  # 决策入库 ID
-                                  id_to_save = remote_seq
+                                # 决策入库 ID
+                                id_to_save = remote_seq
                                 
                                 # 调试打印
                                 # print(f"   [Check] {key}: Seq={remote_seq} -> Save={id_to_save}")
