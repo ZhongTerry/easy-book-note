@@ -147,10 +147,7 @@ def schedule_auto_check():
                             cached_toc = managers.cache.get(toc_url)
                             if cached_toc and cached_toc.get('chapters'):
                                 last_chap = cached_toc['chapters'][-1]
-                                cached_id = last_chap.get('id')
-                                # 如果 id 不存在或异常，尝试从标题解析
-                                if not cached_id or cached_id <= 0:
-                                    cached_id = parse_chapter_id(last_chap.get('title', ''))
+                                cached_id = parse_chapter_id(last_chap.get('title', ''))
                                 
                                 # 取大者作为基准
                                 if cached_id > local_id:
@@ -165,25 +162,16 @@ def schedule_auto_check():
                                 remote_title = latest_chap.get('title', '')
                                 
                                 # [核心修复] 优先解析自然序号 (和 core_bp.py 保持一致)
-                                remote_seq = parse_chapter_id(remote_title)
-                                raw_id = latest_chap.get('id', 0)
-                                if isinstance(raw_id, str) and not raw_id.isdigit():
-                                    raw_id = 0
-                                raw_id = int(raw_id)
-                                
-                                # 🔥 严格判断：只信小于 10000 的 raw_id（防止数据库 ID 被误认为章节号）
-                                if remote_seq == -1 and 0 < raw_id < 10000:
-                                     remote_seq = raw_id
-                                elif remote_seq == -1:
-                                     # 如果解析不出章节号，且 raw_id 太大或为 0，直接跳过此次检查
-                                     error("Server", f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}, raw_id={raw_id}")
-                                     continue
+                                  remote_seq = parse_chapter_id(remote_title)
+                                  if remote_seq <= 0:
+                                      error("Server", f"   ⚠️ [{key}] 无法识别章节号: title={remote_title}")
+                                      continue
 
-                                # 决策入库 ID
-                                id_to_save = remote_seq if remote_seq > 0 else raw_id
+                                  # 决策入库 ID
+                                  id_to_save = remote_seq
                                 
                                 # 调试打印
-                                # print(f"   [Check] {key}: Seq={remote_seq}, Raw={raw_id} -> Save={id_to_save}")
+                                # print(f"   [Check] {key}: Seq={remote_seq} -> Save={id_to_save}")
 
                                 has_u = False
                                 if id_to_save > local_id:

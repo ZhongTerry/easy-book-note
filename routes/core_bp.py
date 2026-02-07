@@ -389,37 +389,24 @@ def read_mode():
         if k and page_type != 'toc':
             read_title = data.get('title', '')
             real_id = calculate_real_chapter_id(k, u, read_title)
-            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-            old_id = -1
-            if book_data and 'value' in book_data:
-                old_id = book_data['value'].get('last_read_index', -1)
-
-            if real_id > 0 and old_id > 0 and real_id < old_id:
-                info("Read Sync", f"跳过旧章节同步 (当前 {real_id} < 已读 {old_id}): {k}")
-            else:
-                managers.db.update(k, u)
-                if real_id > 0:
-                    try:
-                        import json
-                        meta_key = f"{k}:meta"
-                        old_meta_str = managers.db.get_val(meta_key)
-                        meta = json.loads(old_meta_str) if old_meta_str else {}
-                        meta['chapter_id'] = real_id
-                        meta['updated_at'] = int(time.time())
-                        managers.db.update(meta_key, json.dumps(meta))
-                    except Exception as e:
-                        error("Read Sync", f"Meta save error: {e}")
+            managers.db.update(k, u)
+            if real_id > 0:
+                try:
+                    import json
+                    meta_key = f"{k}:meta"
+                    old_meta_str = managers.db.get_val(meta_key)
+                    meta = json.loads(old_meta_str) if old_meta_str else {}
+                    meta['chapter_id'] = real_id
+                    meta['updated_at'] = int(time.time())
+                    managers.db.update(meta_key, json.dumps(meta))
+                except Exception as e:
+                    error("Read Sync", f"Meta save error: {e}")
 
         # 计算 ID
         current_chapter_id = -1
         if data.get('title'):
             current_chapter_id = parse_chapter_id(data['title'])
         
-        # 网页版 URL 兜底 ID
-        if current_chapter_id <= 0 and not u.startswith('epub:'):
-            match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', u.split('?')[0])
-            if match: current_chapter_id = int(match.group(1))
-
         # [V2 增强] 自动保存阅读进度与序号到 SQLite
         if k and current_chapter_id > 0:
             # [核心修复] 实现进度锁定：仅在阅读到更后的章节时才更新主进度
@@ -903,18 +890,7 @@ def update():
     if is_manual and do_resolve and hasattr(crawler, 'resolve_start_url'):
         final_value = crawler.resolve_start_url(value)
 
-    # [核心修复] 实现进度锁定逻辑：
-    # 如果不是手动更新（即来自阅读页自动同步），则只允许章节序号单调递增
     real_id = calculate_real_chapter_id(key, final_value, title)
-    book_data = managers.db.get_raw_book(managers.get_current_user(), key)
-    old_id = -1
-    if book_data and 'value' in book_data:
-        old_id = book_data['value'].get('last_read_index', -1)
-    
-    if not is_manual and real_id > 0 and old_id > 0 and real_id < old_id:
-        info("Sync", f"跳过旧章节同步 (当前 {real_id} < 已读 {old_id}): {key}")
-        # 返回成功但实质跳过数据库写入
-        return jsonify({"status": "success", "message": "已锁定至最大章节进度"})
 
     # 1. 保存 URL (这是基础 KV 记录)
     res = managers.db.update(key, final_value)
@@ -1001,12 +977,6 @@ def api_switch_source():
              current_id = parse_chapter_id(cached_page['title'])
         
         if current_id <= 0:
-             # 尝试正则
-             import re
-             match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
-             if match: current_id = int(match.group(1))
-
-        if current_id <= 0:
             return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
 
         # 3. 执行换源
@@ -1088,9 +1058,6 @@ def api_source_list():
 
     # === 获取当前章节 ID ===
     current_id = parse_chapter_id(frontend_title)
-    if current_id <= 0:
-         match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
-         if match: current_id = int(match.group(1))
     
     # if current_id <= 0:
     #    return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
@@ -1385,10 +1352,12 @@ def _worker_check_update(book_key, current_url, callback=None, username=None):
             managers.db.update(book_key, update_payload, username=username)
 
         # === 5. 更新追更管理器 ===
+        latest_title = latest_chap.get('title') or latest_chap.get('name') or ""
+        latest_id = parse_chapter_id(latest_title)
         save_data = {
-            "latest_title": latest_chap.get('title') or latest_chap.get('name'),
+            "latest_title": latest_title,
             "latest_url": latest_chap['url'],
-            "latest_id": latest_chap.get('id', -1),
+            "latest_id": latest_id if latest_id > 0 else -1,
             "toc_url": toc_url
         }
         managers.update_manager.set_update(book_key, save_data, username=username)
@@ -1402,10 +1371,13 @@ def _worker_check_update(book_key, current_url, callback=None, username=None):
         }
         
         # A. 获取当前阅读章节 ID
-        current_id = parse_chapter_id(current_url)
-        if current_id <= 0:
-            match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
-            if match: current_id = int(match.group(1))
+        current_id = -1
+        book_data = managers.db.get_full_data(book_key, username=username) or {}
+        if isinstance(book_data, dict):
+            current_id = book_data.get('last_read_index', -1)
+            if current_id <= 0:
+                current_title = book_data.get('last_read_title', '')
+                current_id = parse_chapter_id(current_title)
         
         latest_id = save_data['latest_id']
         
@@ -1517,9 +1489,7 @@ def api_get_updates_status():
         current_id = -1
         # cached_page = managers.cache.get(current_url) 
         
-        match = re.search(r'/(\d+)(?:_\d+)?(?:\.html)?$', current_url)
-        if match: current_id = int(match.group(1))
-
+        current_id = val_obj.get('last_read_index', -1) if isinstance(val_obj, dict) else -1
         if current_id <= 0: continue 
 
         # === Step 2: 获取最新章节信息 (Logic Branching) ===
@@ -1651,11 +1621,6 @@ def api_subscribe():
                     local_last_chap = cached_toc['chapters'][-1]
                     local_title = local_last_chap.get('title', '')
                     local_seq = parse_chapter_id(local_title)
-                    # 如果标题解析失败，尝试用原始ID (针对番茄等特殊源)
-                    if local_seq == -1 and 'id' in local_last_chap:
-                        # 注意：这里如果是番茄的长ID，后面会在比较环节处理
-                        pass 
-                    
                     info("Check", f"本地缓存TOC命中: 最后一章 {local_title} -> {local_seq}")
 
                 # 策略B (兜底)：如果完全没有TOC缓存，才退化为使用阅读进度
@@ -1679,21 +1644,16 @@ def api_subscribe():
                 latest_data = crawler.get_latest_chapter(toc_url, no_cache=True)
                 remote_seq = -1
                 remote_title = "未知"
-                remote_id = -1
                 
                 if latest_data:
                     remote_title = latest_data.get('title', '')
-                    remote_id = latest_data.get('id')
                     remote_seq = parse_chapter_id(remote_title)
-                    if remote_seq == -1 and isinstance(latest_data.get('id'), int):
-                         remote_seq = latest_data['id']
-                    
-                    # [核心修复] 决定入库的 ID
-                    # 如果能解析出序号(如 1704)，必须存序号，否则会导致前端计算出几亿的差值
-                    # 只有解析失败时，才存原始 ID
-                    id_to_save = remote_seq if remote_seq > 0 else remote_id;
-                    
-                    info("System", f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq} (原始ID: {remote_id})")
+                    if remote_seq <= 0:
+                        error("System", f"[Check] 无法识别章节号，跳过保存: {remote_title}")
+                        return
+
+                    id_to_save = remote_seq
+                    info("System", f"[Check] 远程获取成功: {remote_title} -> 序号 {remote_seq}")
                 else:
                     return
 
@@ -1712,7 +1672,7 @@ def api_subscribe():
                 elif local_title != "未知" and local_title != remote_title:
                      has_update = True
                      # 如果是番茄源长ID场景，可能走到这里
-                     info("Check", f"标题/ID 变动触发更新: {local_title} != {remote_title}")
+                     info("Check", f"标题变动触发更新: {local_title} != {remote_title}")
 
                 if has_update:
                      # [修复] 传入 id_to_save 而不是 remote_id
@@ -1790,13 +1750,10 @@ def api_manual_check():
         
         remote_title = latest_data.get('title', '')
         remote_seq = parse_chapter_id(remote_title)
-        raw_id = latest_data.get('id', 0)
-        
-        # 严格判断章节号
-        if remote_seq == -1 and 0 < raw_id < 10000:
-            remote_seq = raw_id
-        
-        id_to_save = remote_seq if remote_seq > 0 else raw_id
+        if remote_seq <= 0:
+            return jsonify({"status": "error", "msg": "无法识别章节号"})
+
+        id_to_save = remote_seq
         has_update = id_to_save > local_seq if local_seq > 0 else False
         
         # 更新数据库状态
