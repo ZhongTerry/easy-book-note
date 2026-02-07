@@ -389,8 +389,8 @@ def read_mode():
         if k and page_type != 'toc':
             read_title = data.get('title', '')
             real_id = calculate_real_chapter_id(k, u, read_title)
-            managers.db.update(k, u)
             if real_id > 0:
+                managers.db.update(k, u)
                 try:
                     import json
                     meta_key = f"{k}:meta"
@@ -401,6 +401,8 @@ def read_mode():
                     managers.db.update(meta_key, json.dumps(meta))
                 except Exception as e:
                     error("Read Sync", f"Meta save error: {e}")
+            else:
+                info("Read Sync", f"未识别章节号，跳过更新: {k}")
 
         # 计算 ID
         current_chapter_id = -1
@@ -891,6 +893,10 @@ def update():
         final_value = crawler.resolve_start_url(value)
 
     real_id = calculate_real_chapter_id(key, final_value, title)
+
+    if real_id <= 0:
+        info("Sync", f"未识别章节号，跳过更新: {key}")
+        return jsonify({"status": "success", "message": "未识别章节号，已跳过更新"})
 
     # 1. 保存 URL (这是基础 KV 记录)
     res = managers.db.update(key, final_value)
