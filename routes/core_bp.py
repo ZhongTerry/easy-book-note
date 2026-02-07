@@ -371,10 +371,10 @@ def read_mode():
 
     # 5. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
+        page_type = detect_page_type(data) if data else 'unknown'
+
         # [优化] 记录历史前先检测页面类型，目录页不记录
         if k and data.get('title'):
-            # 检测页面类型，只有章节页才记录历史
-            page_type = detect_page_type(data)
             if page_type != 'toc':  # 只记录章节页，不记录目录页
                 # [关键修复] 检查 key 是否存在于数据库，避免记录不存在的 key
                 if managers.db.get_raw_book(managers.get_current_user(), k):
@@ -384,6 +384,31 @@ def read_mode():
                     warn("History", f"跳过不存在的 key: {k}")
             else:
                 warn("History", f"跳过目录页历史记录: {data.get('title')}")
+
+        # [新增] 阅读时也同步更新 get_value 的 value (URL) 和 meta.chapter_id
+        if k and page_type != 'toc':
+            read_title = data.get('title', '')
+            real_id = calculate_real_chapter_id(k, u, read_title)
+            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
+            old_id = -1
+            if book_data and 'value' in book_data:
+                old_id = book_data['value'].get('last_read_index', -1)
+
+            if real_id > 0 and old_id > 0 and real_id < old_id:
+                info("Read Sync", f"跳过旧章节同步 (当前 {real_id} < 已读 {old_id}): {k}")
+            else:
+                managers.db.update(k, u)
+                if real_id > 0:
+                    try:
+                        import json
+                        meta_key = f"{k}:meta"
+                        old_meta_str = managers.db.get_val(meta_key)
+                        meta = json.loads(old_meta_str) if old_meta_str else {}
+                        meta['chapter_id'] = real_id
+                        meta['updated_at'] = int(time.time())
+                        managers.db.update(meta_key, json.dumps(meta))
+                    except Exception as e:
+                        error("Read Sync", f"Meta save error: {e}")
 
         # 计算 ID
         current_chapter_id = -1
