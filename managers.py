@@ -51,7 +51,6 @@ class BaseJsonManager:
             row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type=?", (u, self.module_type)).fetchone()
             if row and row[0]: return json.loads(row[0])
         except Exception as e:
-            # print(f"DB Load Error ({self.module_type}): {e}")
             pass
         return {}
 

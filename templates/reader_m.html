@@ -51,22 +51,35 @@
             -webkit-overflow-scrolling: touch;
             padding: calc(20px + var(--safe-top)) 20px calc(30px + var(--safe-bottom));
             scroll-behavior: smooth;
+            background-color: var(--bg);
         }
         #read-viewport::-webkit-scrollbar { display: none; }
 
         article { max-width: 800px; margin: 0 auto; }
-        article h1 { font-size: 1.4em; margin: 40px 0; font-weight: 700; line-height: 1.3; }
+        article h1 { font-size: 1.4em; margin: 40px 0; font-weight: 700; line-height: 1.3; color: var(--text); }
         article p {
             font-size: var(--font-size);
             line-height: var(--line-height);
             margin-bottom: 1em;
             text-align: justify;
             text-indent: 2em;
+            color: var(--text);
         }
 
         .mini-footer {
             margin-top: 40px; font-size: 12px; color: var(--text-sec);
             display: flex; justify-content: space-between; align-items: center; opacity: 0.8;
+        }
+        
+        /* 顶部菜单标题样式 */
+        .top-menu-title {
+            font-size: 14px;
+            font-weight: 600;
+            max-width: 70%;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            color: var(--text);
         }
 
         /* === 4. 菜单栏 === */
@@ -77,6 +90,11 @@
             z-index: 100;
             transition: transform 0.25s cubic-bezier(0.165, 0.84, 0.44, 1);
             border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }
+        
+        .menu-bar i {
+            color: var(--text);
         }
 
         .top-menu {
@@ -122,7 +140,7 @@
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             font-size: 10px; color: var(--text); gap: 4px; flex: 1; height: 100%;
         }
-        .func-item i { font-size: 22px; display: flex; align-items: center; height: 24px; }
+        .func-item i { font-size: 22px; display: flex; align-items: center; height: 24px; color: var(--text); }
 
         /* 进度条优化 */
         .progress-bar-wrap {
@@ -163,6 +181,7 @@
             padding: 20px; font-weight: bold; border-bottom: 1px solid var(--border);
             padding-top: calc(20px + var(--safe-top)); font-size: 18px;
             display: flex; justify-content: space-between; align-items: center;
+            color: var(--text);
         }
 
         /* 目录刷新按钮 */
@@ -187,8 +206,10 @@
         .drawer-item {
             padding: 15px 20px; border-bottom: 1px solid var(--border); font-size: 14px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: var(--text);
         }
-        .drawer-item.active { color: var(--accent); font-weight: bold; background: rgba(0,0,0,0.02); }
+        .drawer-item.active { color: var(--accent); font-weight: bold; background: rgba(128,128,128,0.1); }
+        body.theme-dark .drawer-item.active { background: rgba(255,255,255,0.05); }
 
         /* === 6. 设置面板 === */
         .settings-box {
@@ -198,15 +219,15 @@
         .settings-box.show { display: flex; }
         .opt-row { display: flex; justify-content: space-between; align-items: center; }
         .font-btn-group { display: flex; border: 1px solid var(--border); border-radius: 20px; overflow: hidden; }
-        .font-btn { padding: 8px 25px; background: transparent; border: none; font-size: 16px; }
-        .font-btn:active { background: rgba(0,0,0,0.05); }
+        .font-btn { padding: 8px 25px; background: transparent; border: none; font-size: 16px; color: var(--text); }
+        .font-btn:active { background: rgba(128,128,128,0.1); }
         .theme-circle { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: center; }
         .theme-circle.active::after { content: ""; width: 12px; height: 12px; background: var(--accent); border-radius: 50%; }
         
         .page-nav-area { margin-top: 40px; display: flex; gap: 15px; }
         .page-btn {
             flex: 1; text-align: center; padding: 12px 0; border-radius: 8px;
-            background: #f5f5f5; color: var(--text); text-decoration: none; font-size: 14px;
+            background: var(--border); color: var(--text); text-decoration: none; font-size: 14px;
         }
         .page-btn.next { background: var(--accent); color: #fff; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
 
@@ -411,7 +432,7 @@
     <!-- 顶部菜单 -->
     <div class="menu-bar top-menu">
         <i class="ri-arrow-left-line" style="font-size:24px; padding:10px;" onclick="location.href='/'"></i>
-        <div style="font-size:14px; font-weight:600; max-width: 70%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">{{ db_key }}: {{ article.title }}</div>
+        <div class="top-menu-title" id="top-menu-title">{{ db_key }}: {{ article.title }}</div>
         
         <div style="display:flex; gap:5px;">
             <i class="ri-refresh-line" style="font-size:22px; padding:10px;" onclick="forceRefresh()"></i>
@@ -450,7 +471,7 @@
                         {% if is_marked %}📌 已标记{% else %}📌 标记{% endif %}
                     </button>
                     
-                    <button class="p-btn p-btn-sm" onclick="jumpToSource()" style="background:#f0f0f0; color:#666;">🔗 原文</button>
+                    <button class="p-btn p-btn-sm" onclick="jumpToSource()" style="background:var(--border); color:var(--text);">🔗 原文</button>
                 </div>
             </div>
         </div>
@@ -1417,6 +1438,10 @@
                  document.title = data.title;
                  const h1 = document.getElementById('chapter-title');
                  if(h1) h1.textContent = data.title;
+                 
+                 // 更新顶部菜单栏标题
+                 const topMenuTitle = document.getElementById('top-menu-title');
+                 if(topMenuTitle) topMenuTitle.textContent = dbKey + ": " + data.title;
                  
                  const textDiv = document.getElementById('article-text');
                  if(textDiv) textDiv.innerHTML = data.content.map(p => `<p>${p}</p>`).join('');

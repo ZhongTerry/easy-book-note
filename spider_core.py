@@ -217,10 +217,8 @@ class AdapterManager:
                                         pass
                                         
                                 except Exception as e:
-                                    # print(f"    ⚠️ 尝试实例化 {n} 失败: {e}")
                                     pass
                             else:
-                                # print(f"    ⚠️ {n} 不是可调用的类，跳过")
                                 pass
                     
                     if not found_in_file:

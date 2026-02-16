@@ -1,38 +1,42 @@
-# === dbserver.py (修复版) ===
+"""NoteDB - 主服务器应用
+轻量级在线小说阅读系统
+"""
 import os
-from dotenv import load_dotenv # 1. 引入这个库
-
-# 2. 【关键】必须在导入其他本地模块（如 routes, managers）之前加载 .env
-# 否则 routes/core_bp.py 初始化时读不到环境变量
-load_dotenv() 
+import json
 import sqlite3
-from flask import Flask, render_template, request, jsonify, session
-from datetime import timedelta
 import threading
 import time
-from spider_core import crawler_instance
-# 导入配置
-from shared import USER_DATA_DIR, debug, info, warn, error
+import random
+from datetime import timedelta
+from dotenv import load_dotenv
+from flask import Flask, request, jsonify, session, render_template
+
+# 必须在导入本地模块前加载环境变量
+load_dotenv()
+
+from spider_core import crawler_instance, parse_chapter_id
+from shared import USER_DATA_DIR, info, warn, error
+from config import SESSION_LIFETIME_DAYS, SESSION_COOKIE_NAME
 import managers
-import json
-# 导入蓝图 (这时候 .env 已经加载好了，core_bp 能读到正确的 SERVER)
+
+# 导入路由蓝图
 from routes.core_bp import core_bp
 from routes.admin_bp import admin_bp
 from routes.pro_bp import pro_bp
 from routes.cache_bp import cache_bp
-# [新增] 引入解析函数
-from spider_core import parse_chapter_id
 
+# 初始化 Flask 应用
 app = Flask(__name__)
 
-# 这里也能正确读到 KEY 了
+# 配置会话密钥
 secret_key = os.environ.get('FLASK_SECRET_KEY')
 if not secret_key:
     secret_key = os.urandom(32)
-    info("Security", "FLASK_SECRET_KEY 未配置，已使用随机临时密钥（重启后会失效）")
+    info("Security", "FLASK_SECRET_KEY 未配置，使用随机密钥（重启后会失效）")
+
 app.secret_key = secret_key
-app.permanent_session_lifetime = timedelta(days=30)
-app.config['SESSION_COOKIE_NAME'] = 'simplenote_session'
+app.permanent_session_lifetime = timedelta(days=SESSION_LIFETIME_DAYS)
+app.config['SESSION_COOKIE_NAME'] = SESSION_COOKIE_NAME
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
@@ -42,61 +46,55 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
 app.register_blueprint(cache_bp)
 
-# 基础 CSRF 防护：仅校验同源 Origin/Referer（存在时）
 @app.before_request
 def basic_csrf_guard():
-    # [调试] 打印所有请求信息
+    """基础 CSRF 防护：校验同源请求"""
     info("Request", f"{request.method} {request.path} | User: {session.get('user', {}).get('username', 'None')}")
     
-    # [核心] 只拦截非 GET 请求
+    # 只拦截非 GET 请求
     if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and session.get('user'):
         origin = request.headers.get('Origin') or request.headers.get('Referer')
         if origin:
-            # 提取 origin 的 host 部分进行比较
             from urllib.parse import urlparse
             origin_parsed = urlparse(origin)
-            origin_host = origin_parsed.netloc.split(':')[0]  # 去掉端口
-            request_host = request.host.split(':')[0]  # 去掉端口
+            origin_host = origin_parsed.netloc.split(':')[0]
+            request_host = request.host.split(':')[0]
             
-            # 规范化 localhost 和 127.0.0.1（它们是同一个地址）
+            # 规范化本地地址
             def normalize_host(h):
-                if h in ('localhost', '127.0.0.1', '0.0.0.0'):
-                    return 'localhost'
-                return h
+                return 'localhost' if h in ('localhost', '127.0.0.1', '0.0.0.0') else h
             
             if normalize_host(origin_host) != normalize_host(request_host):
-                error("CSRF", f"❌ Blocked: {origin_host} != {request_host}")
-                return jsonify({"status": "error", "msg": "CSRF blocked"}), 403
-        
-        info("CSRF", f"✅ Passed: {request.method} {request.path}")
+                error("CSRF", f"请求被拒: {origin_host} != {request_host}")
+                return jsonify({"status": "error", "msg": "CSRF 验证失败"}), 403
 
-def schedule_cache_cleanup():
-    time.sleep(10)
-    managers.cache.cleanup_expired()
-    while True:
-        time.sleep(86400)
-        managers.cache.cleanup_expired()
-
-threading.Thread(target=schedule_cache_cleanup, daemon=True).start()
-# === 在 dbserver.py ===
-import random
 @app.route('/reader_m')
 def reader_m():
-    """处理/reader_m路由，返回reader_m.html模板页面"""
+    """移动端阅读器页面"""
     return render_template('reader_m.html')
-def schedule_auto_check():
-    """
-    后台线程：每 5 小时检查一次 'book_updates' 表的更新
-    """
-    time.sleep(60) # 启动后等一会再跑
+
+
+def schedule_cache_cleanup():
+    """定时清理过期缓存"""
+    from config import CACHE_CLEANUP_INTERVAL
+    time.sleep(10)  # 启动后稍等
+    managers.cache.cleanup_expired()
     
     while True:
-        info("AutoCheck", "🕒 开始后台追更检查...")
+        time.sleep(CACHE_CLEANUP_INTERVAL)
+        managers.cache.cleanup_expired()
+
+
+def schedule_auto_check():
+    """后台线程：定期检查书籍更新"""
+    from config import AUTO_CHECK_INTERVAL, AUTO_CHECK_RANDOM_SLEEP_MIN, AUTO_CHECK_RANDOM_SLEEP_MAX
+    
+    time.sleep(60)  # 启动后稍等
+    
+    while True:
+        info("AutoCheck", "开始后台追更检查...")
         try:
-            # 1. 扫描 data.sqlite (针对主数据库模式)
-            # 或者扫描 user_data/ 下的所有 .sqlite 文件
             db_files = [f for f in os.listdir(managers.USER_DATA_DIR) if f == 'data.sqlite']
-            
             for db_f in db_files:
                 db_path = os.path.join(managers.USER_DATA_DIR, db_f)
                 try:
@@ -105,12 +103,13 @@ def schedule_auto_check():
                     cursor = conn.cursor()
                     
                     # 检查表是否存在
-                    try: cursor.execute("SELECT * FROM book_updates LIMIT 1")
-                    except: 
+                    try:
+                        cursor.execute("SELECT * FROM book_updates LIMIT 1")
+                    except:
                         conn.close()
                         continue
 
-                    # 获取所有订阅 (V2: 从 books_v2.content 解析)
+                    # 获取所有订阅
                     cursor.execute("SELECT book_key, content, username FROM books_v2")
                     all_books = cursor.fetchall()
                     
@@ -127,9 +126,10 @@ def schedule_auto_check():
                                     "username": b['username'],
                                     "content": c
                                 })
-                        except: continue
+                        except:
+                            continue
 
-                    info("Server", f"[AutoCheck] 发现 {len(tasks)} 个追更任务 (DB: {db_f})")
+                    info("Server", f"发现 {len(tasks)} 个追更任务 (DB: {db_f})")
                     
                     for task in tasks:
                         key = task['book_key']
