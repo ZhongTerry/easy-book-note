@@ -53,6 +53,10 @@
             scroll-behavior: smooth;
             background-color: var(--bg);
         }
+        body.reading-fullscreen #read-viewport {
+            padding-top: calc(8px + var(--safe-top) + 22px);
+            padding-bottom: calc(8px + var(--safe-bottom) + 22px);
+        }
         #read-viewport::-webkit-scrollbar { display: none; }
 
         article { max-width: 800px; margin: 0 auto; }
@@ -132,6 +136,47 @@
         
         body.theme-dark #readingProgressBar {
             opacity: 0.95;
+        }
+
+        .reader-status-strip {
+            position: fixed;
+            left: 0;
+            width: 100%;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            font-size: 11px;
+            color: var(--text-sec);
+            background: color-mix(in srgb, var(--bg) 85%, transparent);
+            backdrop-filter: blur(8px);
+            z-index: 120;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        body.reading-fullscreen .reader-status-strip {
+            opacity: 1;
+        }
+        .reader-status-strip.top {
+            top: 0;
+            padding: var(--safe-top) 14px 0;
+            justify-content: flex-start;
+            border-bottom: 1px solid var(--border);
+        }
+        .reader-status-strip.bottom {
+            bottom: 0;
+            padding: 0 14px var(--safe-bottom);
+            justify-content: space-between;
+            border-top: 1px solid var(--border);
+        }
+        #readerChapterInfo {
+            max-width: 100%;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+        body.menu-active .reader-status-strip {
+            opacity: 0;
         }
 
         /* 功能按钮 */
@@ -352,6 +397,14 @@
 
 <!-- 阅读进度条 -->
 <div id="readingProgressBar"></div>
+
+<div class="reader-status-strip top" id="readerTopStrip">
+    <span id="readerChapterInfo">{{ article.title }}</span>
+</div>
+<div class="reader-status-strip bottom" id="readerBottomStrip">
+    <span id="readerTime">12:00</span>
+    <span id="readerBattery">--%</span>
+</div>
 
     <!-- 同步提示条 -->
     <div id="syncAlert" class="sync-alert">
@@ -735,6 +788,7 @@
     let isMenuOpen = false;
     let isSeeking = false;
     let menuOpenScrollY = 0;
+    let batteryManager = null;
     
     // 初始化配置
     let config = { fontSize: 19, theme: 'white', fontFamily: 'sans' };
@@ -744,6 +798,16 @@
         const saved = localStorage.getItem('reader_v2_cfg');
         if(saved) config = {...config, ...JSON.parse(saved)};
         applyConfig();
+
+        enterReaderFullscreen();
+        initBatteryStatus();
+        updateChapterStrip();
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && !isMenuOpen && document.body.classList.contains('reading-fullscreen')) {
+                requestBrowserFullscreen();
+            }
+        });
         
         updateTime();
         setInterval(updateTime, 60000);
@@ -787,6 +851,10 @@
     // === 1. 智能点击监听 ===
     viewport.addEventListener('click', (e) => {
         if (['A', 'BUTTON', 'INPUT'].includes(e.target.tagName)) return;
+
+        if (!isMenuOpen && document.body.classList.contains('reading-fullscreen')) {
+            requestBrowserFullscreen();
+        }
 
         const width = window.innerWidth;
         const x = e.clientX;
@@ -909,15 +977,76 @@
     }
 
     // === 2. 菜单交互 ===
+    function openMenu() {
+        if (isMenuOpen) return;
+        isMenuOpen = true;
+        exitReaderFullscreen();
+        menuOpenScrollY = viewport.scrollTop;
+        document.body.classList.add('menu-active');
+    }
+
+    function closeMenu({ restoreFullscreen = true } = {}) {
+        if (!isMenuOpen) return;
+        isMenuOpen = false;
+        document.body.classList.remove('menu-active');
+        document.getElementById('settingsBox').classList.remove('show');
+        if (restoreFullscreen) enterReaderFullscreen();
+    }
+
     function toggleMenu() {
-        isMenuOpen = !isMenuOpen;
-        if(isMenuOpen) {
-            menuOpenScrollY = viewport.scrollTop;
-            document.body.classList.add('menu-active');
-        } else {
-            document.body.classList.remove('menu-active');
-            document.getElementById('settingsBox').classList.remove('show');
+        if (isMenuOpen) closeMenu();
+        else openMenu();
+    }
+
+    function enterReaderFullscreen() {
+        document.body.classList.add('reading-fullscreen');
+        requestBrowserFullscreen();
+    }
+
+    function exitReaderFullscreen() {
+        document.body.classList.remove('reading-fullscreen');
+        exitBrowserFullscreen();
+    }
+
+    function requestBrowserFullscreen() {
+        const el = document.documentElement;
+        if (document.fullscreenElement || !el.requestFullscreen) return;
+        el.requestFullscreen().catch(() => {});
+    }
+
+    function exitBrowserFullscreen() {
+        if (!document.fullscreenElement || !document.exitFullscreen) return;
+        document.exitFullscreen().catch(() => {});
+    }
+
+    async function initBatteryStatus() {
+        const batteryEl = document.getElementById('readerBattery');
+        if (!batteryEl) return;
+        if (!navigator.getBattery) {
+            batteryEl.innerText = '--%';
+            return;
         }
+        try {
+            batteryManager = await navigator.getBattery();
+            const syncBattery = () => {
+                if (!batteryManager) return;
+                const pct = Math.round((batteryManager.level || 0) * 100);
+                batteryEl.innerText = `${pct}%${batteryManager.charging ? ' ⚡' : ''}`;
+            };
+            syncBattery();
+            batteryManager.addEventListener('levelchange', syncBattery);
+            batteryManager.addEventListener('chargingchange', syncBattery);
+        } catch (e) {
+            batteryEl.innerText = '--%';
+        }
+    }
+
+    function updateChapterStrip() {
+        const el = document.getElementById('readerChapterInfo');
+        if (!el) return;
+        const title = chapterTitle || document.getElementById('chapter-title')?.innerText || '';
+        const prefix = (localChapterId && localChapterId > 0) ? `第${localChapterId}章 · ` : '';
+        el.innerText = `${prefix}${title}`;
     }
 
     // === 3. 滚动监听 ===
@@ -1106,12 +1235,14 @@
         if (body.classList.contains('drawer-active')) {
             // 关闭
             body.classList.remove('drawer-active');
+            if (!isMenuOpen) enterReaderFullscreen();
         } else {
             // 打开
             body.classList.add('drawer-active');
+            exitReaderFullscreen();
             
             // 如果主菜单开着，关掉它，防止遮挡
-            if(isMenuOpen) toggleMenu(); 
+            if(isMenuOpen) closeMenu({ restoreFullscreen: false }); 
             
             // 首次加载数据
             if(!tocLoaded && tocUrl) {
@@ -1160,6 +1291,7 @@
     }
 
     function openSourceModal(force = false) {
+        exitReaderFullscreen();
         // 1. 纯 Class 操作：添加 .active
         document.getElementById('sourceOverlay').classList.add('active');
         document.getElementById('sourceModal').classList.add('active');
@@ -1193,6 +1325,9 @@
         // 绝对不要去动 style.opacity，那样会留下永久的内联样式！
         document.getElementById('sourceOverlay').classList.remove('active');
         document.getElementById('sourceModal').classList.remove('active');
+        if (!isMenuOpen && !document.body.classList.contains('drawer-active')) {
+            enterReaderFullscreen();
+        }
     }
     async function confirmSwitch(newUrl) {
         await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: newUrl }) });
@@ -1292,7 +1427,14 @@
             }
         });
     }
-    function updateTime() { const d=new Date(); document.getElementById('sys-time').innerText = `${d.getHours().toString().padStart(2,0)}:${d.getMinutes().toString().padStart(2,0)}`; }
+    function updateTime() {
+        const d = new Date();
+        const hhmm = `${d.getHours().toString().padStart(2,0)}:${d.getMinutes().toString().padStart(2,0)}`;
+        const sysTimeEl = document.getElementById('sys-time');
+        const stripTimeEl = document.getElementById('readerTime');
+        if (sysTimeEl) sysTimeEl.innerText = hhmm;
+        if (stripTimeEl) stripTimeEl.innerText = hhmm;
+    }
     function sendHeartbeat() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ is_heartbeat: true, book_key: dbKey }) }); }
     function reportWordCount() { fetch('/api/stats/heartbeat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ words: document.getElementById('article-text').innerText.length, book_key: dbKey }) }); }
 
@@ -1438,6 +1580,7 @@
                  document.title = data.title;
                  const h1 = document.getElementById('chapter-title');
                  if(h1) h1.textContent = data.title;
+                 updateChapterStrip();
                  
                  // 更新顶部菜单栏标题
                  const topMenuTitle = document.getElementById('top-menu-title');
