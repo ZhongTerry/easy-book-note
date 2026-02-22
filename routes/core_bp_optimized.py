@@ -243,7 +243,8 @@ def fetch_content():
         'fanqienovel.com',
         'book.sxgread.com',
         'xbqg77.com',
-        'biquge365.pro'
+        'biquge365.pro',
+        'luoxiawu.com'
     ]
     
     if not validators.validate_url(url, allowed_domains=allowed_domains):

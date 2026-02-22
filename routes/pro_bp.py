@@ -36,7 +36,7 @@ def api_pro_download_book():
         
         if not is_chapter_url:
             # 看起来像目录，先试着抓一下
-            toc = crawler.get_toc(start_url)
+            toc = crawler.get_toc(start_url, no_cache=True)
         
         # 2. 校验逻辑：如果没抓到，或者抓到的章节少于 20 章 (防止误判“最新章节列表”)
         if not toc or len(toc['chapters']) < 20:
@@ -48,7 +48,7 @@ def api_pro_download_book():
                 real_toc_url = page_data['toc_url']
                 info("Pro", f"🎯 定位到真实目录: {real_toc_url}")
                 # 再次尝试抓取目录
-                toc = crawler.get_toc(real_toc_url)
+                toc = crawler.get_toc(real_toc_url, no_cache=True)
             else:
                 error("Pro", "❌ 无法定位目录页，任务终止。")
                 return

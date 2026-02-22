@@ -175,6 +175,7 @@ def is_safe_url(url):
         trusted_domains = [
             '22biqu.com', 'sxgread.com', 'fanqienovel.com',
             'xbqg77.com', 'qidian.com', 'zongheng.com', 'ciweimao.com',
+            'luoxiawu.com',
         ]
         
         for trusted in trusted_domains:
