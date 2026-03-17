@@ -110,7 +110,7 @@ def parse_chapter_id(text):
         
     # 2. 匹配中文数字 (例如: "第十一章")
     # 注意：这里把两、千、万等都加全了
-    match_cn = re.search(r'(?:第)?\s*([零一二两三四五六七八九十百千万]+)\s*[章节回幕]', text)
+    match_cn = re.search(r'(?:第)?\s*([零〇一二两三四五六七八九十百千万]+)\s*[章节回幕]', text)
     if match_cn: 
         return _smart_convert_int(match_cn.group(1))
         
@@ -130,9 +130,14 @@ def _smart_convert_int(s):
     except: pass
 
     # 映射表
-    cn_nums = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, 
+    cn_nums = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, 
                '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
     cn_units = {'十': 10, '百': 100, '千': 1000, '万': 10000}
+
+    # 兼容口语/非规范写法：无单位时按逐位数字拼接
+    # 例如: 一一一 -> 111, 二零四 -> 204
+    if s and all(ch in cn_nums for ch in s):
+        return int(''.join(str(cn_nums[ch]) for ch in s))
 
     # [核心修复] 特殊处理以"十"开头的数字 (如: 十一 => 一十一, 十五 => 一十五)
     if s.startswith('十'):
