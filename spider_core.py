@@ -2499,8 +2499,10 @@ class NovelCrawler:
         
         # 0. 最优先：检查全文缓存（永久缓存）
         try:
-            from managers import fulltext_cache_manager, db
+            import managers
             from flask import session, has_request_context
+            fulltext_cache_manager = getattr(managers, 'fulltext_cache_manager', None)
+            db = getattr(managers, 'db', None)
         except ImportError:
             fulltext_cache_manager = None
             db = None
