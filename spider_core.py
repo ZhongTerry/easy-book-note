@@ -2498,10 +2498,16 @@ class NovelCrawler:
             return None
         
         # 0. 最优先：检查全文缓存（永久缓存）
-        from managers import fulltext_cache_manager, db
-        from flask import session
+        try:
+            from managers import fulltext_cache_manager, db
+            from flask import session, has_request_context
+        except ImportError:
+            fulltext_cache_manager = None
+            db = None
+            session = None
+            has_request_context = lambda: False
         
-        if not no_cache and not url.startswith('epub:') and session and 'user' in session:
+        if not no_cache and not url.startswith('epub:') and fulltext_cache_manager and has_request_context() and session and 'user' in session:
             try:
                 # 尝试从当前用户的书架中找到对应的 book_key
                 # 这需要我们能够从 URL 找到对应的书籍

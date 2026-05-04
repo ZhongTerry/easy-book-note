@@ -490,10 +490,45 @@ async function pollSpeedResults() {
         t.innerHTML = data.users.map(u => `
             <tr>
                 <td><b>${u.username}</b></td>
-                <td><span class="p-tag">${u.role}</span></td>
-                <td><button class="p-btn p-btn-sm" onclick="viewUserDetail('${u.username}')">🔍 详情</button></td>
+                <td>
+                    <select class="p-input p-input-sm" onchange="updateUserRole('${u.username}', this.value)" style="width: auto;">
+                        <option value="user" ${u.role === 'user' ? 'selected' : ''}>普通用户</option>
+                        <option value="pro" ${u.role === 'pro' ? 'selected' : ''}>Pro 会员</option>
+                        <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理员</option>
+                    </select>
+                </td>
+                <td>
+                    <div style="display: flex; gap: 5px;">
+                        <button class="p-btn p-btn-sm" onclick="viewUserDetail('${u.username}')">🔍 详情</button>
+                    </div>
+                </td>
             </tr>
         `).join('');
+    }
+
+    async function updateUserRole(username, role) {
+        if (!confirm(`确定要将用户 ${username} 的权限修改为 ${role} 吗？`)) {
+            loadUsers(); // 恢复原始显示
+            return;
+        }
+        
+        try {
+            const res = await fetch('/api/admin/users', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, role})
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                PureUI?.notify?.success?.('修改成功') || alert('修改成功');
+            } else {
+                alert('修改失败: ' + (data.message || '未知错误'));
+                loadUsers();
+            }
+        } catch (e) {
+            alert('网络错误');
+            loadUsers();
+        }
     }
 
     async function viewUserDetail(username) {
