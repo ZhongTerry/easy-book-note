@@ -2260,12 +2260,26 @@ class NovelCrawler:
         return links
 
     def _standardize_chapters(self, raw_chapters):
-        unique = {c['url']: c for c in raw_chapters}
+        # 记录原始顺序，用于无ID场景
+        for i, c in enumerate(raw_chapters):
+            if 'origin_idx' not in c: c['origin_idx'] = i
+
+        unique = {}
+        for c in raw_chapters:
+            url = c['url']
+            if url not in unique or (not unique[url].get('id') and c.get('id')):
+                unique[url] = c
+        
         processed_list = []
         for c in unique.values():
             raw_title = c.get('title') or c.get('raw_title') or ""
             if any(x in raw_title for x in ['最新章节', '全文阅读', '无弹窗', 'txt下载']) and not re.search(r'\d', raw_title): continue
-            chap_id = parse_chapter_id(raw_title)
+            
+            # 只有在没有预设 ID 时才解析
+            chap_id = c.get('id')
+            if chap_id is None or chap_id <= 0:
+                chap_id = parse_chapter_id(raw_title)
+            
             pure_name = re.sub(r'^(?:第)?\s*[0-9零一二三四五六七八九十百千万]+\s*[章节回]', '', raw_title).strip()
             pure_name = re.sub(r'^\d+\s*\.?\s*', '', pure_name).strip()
             
@@ -2277,7 +2291,10 @@ class NovelCrawler:
             
         numbered = [c for c in processed_list if c['id'] > 0]
         others = [c for c in processed_list if c['id'] <= 0]
-        numbered.sort(key=lambda x: x['id'])
+        
+        # 排序策略：优先按 ID，ID 相同（或都小于等于0）按原始出现顺序
+        numbered.sort(key=lambda x: (x['id'], x.get('origin_idx', 0)))
+        others.sort(key=lambda x: x.get('origin_idx', 0))
         
         if len(numbered) > 10:
             final_chapters = numbered
