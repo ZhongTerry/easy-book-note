@@ -1603,14 +1603,30 @@ class ExportManager:
         self._save_task(task_id)
     
     def _fetch_chapter(self, url, crawler):
-        """抓取单个章节"""
-        data = crawler.run(url)
+        """抓取单个章节（复用正常阅读逻辑，不再依赖 crawler.run 内部的 session 检查）"""
+        # 1. 模拟阅读时的缓存优先逻辑
+        # 尝试从离线管理获取（模拟已加入书架的情况）
+        data = None
+        
+        # 尝试从通用缓存获取
+        from managers import cache
+        data = cache.get(url)
+        
+        if not data:
+            # 2. 如果缓存没有，执行真实爬取
+            # 此时 no_cache 传入 False，允许爬虫内部进行适配选择
+            data = crawler.run(url, no_cache=False)
+            
+            # 3. 爬取成功后存入通用缓存，模拟“点击进入阅读页并自动缓存”的行为
+            if data and data.get('content'):
+                cache.set(url, data)
+        
         if data and data.get('content'):
             return {
                 'title': data.get('title', '无标题'),
                 'content': '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
             }
-        raise Exception("章节内容为空")
+        raise Exception("章节内容为空或爬取失败")
     
     def _cluster_parallel_fetch(self, task_id, chapters, completed, results, delay):
         """集群并行爬取章节"""

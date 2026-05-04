@@ -2497,15 +2497,16 @@ class NovelCrawler:
         if not url:
             return None
         
-        # [优化] 环境监测：区分 Web 请求和后台导出任务
-        is_web_request = False
+        # [优化] 模拟环境检查
         try:
             from flask import session, has_request_context
-            is_web_request = has_request_context() and 'user' in session
-        except: pass
+            # 只有在明确的 Web 会话中才启用全文缓存，避免导出任务（无 Session）报错
+            is_user_reading = has_request_context() and 'user' in session
+        except:
+            is_user_reading = False
 
-        # 0. 最优先：检查全文缓存（仅对 Web 用户阅读请求生效）
-        if is_web_request and not no_cache and not url.startswith('epub:'):
+        # 0. 最优先：检查全文缓存（仅对正常 Web 阅读请求生效）
+        if is_user_reading and not no_cache and not url.startswith('epub:'):
             try:
                 import managers
                 ftcm = getattr(managers, 'fulltext_cache_manager', None)
@@ -2528,11 +2529,14 @@ class NovelCrawler:
         # 1. 其次：检查临时本地缓存
         if not no_cache and not url.startswith('epub:'):
             try:
-                from managers import cache
-                cached_data = cache.get(url)
-                if cached_data:
-                    info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
-                    return cached_data
+                # 动态获取 cache 实例，避免循环导入
+                import managers
+                cache_inst = getattr(managers, 'cache', None)
+                if cache_inst:
+                    cached_data = cache_inst.get(url)
+                    if cached_data:
+                        info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
+                        return cached_data
             except: pass
         
         # 1. [核心去重] 检查是否有正在进行的任务
