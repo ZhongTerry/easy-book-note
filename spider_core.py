@@ -2497,49 +2497,43 @@ class NovelCrawler:
         if not url:
             return None
         
-        # 0. 最优先：检查全文缓存（永久缓存）
+        # [优化] 环境监测：区分 Web 请求和后台导出任务
+        is_web_request = False
         try:
-            import managers
             from flask import session, has_request_context
-            fulltext_cache_manager = getattr(managers, 'fulltext_cache_manager', None)
-            db = getattr(managers, 'db', None)
-        except ImportError:
-            fulltext_cache_manager = None
-            db = None
-            session = None
-            has_request_context = lambda: False
-        
-        if not no_cache and not url.startswith('epub:') and fulltext_cache_manager and has_request_context() and session and 'user' in session:
+            is_web_request = has_request_context() and 'user' in session
+        except: pass
+
+        # 0. 最优先：检查全文缓存（仅对 Web 用户阅读请求生效）
+        if is_web_request and not no_cache and not url.startswith('epub:'):
             try:
-                # 尝试从当前用户的书架中找到对应的 book_key
-                # 这需要我们能够从 URL 找到对应的书籍
-                all_books = db.list_all()
-                if all_books.get('status') == 'success':
-                    for book_key, book_data in all_books.get('data', {}).items():
-                        # 简单匹配：如果这个 URL 可能属于这本书
-                        # 更精确的做法是在 URL 中提取书籍标识
-                        cached_chapter = fulltext_cache_manager.get_chapter_from_cache(
-                            book_key, url
-                        )
-                        if cached_chapter:
-                            info("Crawler", f"🎯 命中全文缓存: {book_key} - {url[:50]}")
-                            return {
-                                'content': cached_chapter['content'].split('\\n'),
-                                'title': cached_chapter['title'],
-                                'book_name': book_key,
-                                'from_fulltext_cache': True
-                            }
-            except Exception as e:
-                # 全文缓存查询失败不影响正常流程
-                pass
-        
+                import managers
+                ftcm = getattr(managers, 'fulltext_cache_manager', None)
+                idb = getattr(managers, 'db', None)
+                if ftcm and idb:
+                    all_books = idb.list_all()
+                    if all_books.get('status') == 'success':
+                        for book_key, book_data in all_books.get('data', {}).items():
+                            cached_chapter = ftcm.get_chapter_from_cache(book_key, url)
+                            if cached_chapter:
+                                info("Crawler", f"🎯 命中全文缓存: {book_key}")
+                                return {
+                                    'content': cached_chapter['content'].split('\\n'),
+                                    'title': cached_chapter['title'],
+                                    'book_name': book_key,
+                                    'from_fulltext_cache': True
+                                }
+            except: pass
+
         # 1. 其次：检查临时本地缓存
-        from managers import cache
         if not no_cache and not url.startswith('epub:'):
-            cached_data = cache.get(url)
-            if cached_data:
-                info("Crawler", f"✅ 命中临时缓存: {url}")
-                return cached_data
+            try:
+                from managers import cache
+                cached_data = cache.get(url)
+                if cached_data:
+                    info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
+                    return cached_data
+            except: pass
         
         # 1. [核心去重] 检查是否有正在进行的任务
         import threading

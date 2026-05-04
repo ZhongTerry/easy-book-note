@@ -1536,50 +1536,47 @@ class ExportManager:
             info("Manager", f"[Export] 🚀 启用集群并行爬取模式（{len(cluster_manager.get_active_nodes())} 个节点在线）")
             results = self._cluster_parallel_fetch(task_id, chapters, completed, results, delay)
         else:
-            info("Export", f"🐢 使用本地并发模式（集群不可用）")
-            # 原有的本地并发逻辑
+            info("Export", f"🐢 使用模拟阅读模式（逐章线性爬取）")
+            # 模拟正常阅读：不再使用线程池并发，而是线性循环抓取
+            # 这样能完全规避并发带来的风控风险，且行为与用户正常翻页高度一致
             pending_chapters = [(i, c) for i, c in enumerate(chapters) if i not in completed]
             
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                future_to_index = {
-                    pool.submit(self._fetch_chapter, c['url'], crawler): i 
-                    for i, c in pending_chapters
-                }
+            for idx, chapter in pending_chapters:
+                # 检查暂停标志
+                if task.get('paused'):
+                    info("Export", f"任务 {task_id} 已暂停")
+                    break
                 
-                for future in as_completed(future_to_index):
-                    # 检查暂停标志
-                    if task.get('paused'):
-                        info("Export", f"任务 {task_id} 已暂停")
-                        # 取消所有未完成的任务
-                        for f in future_to_index:
-                            f.cancel()
-                        break
-                    
-                    idx = future_to_index[future]
-                    try:
-                        results[idx] = future.result()
-                        completed.add(idx)
-                    except Exception as e:
-                        results[idx] = {
-                            'title': chapters[idx].get('name', f'第{idx+1}章'), 
-                            'content': f'抓取失败: {str(e)}'
-                        }
-                        completed.add(idx)
+                try:
+                    # 线性执行，不再 submit 到 pool
+                    results[idx] = self._fetch_chapter(chapter['url'], crawler)
+                    completed.add(idx)
                     
                     # 更新进度
                     task['current'] = len(completed)
                     task['completed_chapters'] = list(completed)
                     task['results'] = results
                     
-                    # 每完成一章添加延迟，防止被封
+                    # 模拟人类阅读延迟：基础延迟 + 随机抖动
                     if delay > 0:
                         import random
-                        actual_delay = delay * random.uniform(0.8, 1.2)  # 随机浮动 ±20%
+                        # 使用正态分布般的随机，让行为更像人
+                        actual_delay = delay * random.uniform(0.7, 1.3)
                         time.sleep(actual_delay)
                     
-                    # 每完成 10 章保存一次
-                    if len(completed) % 10 == 0:
+                    # 每完成 5 章保存一次进度（比之前的 10 章更频繁，降低丢进度风险）
+                    if len(completed) % 5 == 0:
                         self._save_task(task_id)
+                        
+                except Exception as e:
+                    results[idx] = {
+                        'title': chapters[idx].get('name', f'第{idx+1}章'), 
+                        'content': f'抓取失败: {str(e)}'
+                    }
+                    completed.add(idx)
+                    task['current'] = len(completed)
+                    # 报错也要存，防止无限卡在某一章
+                    self._save_task(task_id)
         
         # 如果被暂停，不生成文件
         if task.get('paused'):
