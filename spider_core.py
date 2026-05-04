@@ -2525,7 +2525,11 @@ class NovelCrawler:
         # 0. 最优先：检查全文缓存（仅对正常 Web 阅读请求生效）
         if is_user_reading and not no_cache and not url.startswith('epub:'):
             try:
-                import managers
+                import sys
+                if 'managers' in sys.modules:
+                    managers = sys.modules['managers']
+                else:
+                    import managers
                 ftcm = getattr(managers, 'fulltext_cache_manager', None)
                 idb = getattr(managers, 'db', None)
                 if ftcm and idb:
@@ -2547,7 +2551,11 @@ class NovelCrawler:
         if not no_cache and not url.startswith('epub:'):
             try:
                 # 动态获取 cache 实例，避免循环导入
-                import managers
+                import sys
+                if 'managers' in sys.modules:
+                    managers = sys.modules['managers']
+                else:
+                    import managers
                 cache_inst = getattr(managers, 'cache', None)
                 if cache_inst:
                     cached_data = cache_inst.get(url)
@@ -2627,7 +2635,12 @@ class NovelCrawler:
         实际执行爬取的逻辑（原 run 方法的核心部分）
         """
         # 必须在函数内部导入，防止循环引用
-        from managers import cache
+        import sys
+        if 'managers' in sys.modules:
+            managers = sys.modules['managers']
+        else:
+            import managers
+        cache = getattr(managers, 'cache', None)
         
         # 1. 尝试远程集群爬取 (Pull/Push 模式通用)
         payload = {'url': url}
