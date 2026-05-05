@@ -1457,7 +1457,7 @@ class ExportManager:
                 return task_id
         return None
     
-    def start_export(self, book_name, chapters, crawler_instance, export_format='txt', metadata=None, resume_task_id=None, delay=0.5):
+    def start_export(self, book_name, chapters, crawler_instance, export_format='txt', metadata=None, resume_task_id=None, delay=0.5, book_key=None, username=None):
         """启动导出任务（支持续传）
         
         Args:
@@ -1478,6 +1478,8 @@ class ExportManager:
             
             task = {
                 'book_name': book_name,
+                'book_key': book_key,
+                'username': username,
                 'total': len(chapters),
                 'current': 0,
                 'status': 'running',
@@ -1549,7 +1551,7 @@ class ExportManager:
                 
                 try:
                     # 线性执行，不再 submit 到 pool
-                    results[idx] = self._fetch_chapter(chapter['url'], crawler)
+                    results[idx] = self._fetch_chapter(chapter['url'], crawler, book_key=task.get('book_key'), username=task.get('username'))
                     completed.add(idx)
                     
                     # 更新进度
@@ -1602,18 +1604,33 @@ class ExportManager:
         
         self._save_task(task_id)
     
-    def _fetch_chapter(self, url, crawler):
+    def _fetch_chapter(self, url, crawler, book_key=None, username=None):
         """抓取单个章节（复用正常阅读逻辑，不再依赖 crawler.run 内部的 session 检查）"""
-        # 1. 模拟阅读时的缓存优先逻辑
-        # 尝试从离线管理获取（模拟已加入书架的情况）
         data = None
         
-        # 尝试从通用缓存获取
+        # 1. 优先从全文缓存读取（如果用户之前已经"爬取全书"）
+        if book_key and username:
+            try:
+                from managers import fulltext_cache_manager
+                cached_chapter = fulltext_cache_manager.get_chapter_from_cache(book_key, url, username=username)
+                if cached_chapter:
+                    data = {
+                        'content': cached_chapter['content'].split('\n'),
+                        'title': cached_chapter['title']
+                    }
+                    info("Export", f"命中全文缓存: {url}")
+            except Exception as e:
+                error("Export", f"读取全文缓存失败: {e}")
+
+        # 2. 如果全文缓存没有，尝试从临时通用缓存获取
         from managers import cache
-        data = cache.get(url)
+        if not data:
+            data = cache.get(url)
+            if data:
+                info("Export", f"命中临时缓存: {url}")
         
         if not data:
-            # 2. 如果缓存没有，执行真实爬取
+            # 3. 如果缓存没有，执行真实爬取
             # 此时 no_cache 传入 False，允许爬虫内部进行适配选择
             data = crawler.run(url, no_cache=False)
             

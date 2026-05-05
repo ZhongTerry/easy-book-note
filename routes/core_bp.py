@@ -1915,7 +1915,9 @@ def start_export():
             export_format=export_format,
             metadata=metadata,
             resume_task_id=resume_task_id,
-            delay=delay
+            delay=delay,
+            book_key=key,
+            username=session.get('user', 'guest')
         )
         
         return jsonify({"status": "success", "task_id": task_id})
