@@ -173,9 +173,14 @@ def submit_result():
 @admin_required
 def start_speed_test():
     url = request.json.get('url')
+    test_type = request.json.get('type', 'speedtest') # 获取类型
     if not url: return jsonify({"status": "error", "msg": "URL required"})
     
-    test_id = managers.cluster_manager.start_speed_test(url)
+    if test_type == 'crawl':
+        test_id = managers.cluster_manager.start_crawl_test(url)
+    else:
+        test_id = managers.cluster_manager.start_speed_test(url)
+
     if not test_id:
         return jsonify({"status": "error", "msg": "Redis unavailable"})
         
@@ -476,6 +481,21 @@ def api_admin_clear_cache():
         try: os.remove(os.path.join(CACHE_DIR, f))
         except: pass
     return jsonify({"status": "success", "msg": "Cache cleared"})
+
+@admin_bp.route('/api/admin/cluster/nodes')
+@admin_required
+def get_cluster_nodes():
+    nodes = managers.cluster_manager.get_active_nodes()
+    return jsonify({"status": "success", "nodes": nodes})
+
+@admin_bp.route('/api/admin/cluster/node/toggle', methods=['POST'])
+@admin_required
+def toggle_node():
+    uuid = request.json.get('uuid')
+    disabled = request.json.get('disabled', False)
+    if not uuid: return jsonify({"status": "error", "msg": "UUID required"})
+    managers.cluster_manager.set_node_disabled(uuid, disabled)
+    return jsonify({"status": "success"})
 
 # 渲染管理面板页面
 @admin_bp.route('/admin')

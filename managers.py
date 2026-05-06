@@ -2079,10 +2079,13 @@ class ClusterManager:
         current_count = len(results)
         elapsed = time.time() - start_time
         
+        # 模拟爬虫测试可能需要更久
+        timeout_limit = 15 if test_id.startswith("crawl_") else 5
+
         if current_count >= total_expected:
             state = "finished" # 全齐了
-        elif elapsed > 5:
-            state = "timeout"  # 超过5秒了，强制结束
+        elif elapsed > timeout_limit:
+            state = "timeout"  # 强制结束
         else:
             state = "running"
             
@@ -2093,6 +2096,38 @@ class ClusterManager:
             "elapsed": round(elapsed, 1),
             "data": results
         }
+
+    def start_crawl_test(self, book_url):
+        """[新增] 发布模拟爬虫测试广播 (模拟真实阅读/采集流程)"""
+        if not self.use_redis: return None
+        
+        import uuid
+        import time
+        test_id = "crawl_" + str(uuid.uuid4())[:8]
+        
+        cmd = {
+            "id": test_id,
+            "url": book_url,
+            "type": "crawl_test", # 区别于简单的 speedtest
+            "timestamp": time.time()
+        }
+        
+        active_nodes = [n for n in self.get_active_nodes() if not n.get('disabled')]
+        meta = {
+            "total": len(active_nodes),
+            "start_time": time.time(),
+            "url": book_url,
+            "type": "crawl_test"
+        }
+        
+        self.r.setex(f"crawler:speedtest:meta:{test_id}", 300, json.dumps(meta))
+        self.r.setex("crawler:cmd:speedtest", 60, json.dumps(cmd))
+        
+        self.r.delete(f"crawler:speedtest:dispatched:{test_id}")
+        self.r.delete(f"crawler:speedtest:results:{test_id}")
+        
+        return test_id
+
     def update_heartbeat(self, node_data, real_ip):
         """更新节点心跳"""
         uuid = node_data['uuid']
@@ -2117,7 +2152,7 @@ class ClusterManager:
     # managers.py -> ClusterManager 类
 
     def get_active_nodes(self):
-        """获取所有节点并进行初步清洗"""
+        """获取所有节点并进行初步清洗，增加禁用标记"""
         nodes = []
         if self.use_redis:
             try:
@@ -2128,7 +2163,10 @@ class ClusterManager:
                     vals = self.r.mget(keys)
                     for v in vals:
                         if v:
-                            nodes.append(json.loads(v))
+                            data = json.loads(v)
+                            # 注入禁用状态
+                            data['disabled'] = self.is_node_disabled(data['uuid'])
+                            nodes.append(data)
             except Exception as e:
                 error("Manager", f"❌ [Cluster] Redis Read Error: {e}")
                 return []
@@ -2141,6 +2179,23 @@ class ClusterManager:
         
         return nodes
 
+    def set_node_disabled(self, worker_uuid, disabled=True):
+        """[新增] 设置节点禁用状态"""
+        if not self.use_redis: return
+        key = f"crawler:disabled:{worker_uuid}"
+        if disabled:
+            self.r.set(key, "1")
+        else:
+            self.r.delete(key)
+
+    def is_node_disabled(self, worker_uuid):
+        """[新增] 检查节点是否禁用"""
+        if not self.use_redis: return False
+        try:
+            return self.r.exists(f"crawler:disabled:{worker_uuid}")
+        except:
+            return False
+
     def select_best_node(self, target_url=None):
         """
         [重构] 智能路由算法 (负载 + 区域 + 域名级速度)
@@ -2151,7 +2206,7 @@ class ClusterManager:
         best_node = None
         highest_score = -9999
         
-        # 预先提取域名
+        # [修复] 提取域名用于后续逻辑
         target_domain = None
         if target_url:
             try:
@@ -2164,6 +2219,10 @@ class ClusterManager:
             status = node['status']
             uuid = node['uuid']
             
+            # 0. 禁用检查 [新增]
+            if node.get('disabled'):
+                continue
+
             # 1. 熔断机制：满载不接客
             if status['current_tasks'] >= cfg['max_tasks']: 
                 continue

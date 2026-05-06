@@ -112,27 +112,39 @@
     <!-- admin.html -->
 
 <!-- 在 grid-3 下方或者合适的位置插入 -->
-<div class="p-card">
-    <h3>🚀 全网一键测速</h3>
-    <div style="display:flex; gap:10px; margin-bottom:15px;">
-        <input type="text" id="speedUrl" class="p-input" placeholder="输入测试 URL (例如 https://www.google.com)" value="https://www.baidu.com">
-        <button class="p-btn p-btn-primary" onclick="startSpeedTest()" id="btnSpeed">开始测速</button>
+<div class="grid-2">
+    <div class="p-card">
+        <h3>🚀 全网一键测速 / 模拟爬虫测试</h3>
+        <div style="display:flex; gap:10px; margin-bottom:15px;">
+            <input type="text" id="speedUrl" class="p-input" placeholder="输入测试 URL" value="https://www.baidu.com">
+            <select id="testType" class="p-input" style="width: auto;">
+                <option value="speedtest">基础测速</option>
+                <option value="crawl">模拟爬虫阅读</option>
+            </select>
+            <button class="p-btn p-btn-primary" onclick="startSpeedTest()" id="btnSpeed">开始测试</button>
+        </div>
+        
+        <table class="p-table">
+            <thead>
+                <tr>
+                    <th>节点名称</th>
+                    <th>响应结果</th>
+                    <th>耗时 (ms)</th>
+                    <th>内容预览 / 错误</th>
+                </tr>
+            </thead>
+            <tbody id="speedResults">
+                <tr><td colspan="4" style="text-align:center;color:#999">暂无测试数据</td></tr>
+            </tbody>
+        </table>
     </div>
-    
-    <table class="p-table">
-        <thead>
-            <tr>
-                <th>节点名称</th>
-                <th>区域</th>
-                <th>HTTP 状态</th>
-                <th>耗时 (ms)</th>
-                <th>响应大小</th>
-            </tr>
-        </thead>
-        <tbody id="speedResults">
-            <tr><td colspan="5" style="text-align:center;color:#999">暂无测试数据</td></tr>
-        </tbody>
-    </table>
+
+    <div class="p-card">
+        <h3>⚖️ 自适应权重实时数据</h3>
+        <div id="weightSystemContent" style="font-size: 13px;">
+            <div style="text-align:center; color:#999; padding:20px;">加载中...</div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -143,26 +155,26 @@ let speedTimer = null;
 
 async function startSpeedTest() {
     const url = document.getElementById('speedUrl').value;
+    const type = document.getElementById('testType').value;
     if(!url) return alert("请输入 URL");
     
     const btn = document.getElementById('btnSpeed');
     btn.disabled = true;
-    btn.innerText = "准备中...";
-    document.getElementById('speedResults').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#666">⏳ 指令已下发，等待响应...</td></tr>';
+    btn.innerText = "下发指令中...";
+    document.getElementById('speedResults').innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666">⏳ 指令已下发，等待各个节点模拟阅读响应...</td></tr>';
     
     try {
         const res = await fetch('/api/admin/speedtest/start', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({url})
+            body: JSON.stringify({url, type})
         });
         const json = await res.json();
         
         if (json.status === 'success') {
             currentTestId = json.test_id;
-            // 开始轮询
             if(speedTimer) clearInterval(speedTimer);
-            speedTimer = setInterval(pollSpeedResults, 800); // 0.8秒刷新一次
+            speedTimer = setInterval(pollSpeedResults, 800);
         } else {
             alert("启动失败: " + json.msg);
             resetSpeedBtn();
@@ -176,7 +188,7 @@ async function startSpeedTest() {
 function resetSpeedBtn() {
     const btn = document.getElementById('btnSpeed');
     btn.disabled = false;
-    btn.innerText = "开始测速";
+    btn.innerText = "开始测试";
     if(speedTimer) clearInterval(speedTimer);
 }
 
@@ -188,58 +200,45 @@ async function pollSpeedResults() {
         const json = await res.json();
         
         if (json.status === 'success') {
-            const info = json.result; // 注意：后端包了一层 result
+            const info = json.result;
             const list = info.data;
             const btn = document.getElementById('btnSpeed');
             
-            // 更新按钮状态
-            btn.innerText = `测速中 (${info.received}/${info.total}) ${info.elapsed}s`;
+            btn.innerText = `测试中 (${info.received}/${info.total}) ${info.elapsed}s`;
             
-            // 渲染表格
             if (list.length > 0) {
                 document.getElementById('speedResults').innerHTML = list.map(item => {
-                    let latencyColor = 'green';
-                    if (item.latency > 1000) latencyColor = 'orange';
-                    if (item.latency > 3000 || item.error) latencyColor = 'red';
+                    let latencyColor = item.latency > 1000 ? (item.latency > 3000 ? 'red' : 'orange') : 'green';
                     
-                    const statusDisplay = item.error ? `<span style="color:red">Error</span>` : `<span class="p-tag">${item.status_code}</span>`;
-                    
+                    // 处理预览内容：如果是爬虫测试，显示内容摘要
+                    let preview = '-';
+                    if (item.error) {
+                        preview = `<span style="color:red; font-size:11px;">${item.error}</span>`;
+                    } else if (item.content_preview) {
+                        preview = `<div style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:#666;">${item.content_preview}</div>`;
+                    } else {
+                        preview = `<span style="color:#999;font-size:11px;">Size: ${(item.size/1024).toFixed(1)}KB</span>`;
+                    }
+
                     return `
                     <tr>
-                        <td><b>${item.worker_name}</b></td>
-                        <td><span class="p-badge">${item.region}</span></td>
-                        <td>${statusDisplay}</td>
+                        <td><b>${item.worker_name}</b><br><small style="color:#999">${item.region}</small></td>
+                        <td><span class="p-tag ${item.error?'p-tag-red':'p-tag-blue'}">${item.status_code || 'Err'}</span></td>
                         <td style="color:${latencyColor}; font-weight:bold;">${item.latency} ms</td>
-                        <td>${item.size ? (item.size/1024).toFixed(2) + ' KB' : '-'}</td>
+                        <td>${preview}</td>
                     </tr>
                     `;
                 }).join('');
             }
 
-            // === [核心] 结束判定 ===
             if (info.state === 'finished' || info.state === 'timeout') {
                 clearInterval(speedTimer);
                 btn.disabled = false;
-                
-                if (info.state === 'finished') {
-                    btn.innerText = `✅ 完成 (${info.received}/${info.total})`;
-                    btn.className = "p-btn p-btn-success";
-                } else {
-                    btn.innerText = `⚠️ 超时结束 (${info.received}/${info.total})`;
-                    btn.className = "p-btn p-btn-warning";
-                }
-                
-                // 3秒后恢复按钮原始状态
-                setTimeout(() => {
-                    btn.innerText = "开始测速";
-                    btn.className = "p-btn p-btn-primary";
-                }, 3000);
+                btn.innerText = info.state === 'finished' ? "测试完成" : "部分超时";
+                setTimeout(() => { btn.innerText = "开始测试"; }, 3000);
             }
         }
-    } catch(e) {
-        console.error(e);
-        // resetSpeedBtn(); // 遇到网络错误先别急着停，可能只是抖动
-    }
+    } catch(e) { console.error(e); }
 }
 </script>
     <!-- 第二排：图表 -->
@@ -259,12 +258,13 @@ async function pollSpeedResults() {
                     <th width="20%">节点名称 / IP</th>
                     <th width="15%">状态 / 延迟</th>
                     <th width="15%">区域</th>
-                    <th width="30%">任务并发 (Load)</th>
-                    <th width="20%">资源占用 (CPU/Mem)</th>
+                    <th width="20%">任务并发 (Load)</th>
+                    <th width="15%">资源占用 (CPU/Mem)</th>
+                    <th width="15%">操作</th>
                 </tr>
             </thead>
             <tbody id="clusterTable">
-                <tr><td colspan="5" style="text-align:center; color:#999;">正在连接主控节点...</td></tr>
+                <tr><td colspan="6" style="text-align:center; color:#999;">正在连接主控节点...</td></tr>
             </tbody>
         </table>
     </div>
@@ -391,6 +391,25 @@ async function pollSpeedResults() {
     }
 
     // --- 2. 集群监控 (核心) ---
+    async function toggleNode(uuid, disabled) {
+        if (!confirm(`确定要${disabled ? '禁用' : '启用'}该节点吗？`)) return;
+        try {
+            const res = await fetch('/api/admin/cluster/node/toggle', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({uuid, disabled})
+            });
+            const d = await res.json();
+            if (d.status === 'success') {
+                loadClusterStatus();
+            } else {
+                alert("操作失败: " + d.msg);
+            }
+        } catch (e) {
+            alert("网络错误");
+        }
+    }
+
     async function loadClusterStatus() {
         try {
             const res = await fetch('/api/admin/cluster_status');
@@ -419,10 +438,15 @@ async function pollSpeedResults() {
                 let loadColor = '#4f46e5';
                 if (n.load_pct > 80) loadColor = '#ef4444';
 
+                const isDisabled = n.disabled || false;
+                const toggleBtn = isDisabled ? 
+                    `<button class="p-btn p-btn-sm p-btn-success" onclick="toggleNode('${n.uuid}', false)">启用</button>` :
+                    `<button class="p-btn p-btn-sm p-btn-danger" onclick="toggleNode('${n.uuid}', true)">禁用</button>`;
+
                 return `
-                <tr>
+                <tr style="${isDisabled ? 'opacity: 0.6; background: #fdf2f2;' : ''}">
                     <td>
-                        <div style="font-weight:bold;">${n.name}</div>
+                        <div style="font-weight:bold;">${n.name} ${isDisabled ? '<span class="p-tag p-tag-red">已禁用</span>' : ''}</div>
                         <div style="font-size:11px; color:#999;">${n.ip}</div>
                     </td>
                     <td>
@@ -445,11 +469,14 @@ async function pollSpeedResults() {
                     <td style="font-size:12px;">
                         CPU: <b>${n.cpu}%</b> <span style="color:#ddd">|</span> Mem: <b>${n.mem}%</b>
                     </td>
+                    <td>
+                        ${toggleBtn}
+                    </td>
                 </tr>
                 `;
             }).join('');
             
-            document.getElementById('clusterTable').innerHTML = rows || '<tr><td colspan="5" style="text-align:center; padding:20px;">暂无节点接入，正在等待 Worker 启动...</td></tr>';
+            document.getElementById('clusterTable').innerHTML = rows || '<tr><td colspan="6" style="text-align:center; padding:20px;">暂无节点接入，正在等待 Worker 启动...</td></tr>';
             
         } catch (e) {
             console.error("Cluster Load Error:", e);
