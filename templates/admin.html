@@ -206,22 +206,41 @@ async function pollSpeedResults() {
             
             btn.innerText = `测试中 (${info.received}/${info.total}) ${info.elapsed}s`;
             
-            if (list.length > 0) {
+                // 注入详细内容查看函数 [核心改进]
+                window.viewTestContent = function(nodeName, content) {
+                    const modal = document.getElementById('userDetailModal');
+                    document.getElementById('detailTitle').innerText = `📄 抓取内容预览 - ${nodeName}`;
+                    document.getElementById('detailContent').innerHTML = `
+                        <div style="background:#f4f4f4; padding:15px; border-radius:8px; max-height:400px; overflow-y:auto; font-family:serif; line-height:1.6; white-space:pre-wrap;">
+                            ${content || '无内容返回'}
+                        </div>
+                    `;
+                    PureUI.modal.open('userDetailModal');
+                };
+
                 document.getElementById('speedResults').innerHTML = list.map(item => {
                     let latencyColor = item.latency > 1000 ? (item.latency > 3000 ? 'red' : 'orange') : 'green';
                     
-                    // 处理预览内容：如果是爬虫测试，显示内容摘要
+                    // 增强预览逻辑：如果成功，提供“查看全文”按钮
                     let preview = '-';
                     if (item.error) {
-                        preview = `<span style="color:red; font-size:11px;">${item.error}</span>`;
+                        preview = `<span style="color:red; font-size:11px;">❌ ${item.error}</span>`;
                     } else if (item.content_preview) {
-                        preview = `<div style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:#666;">${item.content_preview}</div>`;
+                        const escapedContent = item.content_preview.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                        preview = `
+                            <div style="display:flex; align-items:center; gap:5px;">
+                                <div style="max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; color:#666;">
+                                    ${item.content_preview}
+                                </div>
+                                <button class="p-btn p-btn-sm p-btn-outline" style="padding:2px 5px; font-size:10px;" onclick="viewTestContent('${item.worker_name}', '${escapedContent}')">详情</button>
+                            </div>
+                        `;
                     } else {
                         preview = `<span style="color:#999;font-size:11px;">Size: ${(item.size/1024).toFixed(1)}KB</span>`;
                     }
 
                     return `
-                    <tr>
+                    <tr style="${item.error ? 'background:#fffafa' : ''}">
                         <td><b>${item.worker_name}</b><br><small style="color:#999">${item.region}</small></td>
                         <td><span class="p-tag ${item.error?'p-tag-red':'p-tag-blue'}">${item.status_code || 'Err'}</span></td>
                         <td style="color:${latencyColor}; font-weight:bold;">${item.latency} ms</td>
@@ -438,15 +457,15 @@ async function pollSpeedResults() {
                 let loadColor = '#4f46e5';
                 if (n.load_pct > 80) loadColor = '#ef4444';
 
-                const isDisabled = n.disabled || false;
+                const isDisabled = n.disabled === true || n.disabled === "true"; // 兼容多种存储格式
                 const toggleBtn = isDisabled ? 
-                    `<button class="p-btn p-btn-sm p-btn-success" onclick="toggleNode('${n.uuid}', false)">启用</button>` :
-                    `<button class="p-btn p-btn-sm p-btn-danger" onclick="toggleNode('${n.uuid}', true)">禁用</button>`;
+                    `<button class="p-btn p-btn-sm p-btn-success" onclick="toggleNode('${n.uuid}', false)">启用节点</button>` :
+                    `<button class="p-btn p-btn-sm p-btn-danger" onclick="toggleNode('${n.uuid}', true)">由于异常禁用</button>`;
 
                 return `
-                <tr style="${isDisabled ? 'opacity: 0.6; background: #fdf2f2;' : ''}">
+                <tr style="${isDisabled ? 'opacity: 0.6; background: #fff5f5;' : ''}">
                     <td>
-                        <div style="font-weight:bold;">${n.name} ${isDisabled ? '<span class="p-tag p-tag-red">已禁用</span>' : ''}</div>
+                        <div style="font-weight:bold;">${n.name} ${isDisabled ? '<span class="p-tag p-tag-red">OFFLINE</span>' : ''}</div>
                         <div style="font-size:11px; color:#999;">${n.ip}</div>
                     </td>
                     <td>
