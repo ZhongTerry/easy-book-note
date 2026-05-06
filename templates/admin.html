@@ -410,16 +410,25 @@ async function pollSpeedResults() {
     }
 
     // --- 2. 集群监控 (核心) ---
-    async function toggleNode(uuid, disabled) {
-        if (!confirm(`确定要${disabled ? '禁用' : '启用'}该节点吗？`)) return;
+    async function toggleNode(uuid, currentDisabledState) {
+        // currentDisabledState 是当前的状态，我们要切换它，所以取反
+        const newState = !currentDisabledState;
+        const actionText = newState ? '禁用' : '启用';
+        
+        if (!confirm(`确定要${actionText}该节点吗？`)) return;
+        
         try {
             const res = await fetch('/api/admin/cluster/node/toggle', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({uuid, disabled})
+                body: JSON.stringify({
+                    uuid: uuid, 
+                    disabled: newState // 发送目标状态
+                })
             });
             const d = await res.json();
             if (d.status === 'success') {
+                PureUI.notification.success(`节点已${actionText}`);
                 loadClusterStatus();
             } else {
                 alert("操作失败: " + d.msg);
@@ -457,15 +466,15 @@ async function pollSpeedResults() {
                 let loadColor = '#4f46e5';
                 if (n.load_pct > 80) loadColor = '#ef4444';
 
-                const isDisabled = n.disabled === true || n.disabled === "true"; // 兼容多种存储格式
+                const isDisabled = n.disabled === true || n.disabled === "true" || n.disabled === 1;
                 const toggleBtn = isDisabled ? 
-                    `<button class="p-btn p-btn-sm p-btn-success" onclick="toggleNode('${n.uuid}', false)">启用节点</button>` :
-                    `<button class="p-btn p-btn-sm p-btn-danger" onclick="toggleNode('${n.uuid}', true)">由于异常禁用</button>`;
+                    `<button class="p-btn p-btn-sm p-btn-success" onclick="toggleNode('${n.uuid}', true)">启用节点</button>` :
+                    `<button class="p-btn p-btn-sm p-btn-danger" onclick="toggleNode('${n.uuid}', false)">禁用节点</button>`;
 
                 return `
                 <tr style="${isDisabled ? 'opacity: 0.6; background: #fff5f5;' : ''}">
                     <td>
-                        <div style="font-weight:bold;">${n.name} ${isDisabled ? '<span class="p-tag p-tag-red">OFFLINE</span>' : ''}</div>
+                        <div style="font-weight:bold;">${n.name} ${isDisabled ? '<span class="p-tag p-tag-red">DISABLED</span>' : ''}</div>
                         <div style="font-size:11px; color:#999;">${n.ip}</div>
                     </td>
                     <td>
