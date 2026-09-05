@@ -209,13 +209,8 @@ def handle_heartbeat():
     system_token = os.environ.get('REMOTE_CRAWLER_TOKEN')
     if not system_token:
         return jsonify({"status": "error", "msg": "Server token not configured"}), 503
-    info("System", "----------------------------------------")
-    # 使用 repr() 可以把看不见的空格、换行符显示出来
-    debug("System", f"🔍 [Debug] 收到 Header: {repr(auth_header)}")
-    debug("System", f"🔍 [Debug] 系统 期望值: {repr(f'Bearer {system_token}')}")
-    info("System", "----------------------------------------")
-    
     if auth_header != f"Bearer {system_token}":
+        warn("Cluster", "Heartbeat authentication failed")
         return jsonify({"status": "error", "msg": "Forbidden"}), 403
         
     data = request.json

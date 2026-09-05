@@ -265,12 +265,6 @@ from curl_cffi import requests as cffi_requests
 from pypinyin import lazy_pinyin, Style
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import datetime
-
-def debug_log(message):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open('debug.txt', 'a', encoding='utf-8') as f:
-        f.write(f"[{timestamp}] {message}\n")
 class SearchHelper:
     def __init__(self):
         # [Owllook 配置] 模拟 Chrome 指纹，这是过盾的关键

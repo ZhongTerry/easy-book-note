@@ -370,7 +370,7 @@
                 autofocus
                 onkeydown="if(event.key==='Enter') doSearch()"
             >
-            <button class="p-btn p-btn-primary" onclick="doSearch()">搜索</button>
+            <button id="searchBtn" class="p-btn p-btn-primary" onclick="doSearch()">搜索</button>
         </div>
         
         <!-- 功能选项 -->
@@ -403,8 +403,8 @@
         <div class="stats-bar" id="statsBar" style="display: none;">
             <span>找到 <strong id="resultCount">0</strong> 个结果</span>
             <div class="sort-options">
-                <span class="sort-btn active" onclick="sortResults('default')">默认排序</span>
-                <span class="sort-btn" onclick="sortResults('source')">按来源</span>
+                <span class="sort-btn active" onclick="sortResults('default', this)">默认排序</span>
+                <span class="sort-btn" onclick="sortResults('source', this)">按来源</span>
             </div>
         </div>
         
@@ -525,9 +525,12 @@
             
             const container = document.getElementById('resultsContainer');
             const statsBar = document.getElementById('statsBar');
+            const searchBtn = document.getElementById('searchBtn');
             
             renderSearchState('loading');
             statsBar.style.display = 'none';
+            searchBtn.disabled = true;
+            searchBtn.setAttribute('aria-busy', 'true');
             
             try {
                 PureUI.loading.show('🔍 聚合搜索中...');
@@ -550,6 +553,8 @@
                 renderSearchState('error');
             } finally {
                 PureUI.loading.hide();
+                searchBtn.disabled = false;
+                searchBtn.removeAttribute('aria-busy');
             }
         }
         
@@ -608,9 +613,9 @@
         }
         
         // 排序结果
-        function sortResults(type) {
+        function sortResults(type, trigger) {
             document.querySelectorAll('.sort-btn').forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
+            trigger?.classList.add('active');
             
             if (type === 'source') {
                 currentResults.sort((a, b) => a.source.localeCompare(b.source));
@@ -624,17 +629,27 @@
         
         // 选择结果 - 直接保存并打开（依赖自动判断toc/content逻辑）
         async function selectResult(key, url, title) {
-            PureUI.loading.show('💾 保存中...');
+            const autoSave = document.getElementById('autoSave').checked;
+            PureUI.loading.show(autoSave ? '正在保存到书架...' : '正在打开阅读页...');
             
             try {
                 // 1. 保存到书架
-                await fetch(`${API_URL}/insert`, {
+                if (!autoSave) {
+                    window.location.href = `/read?url=${encodeURIComponent(url)}`;
+                    return;
+                }
+
+                const response = await fetch(`${API_URL}/insert`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ key: key, value: url, manual: true })
                 });
+                const result = await response.json();
+                if (!response.ok || result.status !== 'success') {
+                    throw new Error(result.message || '保存到书架失败');
+                }
                 
-                PureUI.toast('✅ 已保存到书架');
+                PureUI.toast('已保存到书架', 'success');
                 
                 // 2. 直接跳转到阅读页面（让后端自动判断是toc还是content）
                 setTimeout(() => {
@@ -642,19 +657,9 @@
                 }, 300);
                 
             } catch(e) {
-                console.error('获取目录失败:', e);
-                // 失败则直接跳转原URL
+                console.error('保存书籍失败:', e);
                 PureUI.loading.hide();
-                if (autoSave) {
-                    PureUI.toast('已保存，正在跳转...', 'info');
-                }
-                setTimeout(() => {
-                    if (autoSave) {
-                        window.location.href = `/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`;
-                    } else {
-                        window.location.href = `/read?url=${encodeURIComponent(url)}`;
-                    }
-                }, 300);
+                PureUI.toast(e.message || '保存失败，请重试', 'error');
             }
         }
 

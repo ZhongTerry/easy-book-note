@@ -2,14 +2,30 @@ import logging
 import sys
 import os
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
 # 获取应用根目录 (假设 utils 文件夹在根目录下)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_FILE = os.path.join(BASE_DIR, "debug.txt")
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
 # 从环境变量或配置文件读取日志级别，默认为 INFO
 # 可选值: DEBUG, INFO, WARNING, ERROR, CRITICAL
 DEFAULT_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+
+class ResilientRotatingFileHandler(RotatingFileHandler):
+    """Keep logging when another Windows process temporarily holds the log file."""
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            # A previous process may still own debug.txt. Keep this process
+            # logging and retry rotation after the next process restart.
+            self.maxBytes = 0
+
 
 # 创建一个自定义的日志记录器
 class NoteDBLogger:
@@ -33,7 +49,12 @@ class NoteDBLogger:
             self.logger.addHandler(console_handler)
 
             # 文件输出: 显示完整时间戳和模块
-            file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+            file_handler = ResilientRotatingFileHandler(
+                LOG_FILE,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding='utf-8',
+            )
             file_handler.setFormatter(full_formatter)
             self.logger.addHandler(file_handler)
 

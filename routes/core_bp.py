@@ -350,6 +350,13 @@ def search_page():
 @login_required
 def read_mode():
     u, k = request.args.get('url'), request.args.get('key', '')
+    if not u:
+        return _reader_error_response(
+            '缺少阅读地址',
+            '请从目录或书架中选择一个章节后再阅读。',
+            '', '', k, 'MISSING_URL', 'request', 400,
+        )
+
     # [修复] 强化 force 参数转换，支持 ?force=true, ?force=1 等
     force_raw = request.args.get('force', '').lower()
     force = force_raw in ['true', '1', 'yes', 'on']
@@ -452,12 +459,11 @@ def read_mode():
             else:
                 warn("History", f"跳过目录页历史记录: {data.get('title')}")
 
-        # [新增] 阅读时也同步更新 get_value 的 value (URL) 和 meta.chapter_id
+        # 阅读只能更新阅读状态；书籍主 URL 必须保留为目录/书源地址。
         if k and page_type != 'toc':
             read_title = data.get('title', '')
             real_id = calculate_real_chapter_id(k, u, read_title)
             if real_id > 0:
-                managers.db.update(k, u)
                 try:
                     import json
                     meta_key = f"{k}:meta"
@@ -548,8 +554,11 @@ def read_mode():
             return render_template('reader_pc.html', **context)
             
     except Exception as e:
-        info("Render Error", f"{e}")
-        return f"渲染错误: {str(e)}", 500
+        return _reader_error_response(
+            '阅读页面暂时无法显示',
+            '正文已获取，但页面渲染时发生问题。请刷新后重试。',
+            u, u, k, 'RENDER_EXCEPTION', 'render', 500, e,
+        )
 @core_bp.route('/api/history/list')
 @login_required
 def api_history_list():
@@ -1031,58 +1040,41 @@ def force_refresh_book():
 def update():
     key = request.json.get('key')
     value = request.json.get('value')
-    title = request.json.get('title', '') 
-    is_manual = request.json.get('manual', False)
-    do_resolve = request.json.get('resolve', True)
+    title = request.json.get('title', '')
+    if not key or not isinstance(value, str) or not value:
+        return jsonify({"status": "error", "message": "Missing reading progress"}), 400
 
-    final_value = value
-    if is_manual and do_resolve and hasattr(crawler, 'resolve_start_url'):
-        final_value = crawler.resolve_start_url(value)
+    # /update is a reader-progress endpoint. Never overwrite value.url here:
+    # it is the persistent book source / TOC address.
+    real_id = calculate_real_chapter_id(key, value, title)
+    progress = {
+        'last_read_url': value,
+        'last_read_title': title,
+        'last_read_time': int(time.time()),
+    }
+    if real_id > 0:
+        progress['last_read_index'] = real_id
 
-    real_id = calculate_real_chapter_id(key, final_value, title)
+    res = managers.db.update(key, progress)
+    if res.get('status') != 'success':
+        return jsonify(res), 404
 
-    if real_id <= 0:
-        info("Sync", f"未识别章节号，跳过更新: {key}")
-        return jsonify({"status": "success", "message": "未识别章节号，已跳过更新"})
-
-    # 1. 保存 URL (这是基础 KV 记录)
-    res = managers.db.update(key, final_value)
-
-    # 2. 【核心修改点】使用已识别的序号保存到 meta
-    info("Sync Debug", f"书籍={key}, 标题={title} -> 识别ID={real_id}")
-    
-    # 如果返回 -1 (未识别)，这里直接跳过，数据库里旧的 meta 会保留
     if real_id > 0:
         try:
-            import json
-            # 获取旧 meta
             meta_key = f"{key}:meta"
             old_meta_str = managers.db.get_val(meta_key)
             meta = json.loads(old_meta_str) if old_meta_str else {}
-            
-            # 更新序号和时间戳
             meta['chapter_id'] = real_id
             meta['updated_at'] = int(time.time())
-            
-            # [关键调试] 打印即将保存的内容
-            info("Sync Debug", f"准备保存 - Key={meta_key}, Content={meta}")
-            
             managers.db.update(meta_key, json.dumps(meta))
-            info("Sync", f"✅ 识别并保存成功：{title} -> ID {real_id}")
-                
         except Exception as e:
-            error("Sync", f"Meta save error: {e}")
-            import traceback
-            traceback.print_exc()
-    else:
-        # 如果没识别到，打印一个日志方便调试，但不写库
-        error("Sync", f"⚠️ 章节识别失败，跳过 Meta 记录: {title}")
+            error("Sync", f"Meta save error: {type(e).__name__}")
 
-    # 3. 历史版本 (仅手动)
-    if is_manual and res.get('status') == 'success':
-        managers.db.add_version(key, final_value)
-    
-    return jsonify(res)
+    return jsonify({
+        "status": "success",
+        "message": "阅读进度已同步",
+        "chapter_id": real_id,
+    })
 
 @core_bp.route('/api/switch_source', methods=['POST'])
 @login_required
@@ -1239,14 +1231,20 @@ def api_source_list():
 def api_confirm_switch():
     data = request.json
     target_url = data.get('target_url')
+    book_key = data.get('book_key')
     current_id = data.get('current_id', -1)
     current_title = data.get('current_title', '')
     
-    if not target_url: return jsonify({"status": "error", "msg": "Target URL missing"})
+    if not target_url or not book_key:
+        return jsonify({"status": "error", "msg": "Target URL or book key missing"}), 400
 
     new_url = crawler.find_best_match(target_url, current_id, current_title)
     
     if new_url:
+        # Source switching is the only path that is allowed to replace value.url.
+        saved = managers.db.update(book_key, new_url)
+        if saved.get('status') != 'success':
+            return jsonify({"status": "error", "msg": "无法保存新书源"}), 500
         return jsonify({"status": "success", "new_url": new_url})
     else:
         return jsonify({"status": "failed", "msg": "无法解析目标源"})
@@ -1271,32 +1269,27 @@ def rollback(): return jsonify(managers.db.rollback())
 @login_required
 def get_val():
     key = request.json.get('key')
-    v = managers.db.get_val(key)
+    book = managers.db.get_full_data(key)
+    v = book.get('last_read_url') if isinstance(book, dict) else None
+    source_url = book.get('url') if isinstance(book, dict) else None
     
-    if v:
+    if source_url:
         # 直接读取 meta，不再进行任何爬虫或解析
         meta_key = f"{key}:meta"
         meta_str = managers.db.get_val(meta_key)
         meta = {}
         
-        # [关键调试] 打印读取的详细信息
-        info("GetValue Debug", f"书籍={key}")
-        info("GetValue Debug", f"读取Key=")
-        info("GetValue Debug", f"读取结果=")
-        
         if meta_str:
             try: 
                 import json
                 meta = json.loads(meta_str)
-                info("GetValue Debug", f"解析后meta={meta}")
             except Exception as e:
-                error("GetValue Error", f"书籍={key}, meta解析失败: {e}")
-        else:
-            info("GetValue Debug", f"meta_str为空或None")
+                error("GetValue Error", f"书籍={key}, meta解析失败: {type(e).__name__}")
         
         return jsonify({
             "status": "success", 
             "value": v,
+            "source_url": source_url,
             "meta": meta # 这里面包含准确的 chapter_id
         })
         

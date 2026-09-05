@@ -827,9 +827,48 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
         // 解决了“在内部选中文字拖拽到外部松开导致关闭”的 Bug
         function closeByOverlay(event, modalId) {
             if (event.target === event.currentTarget) {
-                document.getElementById(modalId).style.display = 'none';
+                PureUI.modal.close(modalId);
             }
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.p-modal[id]').forEach((modal) => {
+                if (!modal.getAttribute('onclick')) {
+                    modal.addEventListener('click', (event) => closeByOverlay(event, modal.id));
+                }
+            });
+        });
+
+        (() => {
+            if (!window.PureUI?.modal?.open || !window.PureUI?.modal?.close) return;
+            const open = PureUI.modal.open.bind(PureUI.modal);
+            const close = PureUI.modal.close.bind(PureUI.modal);
+            PureUI.modal.open = (modalId, ...args) => {
+                const modal = document.getElementById(modalId);
+                if (modal) modal._returnFocus = document.activeElement;
+                const result = open(modalId, ...args);
+                requestAnimationFrame(() => {
+                    modal?.querySelector('button, input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus();
+                });
+                return result;
+            };
+            PureUI.modal.close = (modalId, ...args) => {
+                const modal = document.getElementById(modalId);
+                const result = close(modalId, ...args);
+                requestAnimationFrame(() => modal?._returnFocus?.focus?.());
+                return result;
+            };
+            document.addEventListener('keydown', (event) => {
+                if (event.key !== 'Escape') return;
+                const active = [...document.querySelectorAll('.p-modal[id]')]
+                    .filter((modal) => getComputedStyle(modal).display !== 'none')
+                    .at(-1);
+                if (active) {
+                    event.preventDefault();
+                    PureUI.modal.close(active.id);
+                }
+            });
+        })();
         </script>
 </head>
 <body>
@@ -913,11 +952,11 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     </div>
 </div> <!-- .main-container 结束 -->
     <!-- === 模态框: 搜索 (使用 PureUI Modal 结构) === -->
-    <div id="searchModal" class="p-modal" onclick="closeByOverlay(event, 'settingsModal')">
+    <div id="searchModal" class="p-modal" onclick="closeByOverlay(event, 'searchModal')">
         <div class="p-modal-content">
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
                 <h3 style="margin:0">全网搜书</h3>
-                <!-- <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('searchModal')">✕</button> -->
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('searchModal')" aria-label="关闭搜索">×</button>
             </div>
             <div style="display:flex; gap:10px; margin-bottom:10px;">
                 <input type="text" id="onlineSearchInput" class="p-input" placeholder="输入书名..." onkeydown="if(event.key==='Enter') doOnlineSearch()">
@@ -930,11 +969,11 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     </div>
 
     <!-- === 模态框: 洞察 (Tab页) === -->
-    <div id="insightModal" class="p-modal" onclick="closeByOverlay(event, 'settingsModal')">
+    <div id="insightModal" class="p-modal" onclick="closeByOverlay(event, 'insightModal')">
         <div class="p-modal-content" style="max-width: 600px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
                 <h3 style="margin:0">📊 阅读洞察</h3>
-                <!-- <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('insightModal')">✕</button> -->
+                <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('insightModal')" aria-label="关闭阅读洞察">×</button>
             </div>
             
             <!-- Tabs -->
@@ -2032,7 +2071,7 @@ setInterval(fetchUpdates, 600000); // 10分钟一次
                     try {
                         const vRes = await fetch('/api/get_value', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({key:d.key})});
                         const vData = await vRes.json();
-                        if(vData.status==='success') document.getElementById('value').value = vData.value;
+                        if(vData.status==='success') document.getElementById('value').value = vData.source_url || vData.value || '';
                     } catch(e){}
                 }
             }).catch(()=>{});

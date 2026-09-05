@@ -49,6 +49,7 @@ app.register_blueprint(core_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
 app.register_blueprint(cache_bp)
+app.teardown_appcontext(managers.close_db)
 
 
 @app.route('/healthz')
@@ -273,8 +274,32 @@ def schedule_auto_check():
         info("AutoCheck", "休眠 5 小时...")
         time.sleep(18000)
 
-# 在 main 中启动
-threading.Thread(target=schedule_auto_check, daemon=True).start()
+_background_tasks_lock = threading.Lock()
+_background_tasks_started = False
+
+
+def start_background_tasks():
+    """在当前应用进程中只启动一次后台维护任务。"""
+    global _background_tasks_started
+    with _background_tasks_lock:
+        if _background_tasks_started:
+            return
+        threading.Thread(
+            target=schedule_cache_cleanup,
+            daemon=True,
+            name='cache-cleanup',
+        ).start()
+        threading.Thread(
+            target=schedule_auto_check,
+            daemon=True,
+            name='auto-check',
+        ).start()
+        _background_tasks_started = True
+
+
+@app.before_request
+def ensure_background_tasks_started():
+    start_background_tasks()
 
 if __name__ == '__main__':
     # 🔥 从环境变量读取开发模式配置

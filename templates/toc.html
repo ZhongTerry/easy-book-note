@@ -90,9 +90,58 @@
     const tocUrl = {{ toc_url|tojson }}, bookName = {{ toc.title|tojson }};
     let pollInterval = null;
     function forceRefresh() { const url = new URL(window.location.href); url.searchParams.set('force', 'true'); window.location.href = url.toString(); }
-    function startDownload() { if (!confirm('确定要下载全本吗？\n章节越多耗时越长，请保持网络通畅。')) return; document.getElementById('dlBtn').disabled = true; document.getElementById('dl-modal').style.display = 'flex'; document.getElementById('dl-finish').style.display = 'none'; fetch('/api/download', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({toc_url:tocUrl,book_name:bookName}) }).then(r=>r.json()).then(d=>{ if(d.status==='success') pollProgress(d.task_id); else { alert(d.message); closeModal(); } }).catch(()=>{ alert('网络错误'); closeModal(); }); }
-    function pollProgress(tid) { pollInterval = setInterval(()=>{ fetch(`/api/download/status?task_id=${tid}`).then(r=>r.json()).then(d=>{ const pct = Math.round((d.current / d.total) * 100); document.getElementById('p-fill').style.width = pct + '%'; document.getElementById('p-text').innerText = `已下载: ${d.current} / ${d.total} (${pct}%)`; if(d.status==='completed'||d.status==='error') { clearInterval(pollInterval); if(d.status==='completed') { document.getElementById('p-text').innerText='打包完成'; document.getElementById('dl-file-link').href=`/api/download/file?task_id=${tid}`; document.getElementById('dl-finish').style.display='block'; } else document.getElementById('p-text').innerText='失败: '+d.error_msg; } }); },2000); }
-    function closeModal() { document.getElementById('dl-modal').style.display='none'; document.getElementById('dlBtn').disabled=false; if(pollInterval) clearInterval(pollInterval); }
+    async function startDownload() {
+        if (!confirm('确定要下载全本吗？\n章节越多耗时越长，请保持网络通畅。')) return;
+        const button = document.getElementById('dlBtn');
+        const status = document.getElementById('p-text');
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        document.getElementById('dl-modal').style.display = 'flex';
+        document.getElementById('dl-finish').style.display = 'none';
+        status.textContent = '正在创建下载任务...';
+        try {
+            const response = await fetch('/api/download', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({toc_url:tocUrl,book_name:bookName}),
+            });
+            const data = await response.json();
+            if (!response.ok || data.status !== 'success') throw new Error(data.message || '创建下载任务失败');
+            pollProgress(data.task_id);
+        } catch (error) {
+            status.textContent = `无法开始下载：${error.message || '网络错误'}`;
+            button.disabled = false;
+            button.removeAttribute('aria-busy');
+        }
+    }
+    function pollProgress(tid) {
+        pollInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/download/status?task_id=${tid}`);
+                const data = await response.json();
+                if (!response.ok) throw new Error('状态查询失败');
+                const total = Number(data.total) || 0;
+                const pct = total ? Math.round((Number(data.current) / total) * 100) : 0;
+                document.getElementById('p-fill').style.width = `${pct}%`;
+                document.getElementById('p-text').innerText = `已下载: ${data.current || 0} / ${total} (${pct}%)`;
+                if (data.status === 'completed' || data.status === 'error') {
+                    clearInterval(pollInterval);
+                    if (data.status === 'completed') {
+                        document.getElementById('p-text').innerText = '打包完成';
+                        document.getElementById('dl-file-link').href = `/api/download/file?task_id=${tid}`;
+                        document.getElementById('dl-finish').style.display = 'block';
+                    } else {
+                        document.getElementById('p-text').innerText = `下载失败：${data.error_msg || '请重试'}`;
+                        document.getElementById('dlBtn').disabled = false;
+                    }
+                }
+            } catch (error) {
+                clearInterval(pollInterval);
+                document.getElementById('p-text').innerText = '无法获取下载进度，请关闭后重试。';
+                document.getElementById('dlBtn').disabled = false;
+            }
+        }, 2000);
+    }
+    function closeModal() { document.getElementById('dl-modal').style.display='none'; document.getElementById('dlBtn').disabled=false; document.getElementById('dlBtn').removeAttribute('aria-busy'); if(pollInterval) clearInterval(pollInterval); }
     const chapterFilter=document.getElementById('chapterFilter'), clearFilter=document.getElementById('clearFilter'), filterCount=document.getElementById('filterCount'), emptyFilter=document.getElementById('emptyFilter'), chapterItems=Array.from(document.querySelectorAll('.chapter-item')), volumeHeadings=Array.from(document.querySelectorAll('.volume-heading'));
     function applyChapterFilter() { const query=chapterFilter.value.trim().toLowerCase(); let visible=0; chapterItems.forEach(item=>{ const match=!query||item.dataset.chapterSearch.includes(query); item.hidden=!match; if(match) visible+=1; }); volumeHeadings.forEach(heading=>{ let sibling=heading.nextElementSibling, hasVisible=false; while(sibling&&!sibling.classList.contains('volume-heading')) { if(sibling.classList.contains('chapter-item')&&!sibling.hidden) hasVisible=true; sibling=sibling.nextElementSibling; } heading.hidden=Boolean(query)&&!hasVisible; }); clearFilter.style.display=query?'grid':'none'; filterCount.textContent=query?`，匹配 ${visible} 章`:''; emptyFilter.style.display=query&&!visible?'block':'none'; }
     chapterFilter.addEventListener('input',applyChapterFilter); clearFilter.addEventListener('click',()=>{chapterFilter.value='';chapterFilter.focus();applyChapterFilter();});

@@ -2262,6 +2262,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
                     target_url: targetUrl,
+                    book_key: dbKey,
                     current_id: switchContext.current_id,
                     current_title: switchContext.current_title
                 })
@@ -2271,7 +2272,6 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             
             if (json.status === 'success') {
                 loading.innerText = '✅ 跳转中...';
-                await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: json.new_url }) });
                 window.location.href = `/read?url=${encodeURIComponent(json.new_url)}&key=${encodeURIComponent(dbKey)}`;
             } else {
                 showToast(json.msg || "切换失败");
@@ -2854,13 +2854,6 @@ function refreshTocHighlight() {
                 break;
             case 'Escape':
                 document.querySelectorAll('.modal-overlay').forEach(m => hideModal(m.id));
-                break;
-            case 't':
-            case 'T':
-                if(!e.ctrlKey && !e.metaKey) {
-                    e.preventDefault();
-                    showModal('tocOverlay');
-                }
                 break;
             case 's':
             case 'S':

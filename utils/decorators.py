@@ -79,10 +79,10 @@ def monitor_performance(operation_name: str = None):
                 duration = (time.time() - start_time) * 1000  # 转换为毫秒
                 
                 # 记录性能日志
-                if duration > 1000:  # 超过1秒警告
-                    log_info("Performance", f"⚠️ {op_name} 耗时 {duration:.0f}ms （慢）")
-                elif duration > 3000:  # 超过3秒报错
+                if duration > 3000:  # 超过3秒报错
                     log_error("Performance", f"❌ {op_name} 耗时 {duration:.0f}ms （严重超时）")
+                elif duration > 1000:  # 超过1秒警告
+                    log_info("Performance", f"⚠️ {op_name} 耗时 {duration:.0f}ms （慢）")
                 else:
                     log_info("Performance", f"✅ {op_name} 耗时 {duration:.0f}ms")
                 

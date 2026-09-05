@@ -1334,8 +1334,24 @@
         document.getElementById('sourceModal').classList.remove('active');
     }
     async function confirmSwitch(newUrl) {
-        await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: newUrl }) });
-        location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+        try {
+            const response = await fetch('/api/source/confirm_switch', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    target_url: newUrl,
+                    book_key: dbKey,
+                    current_id: localChapterId,
+                    current_title: document.getElementById('chapter-title').innerText,
+                }),
+            });
+            const result = await response.json();
+            if (!response.ok || result.status !== 'success') {
+                throw new Error(result.msg || '切换书源失败');
+            }
+            location.href = `/read?url=${encodeURIComponent(result.new_url)}&key=${encodeURIComponent(dbKey)}`;
+        } catch (error) {
+            showToast(error.message || '切换书源失败');
+        }
     }
 
     // TTS
@@ -1552,6 +1568,7 @@
          const bodyEl = document.getElementById('content-body');
          const skEl = document.getElementById('mSkeleton');
          const viewport = document.getElementById('read-viewport');
+         let fetchTimeout = null;
 
          if(bodyEl) bodyEl.style.display = 'none';
          if(skEl) skEl.style.display = 'block';
@@ -1560,9 +1577,13 @@
          if(viewport) viewport.scrollTo(0,0);
 
          try {
-             // 2. Fetch
+             // 2. Fetch with a bounded wait, matching the desktop reader.
              const fetchUrl = url + (url.includes('?') ? '&' : '?') + 'mode=ajax';
-             const res = await fetch(fetchUrl);
+             const controller = new AbortController();
+             fetchTimeout = setTimeout(() => controller.abort(), 10000);
+             const res = await fetch(fetchUrl, { signal: controller.signal });
+             clearTimeout(fetchTimeout);
+             fetchTimeout = null;
              if(!res.ok) throw new Error('Network error');
              const json = await res.json();
              
@@ -1674,9 +1695,10 @@
              }
          } catch(e) {
              console.error(e);
-             showToast('章节加载失败，正在打开诊断页面');
+             showToast(e.name === 'AbortError' ? '加载超时，正在打开诊断页面' : '章节加载失败，正在打开诊断页面');
              location.href = url;
          } finally {
+             if (fetchTimeout) clearTimeout(fetchTimeout);
              if(skEl) skEl.style.display = 'none';
              if(bodyEl) bodyEl.style.display = 'block';
              mobileChapterNavigationBusy = false;

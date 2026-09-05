@@ -241,6 +241,32 @@ class TestForceRefreshBook(unittest.TestCase):
         self.assertTrue(payload['diagnostic']['trace_id'].startswith('RD-'))
         self.assertEqual(payload['diagnostic']['detail'], 'TimeoutError')
 
+    def test_reader_rejects_a_missing_url_with_a_clear_diagnostic(self):
+        response = self.client.get('/read?mode=ajax')
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.get_json()
+        self.assertEqual(payload['diagnostic']['code'], 'MISSING_URL')
+        self.assertEqual(payload['diagnostic']['stage'], 'request')
+
+    @patch('routes.core_bp.managers.db.get_val', return_value=None)
+    @patch('routes.core_bp.managers.db.update')
+    @patch('routes.core_bp.calculate_real_chapter_id', return_value=12)
+    def test_progress_sync_never_replaces_the_book_source(self, chapter_id, update_book, get_meta):
+        update_book.return_value = {'status': 'success'}
+
+        response = self.client.post('/update', json={
+            'key': 'book',
+            'value': 'https://example.test/chapter/12',
+            'title': '第12章',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        first_update = update_book.call_args_list[0].args
+        self.assertEqual(first_update[0], 'book')
+        self.assertEqual(first_update[1]['last_read_url'], 'https://example.test/chapter/12')
+        self.assertNotIn('url', first_update[1])
+
     @patch('routes.core_bp.managers.booklist_manager.save')
     @patch('routes.core_bp.managers.db.save_raw_book', return_value=True)
     def test_library_restore_accepts_only_a_valid_backup(self, save_book, save_booklists):
