@@ -885,6 +885,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
             <button class="p-btn p-btn-outline" style="color: #10b981; border-color: #10b981;" onclick="openDownloadsManager()">💾 下载</button>
             <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
+            <button class="p-btn p-btn-outline" onclick="openLibraryBackup()">↻ 备份</button>
             <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
             
             <!-- <button class="p-btn p-btn-danger" onclick="confirmDelete()">🗑️ 删除</button> -->
@@ -1249,6 +1250,24 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
 </div>
 
 <!-- 下载管理 Modal (Pro 专属) -->
+<div id="libraryBackupModal" class="p-modal">
+    <div class="p-modal-content" style="max-width:440px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3 style="margin:0;">书架备份</h3>
+            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('libraryBackupModal')" aria-label="关闭">×</button>
+        </div>
+        <p style="margin:0 0 16px; color:#60727b; line-height:1.65; font-size:13px;">备份会保存书籍、进度、标签、标记、书内笔记和书单。目录与正文缓存会在需要时重新获取。</p>
+        <div style="display:flex; gap:8px; margin-bottom:20px;">
+            <a class="p-btn p-btn-primary" href="/api/library/backup">下载备份</a>
+        </div>
+        <div style="padding-top:16px; border-top:1px solid var(--shelf-border);">
+            <label class="p-label" for="libraryBackupFile">恢复备份</label>
+            <input id="libraryBackupFile" class="p-input" type="file" accept="application/json,.json" style="margin:8px 0 12px;">
+            <button class="p-btn p-btn-outline" onclick="restoreLibraryBackup()">恢复到书架</button>
+        </div>
+    </div>
+</div>
+
 <div id="downloadsManagerModal" class="p-modal">
     <div class="p-modal-content" style="max-width:700px; border-radius:12px;">
         <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
@@ -1282,6 +1301,38 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
         let redDotsSet = new Set(); // [新增] 全局红点集合
         let pendingBook = { key: '', title: '' };
         let memoTagEditContext = null;
+
+    function openLibraryBackup() {
+        document.getElementById('libraryBackupFile').value = '';
+        PureUI.modal.open('libraryBackupModal');
+    }
+
+    async function restoreLibraryBackup() {
+        const input = document.getElementById('libraryBackupFile');
+        const file = input.files && input.files[0];
+        if (!file) {
+            PureUI.notification.show('请选择备份文件', 'error');
+            return;
+        }
+        if (!confirm('恢复会覆盖备份中同名书籍的记录；当前书架中未包含在备份里的书不会删除。确定继续吗？')) return;
+        const form = new FormData();
+        form.append('backup', file);
+        form.append('confirm', 'replace-existing');
+        try {
+            const response = await fetch('/api/library/restore', {method: 'POST', body: form});
+            const result = await response.json();
+            if (result.status !== 'success') {
+                PureUI.notification.show(result.message || '恢复失败', 'error');
+                return;
+            }
+            PureUI.notification.show(result.message, 'success');
+            PureUI.modal.close('libraryBackupModal');
+            doAction('list');
+        } catch (e) {
+            console.error(e);
+            PureUI.notification.show('备份恢复请求失败', 'error');
+        }
+    }
     
     // 🔥 重命名书签Key
     async function renameKey(oldKey) {

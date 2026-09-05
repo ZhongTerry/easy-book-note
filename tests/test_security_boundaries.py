@@ -225,6 +225,62 @@ class TestForceRefreshBook(unittest.TestCase):
         self.assertGreaterEqual(delete_cache.call_count, 3)
         delete_fulltext.assert_called_once_with('book', 'alice')
 
+    @patch('routes.core_bp.crawler.run', side_effect=TimeoutError('upstream timed out'))
+    @patch('routes.core_bp.is_safe_url', return_value=True)
+    def test_reader_failure_returns_traceable_ajax_diagnostic(self, safe_url, crawl):
+        response = self.client.get(
+            '/read?url=https://example.test/1.html&mode=ajax',
+        )
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.get_json()
+        self.assertEqual(payload['code'], 1)
+        self.assertEqual(payload['diagnostic']['code'], 'CRAWL_EXCEPTION')
+        self.assertEqual(payload['diagnostic']['stage'], 'crawl')
+        self.assertEqual(payload['diagnostic']['source'], 'example.test')
+        self.assertTrue(payload['diagnostic']['trace_id'].startswith('RD-'))
+        self.assertEqual(payload['diagnostic']['detail'], 'TimeoutError')
+
+    @patch('routes.core_bp.managers.booklist_manager.save')
+    @patch('routes.core_bp.managers.db.save_raw_book', return_value=True)
+    def test_library_restore_accepts_only_a_valid_backup(self, save_book, save_booklists):
+        import json
+
+        backup = {
+            'format': 'notedb-library-backup',
+            'version': 1,
+            'books': [
+                {'key': 'book', 'value': {'url': 'https://example.test/toc'}, 'cache': {'toc': 'old'}},
+                {'key': '', 'value': {}},
+            ],
+            'booklists': {'reading': {'name': '在读', 'books': []}},
+        }
+        response = self.client.post(
+            '/api/library/restore',
+            data={
+                'confirm': 'replace-existing',
+                'backup': (io.BytesIO(json.dumps(backup).encode('utf-8')), 'backup.json'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['restored'], 1)
+        saved = save_book.call_args.args[2]
+        self.assertEqual(saved['key'], 'book')
+        self.assertEqual(saved['cache'], {})
+        save_booklists.assert_called_once()
+
+    def test_library_restore_rejects_unrecognized_format(self):
+        response = self.client.post(
+            '/api/library/restore',
+            data={
+                'confirm': 'replace-existing',
+                'backup': (io.BytesIO(b'{"format":"other"}'), 'backup.json'),
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+
 
 class TestEpubUploadValidation(unittest.TestCase):
     def setUp(self):

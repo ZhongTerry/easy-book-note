@@ -1,7 +1,8 @@
-from flask import Blueprint, render_template_string, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory, session
+from flask import Blueprint, Response, render_template_string, request, jsonify, send_file, render_template, redirect, url_for, send_from_directory, session
 from markupsafe import escape
 import requests
 import os
+import json
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, warn, error
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
@@ -10,7 +11,7 @@ import re
 import hmac
 import secrets
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 core_bp = Blueprint('core', __name__)
 DEFAULT_SERVER = 'https://auth.ztrztr.top'
 DEFAULT_CALLBACK = 'https://book.ztrztr.top/callback'
@@ -104,6 +105,46 @@ def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
     # 如果你确定某些网站 URL 就是章节号，可以保留，但目前为了防误报，建议关闭。
     
     return -1
+
+
+def _reader_diagnostic(code, stage, source_url, status_code, exception=None):
+    """Build user-visible diagnostics without exposing credentials or tracebacks."""
+    trace_id = f"RD-{int(time.time())}-{secrets.token_hex(3).upper()}"
+    source = '本地 EPUB' if str(source_url).startswith('epub:') else urlsplit(source_url).netloc
+    detail = type(exception).__name__ if exception else ''
+    error(
+        'Reader',
+        f'[{trace_id}] code={code} stage={stage} source={source or "unknown"} detail={detail or "none"}',
+    )
+    return {
+        'trace_id': trace_id,
+        'code': code,
+        'stage': stage,
+        'source': source or '未知来源',
+        'status_code': status_code,
+        'detail': detail,
+    }
+
+
+def _reader_error_response(title, message, current_url, toc_url, db_key, code, stage, status_code, exception=None):
+    diagnostic = _reader_diagnostic(code, stage, current_url, status_code, exception)
+    if request.args.get('mode') == 'ajax':
+        return jsonify({
+            'code': 1,
+            'message': message,
+            'diagnostic': diagnostic,
+        }), status_code
+    return render_template(
+        'reader_error.html',
+        title=title,
+        message=message,
+        current_url=current_url,
+        toc_url=toc_url,
+        db_key=db_key,
+        diagnostic=diagnostic,
+    ), status_code
+
+
 @core_bp.route('/login')
 def login():
     if not CLIENT_ID or not REDIRECT_URI:
@@ -365,27 +406,19 @@ def read_mode():
                 if is_cacheable_payload(data): managers.cache.set(u, data)
 
     except Exception as e:
-        info("Read Error", f"{e}")
-        return render_template(
-            'reader_error.html',
-            title='暂时无法阅读',
-            message='读取正文时发生了问题。可以重新抓取，或回到目录选择其他章节。',
-            current_url=u,
-            toc_url=u,
-            db_key=k,
-        ), 500
+        return _reader_error_response(
+            '暂时无法阅读',
+            '读取正文时发生了问题。可以重新抓取，或回到目录选择其他章节。',
+            u, u, k, 'CRAWL_EXCEPTION', 'crawl', 500, e,
+        )
 
     issue = get_payload_issue(data)
     if issue:
         status_code = 503 if issue['code'] == 'SOURCE_CHALLENGE' else 422
-        return render_template(
-            'reader_error.html',
-            title='暂时无法阅读',
-            message=issue['message'],
-            current_url=u,
-            toc_url=u,
-            db_key=k,
-        ), status_code
+        return _reader_error_response(
+            '暂时无法阅读', issue['message'], u, u, k,
+            issue['code'], 'recognition', status_code,
+        )
 
     # 3. [智能检测] 如果获取的内容实际上是目录页，自动跳转到目录页
     if data and not u.startswith('epub:'):
@@ -397,14 +430,11 @@ def read_mode():
     
     # 4. [核心修复] 必须先判断 data 是否存在
     if not data:
-        return render_template(
-            'reader_error.html',
-            title='没有获取到正文',
-            message='当前章节暂时没有可阅读的正文。可以重新抓取，或从目录选择其他章节。',
-            current_url=u,
-            toc_url=u,
-            db_key=k,
-        ), 404
+        return _reader_error_response(
+            '没有获取到正文',
+            '当前章节暂时没有可阅读的正文。可以重新抓取，或从目录选择其他章节。',
+            u, u, k, 'FETCH_FAILED', 'fetch', 404,
+        )
 
     # 5. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
@@ -1322,6 +1352,98 @@ def api_booklists_update():
     )
     # 必须返回最新的 data，因为前端 updateBookStatus 依赖它来刷新页面
     return jsonify({"status": "success", "data": managers.booklist_manager.load()})
+
+
+@core_bp.route('/api/library/backup')
+@login_required
+def export_library_backup():
+    """Export the current user's bookshelf state as a portable JSON backup."""
+    username = get_current_user()
+    books = []
+    try:
+        with managers.get_db() as conn:
+            rows = conn.execute(
+                "SELECT content FROM books_v2 WHERE username=? ORDER BY book_key",
+                (username,),
+            ).fetchall()
+        for row in rows:
+            book = json.loads(row[0])
+            if isinstance(book, dict):
+                # The TOC/chapter cache is regenerable and can become very large.
+                # A portable backup should restore user data, not stale crawl data.
+                book['cache'] = {}
+                books.append(book)
+    except Exception as exc:
+        error('Backup', f'Export failed for {username}: {type(exc).__name__}')
+        return jsonify({'status': 'error', 'message': '无法生成书架备份'}), 500
+
+    backup = {
+        'format': 'notedb-library-backup',
+        'version': 1,
+        'created_at': int(time.time()),
+        'books': books,
+        'booklists': managers.booklist_manager.load(username),
+    }
+    response = Response(
+        json.dumps(backup, ensure_ascii=False, indent=2),
+        mimetype='application/json',
+    )
+    response.headers['Content-Disposition'] = 'attachment; filename="notedb-library-backup.json"'
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@core_bp.route('/api/library/restore', methods=['POST'])
+@login_required
+def restore_library_backup():
+    """Restore a locally exported library backup after an explicit confirmation."""
+    if request.form.get('confirm') != 'replace-existing':
+        return jsonify({'status': 'error', 'message': '需要确认覆盖同名书籍'}), 400
+    upload = request.files.get('backup')
+    if not upload or not upload.filename:
+        return jsonify({'status': 'error', 'message': '请选择备份文件'}), 400
+    try:
+        backup = json.loads(upload.read().decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({'status': 'error', 'message': '备份文件不是有效的 JSON'}), 400
+
+    if not isinstance(backup, dict) or backup.get('format') != 'notedb-library-backup':
+        return jsonify({'status': 'error', 'message': '不是 NoteDB 书架备份文件'}), 400
+    raw_books = backup.get('books')
+    if not isinstance(raw_books, list) or len(raw_books) > 50000:
+        return jsonify({'status': 'error', 'message': '备份中的书籍数据无效'}), 400
+
+    username = get_current_user()
+    restored = skipped = 0
+    for book in raw_books:
+        key = book.get('key') if isinstance(book, dict) else None
+        value = book.get('value') if isinstance(book, dict) else None
+        if not isinstance(key, str) or not key.strip() or len(key) > 512 or not isinstance(value, dict):
+            skipped += 1
+            continue
+        sanitized = {
+            'key': key,
+            'value': value,
+            'meta': book.get('meta') if isinstance(book.get('meta'), dict) else {},
+            'tags': book.get('tags') if isinstance(book.get('tags'), list) else [],
+            'update_info': book.get('update_info') if isinstance(book.get('update_info'), dict) else {},
+            'cache': {},
+        }
+        if managers.db.save_raw_book(username, key, sanitized):
+            restored += 1
+        else:
+            skipped += 1
+
+    booklists = backup.get('booklists')
+    if isinstance(booklists, dict):
+        managers.booklist_manager.save(booklists, username)
+
+    return jsonify({
+        'status': 'success',
+        'message': f'已恢复 {restored} 本书籍',
+        'restored': restored,
+        'skipped': skipped,
+    })
 
 @core_bp.route('/api/prefetch', methods=['POST'])
 @login_required

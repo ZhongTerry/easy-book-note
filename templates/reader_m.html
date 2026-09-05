@@ -1523,6 +1523,15 @@
         bindAjax(prevBtn);
     }
 
+    let mobileChapterNavigationBusy = false;
+    function setMobileChapterNavigationBusy(busy) {
+        document.querySelectorAll('.page-nav-area a').forEach((link) => {
+            link.style.pointerEvents = busy ? 'none' : '';
+            link.style.opacity = busy ? '.55' : '';
+            link.setAttribute('aria-busy', String(busy));
+        });
+    }
+
     function bindAjax(el) {
         if(!el) return;
         if(el.dataset.ajaxBound) return;
@@ -1535,6 +1544,9 @@
 
     async function loadChapterMobile(url) {
          if(!url || url.includes('javascript:') || url.includes('#')) return;
+         if (mobileChapterNavigationBusy) return;
+         mobileChapterNavigationBusy = true;
+         setMobileChapterNavigationBusy(true);
 
          // 1. 切换骨架屏
          const bodyEl = document.getElementById('content-body');
@@ -1662,10 +1674,13 @@
              }
          } catch(e) {
              console.error(e);
+             showToast('章节加载失败，正在打开诊断页面');
              location.href = url;
          } finally {
              if(skEl) skEl.style.display = 'none';
              if(bodyEl) bodyEl.style.display = 'block';
+             mobileChapterNavigationBusy = false;
+             setMobileChapterNavigationBusy(false);
          }
     }
     

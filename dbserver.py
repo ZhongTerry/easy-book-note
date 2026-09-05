@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 # 必须在导入本地模块前加载环境变量
 load_dotenv()
 
-from spider_core import crawler_instance, parse_chapter_id
+from spider_core import CRAWLER_PROTOCOL_VERSION, crawler_instance, parse_chapter_id
 from shared import USER_DATA_DIR, info, warn, error
 from config import SESSION_LIFETIME_DAYS, SESSION_COOKIE_NAME
 import managers
@@ -49,6 +49,31 @@ app.register_blueprint(core_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
 app.register_blueprint(cache_bp)
+
+
+@app.route('/healthz')
+def healthz():
+    """Small unauthenticated probe for a reverse proxy or personal deployment."""
+    checks = {'database': False, 'cache': False}
+    try:
+        conn = sqlite3.connect(managers.DB_PATH)
+        conn.execute('SELECT 1').fetchone()
+        conn.close()
+        checks['database'] = True
+    except Exception as exc:
+        warn('Health', f'database check failed: {type(exc).__name__}')
+    try:
+        os.makedirs(managers.CACHE_DIR, exist_ok=True)
+        checks['cache'] = os.path.isdir(managers.CACHE_DIR)
+    except OSError as exc:
+        warn('Health', f'cache check failed: {type(exc).__name__}')
+
+    healthy = all(checks.values())
+    return jsonify({
+        'status': 'ok' if healthy else 'degraded',
+        'checks': checks,
+        'crawler_protocol_version': CRAWLER_PROTOCOL_VERSION,
+    }), 200 if healthy else 503
 
 @app.after_request
 def add_security_headers(response):

@@ -2463,8 +2463,21 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     }
 
     /* === AJAX 核心逻辑优化 === */
+let chapterNavigationBusy = false;
+
+function setChapterNavigationBusy(busy) {
+    document.querySelectorAll('#link-prev, #link-next').forEach((link) => {
+        link.style.pointerEvents = busy ? 'none' : '';
+        link.style.opacity = busy ? '.55' : '';
+        link.setAttribute('aria-busy', String(busy));
+    });
+}
+
 async function loadChapter(url) {
     if(!url || url.includes('javascript:') || url.includes('#')) return;
+    if (chapterNavigationBusy) return;
+    chapterNavigationBusy = true;
+    setChapterNavigationBusy(true);
     
     // 1. 显示进度条和骨架屏
     showProgressBar();
@@ -2544,6 +2557,8 @@ async function loadChapter(url) {
             
             // 11. 隐藏进度条
             hideProgressBar();
+            chapterNavigationBusy = false;
+            setChapterNavigationBusy(false);
             
         } else {
             throw new Error(json.msg || '加载失败');
@@ -2551,6 +2566,8 @@ async function loadChapter(url) {
     } catch(e) {
         console.error('AJAX 加载错误:', e);
         hideProgressBar();
+        chapterNavigationBusy = false;
+        setChapterNavigationBusy(false);
         
         if(e.name === 'AbortError') {
             showToast('⏱️ 加载超时,正在跳转...');

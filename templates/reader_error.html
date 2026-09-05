@@ -19,6 +19,12 @@
         .action.primary:hover { color:#fff; background:#0b625c; }
         .context { margin:24px 0 0; padding-top:16px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
         .context strong { color:var(--text); font-weight:600; }
+        .diagnostic { margin-top:16px; padding:14px; border:1px solid var(--border); background:#f8fbfb; }
+        .diagnostic h2 { margin:0 0 10px; font-size:14px; }
+        .diagnostic-grid { display:grid; grid-template-columns:92px minmax(0,1fr); gap:7px 12px; margin:0; font-size:12px; line-height:1.45; }
+        .diagnostic-grid dt { color:var(--muted); }.diagnostic-grid dd { margin:0; color:var(--text); overflow-wrap:anywhere; }
+        .copy-diagnostic { margin-top:12px; min-height:32px; padding:0 10px; border:1px solid var(--border); border-radius:5px; background:#fff; color:var(--text); font:inherit; font-size:12px; cursor:pointer; }
+        .copy-diagnostic:hover { border-color:var(--accent); color:var(--accent); }
         @media (max-width:540px) { body { padding:0; align-items:stretch; } main { width:100%; padding:28px 22px; border:0; } h1 { font-size:22px; }.actions { display:grid; grid-template-columns:1fr 1fr; }.action.primary { grid-column:1 / -1; } }
     </style>
 </head>
@@ -34,6 +40,30 @@
             <button class="action" type="button" onclick="history.back()">返回上一页</button>
         </div>
         <p class="context"><strong>当前来源：</strong>{{ current_url }}</p>
+        {% if diagnostic %}
+        <section class="diagnostic" aria-labelledby="diagnostic-title">
+            <h2 id="diagnostic-title">诊断信息</h2>
+            <dl class="diagnostic-grid">
+                <dt>问题代码</dt><dd>{{ diagnostic.code }}</dd>
+                <dt>发生阶段</dt><dd>{{ diagnostic.stage }}</dd>
+                <dt>来源域名</dt><dd>{{ diagnostic.source }}</dd>
+                <dt>HTTP 状态</dt><dd>{{ diagnostic.status_code }}</dd>
+                <dt>追踪编号</dt><dd id="trace-id">{{ diagnostic.trace_id }}</dd>
+                {% if diagnostic.detail %}<dt>异常类型</dt><dd>{{ diagnostic.detail }}</dd>{% endif %}
+            </dl>
+            <button class="copy-diagnostic" type="button" onclick="copyDiagnostic(this)">复制诊断信息</button>
+        </section>
+        {% endif %}
     </main>
+    <script>
+        function copyDiagnostic(button) {
+            const diagnostic = document.querySelector('.diagnostic');
+            if (!diagnostic) return;
+            navigator.clipboard?.writeText(diagnostic.innerText.trim()).then(
+                () => { button.textContent = '已复制'; },
+                () => { button.textContent = '复制失败'; },
+            );
+        }
+    </script>
 </body>
 </html>
