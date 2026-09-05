@@ -7,6 +7,7 @@
         <!-- <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script> -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="/static/js/csrf.js"></script>
     <title>{{ article.title }} - Smart NoteDB</title>
     <style>
         :root {
@@ -794,6 +795,82 @@ body.dark-mode .context-menu {
 body.dark-mode .context-menu button {
     color: #e5e7eb;
 }
+
+/* Reading surface refinement: these rules deliberately sit last to override legacy theme layers. */
+:root { --bg-outer:#eef2f3; --bg-reader:#fff; --bg-header:rgba(255,255,255,.94); --text-main:#26343d; --text-meta:#6b7b86; --accent:#0f766e; --border-color:#dce4e8; }
+body.dark-mode { --bg-outer:#172027; --bg-reader:#1e292f; --bg-header:rgba(30,41,47,.94); --text-main:#d4dde1; --text-meta:#8da0aa; --border-color:#34434b; --accent:#52b7aa; }
+header { height:58px; border-bottom-color:var(--border-color); }
+.header-content { width:min(1160px,calc(100% - 40px)); }
+.header-left { color:var(--text-main); gap:2px; }
+.header-left span { margin-left:8px; font-size:14px; font-weight:650; }
+.header-right { gap:12px; }
+.btn-refresh-page { border-radius:6px; padding:6px 10px; }
+.main-container { width:min(860px,calc(100% - 40px)); min-height:calc(100vh - 96px); margin-top:78px; margin-bottom:34px; padding:62px 76px 48px; box-shadow:0 10px 30px rgba(30,49,60,.06); border:1px solid rgba(220,228,232,.82); }
+.article-header { margin-bottom:42px; padding-bottom:24px; border-bottom:1px solid var(--border-color); }
+.article-header h1 { color:var(--text-main); font-size:28px; line-height:1.35; letter-spacing:0; margin-bottom:12px; }
+.article-meta { gap:14px; color:var(--text-meta); font-size:12px; }
+.content-body { font-size:18px; line-height:2.02; letter-spacing:0; color:var(--text-main); }
+.content-body p { margin:0 0 25px; text-indent:2em; }
+#readingProgressBar { top:58px; height:3px; background:var(--accent); opacity:.92; }
+.btn-refresh-page { color:var(--text-meta); border-color:var(--border-color); background:transparent; font-weight:600; }
+.btn-refresh-page:hover { color:var(--accent); border-color:var(--accent); background:rgba(15,118,110,.06); }
+.user-avatar { width:28px; height:28px; border:1px solid var(--border-color); }
+.header-right > div { color:var(--text-meta) !important; }
+.floating-menu { right:max(20px,calc(50% - 520px)); top:184px; gap:7px; }
+.menu-item { width:42px; height:42px; min-height:42px; border-radius:6px; background:var(--bg-header); color:var(--text-meta); border:1px solid var(--border-color); box-shadow:0 4px 12px rgba(30,49,60,.05); }
+.menu-item svg { width:19px; height:19px; margin:0; }
+.menu-item span { display:none; }
+.menu-item:hover { color:var(--accent); border-color:var(--accent); background:var(--bg-reader); }
+.menu-item.saved { color:var(--accent); border-color:rgba(15,118,110,.45); background:rgba(15,118,110,.09); }
+.menu-item.saving { cursor:wait; opacity:.62; }
+.bottom-nav { margin-top:56px; padding:30px 0 0; gap:10px; justify-content:space-between; }
+.nav-btn { width:auto; min-width:112px; height:36px; padding:0 16px; border-radius:6px; background:transparent; color:var(--text-meta); border:1px solid var(--border-color); }
+.nav-btn:hover { color:var(--accent); border-color:var(--accent); background:rgba(15,118,110,.06); transform:none; }
+body.dark-mode .nav-btn { background:transparent; border-color:var(--border-color); color:var(--text-meta); }
+body.dark-mode .nav-btn:hover { background:rgba(82,183,170,.1); color:var(--accent); }
+body.dark-mode .article-header h1 { color:var(--text-main); }
+body.dark-mode .main-container { border-color:var(--border-color); box-shadow:none; }
+.modal-overlay { background:rgba(20,32,39,.48); padding:20px; box-sizing:border-box; backdrop-filter:blur(3px); animation:modal-fade-in 160ms ease-out both; }
+.modal-box { width:min(500px,100%); max-width:500px; max-height:min(720px,calc(100vh - 40px)); padding:22px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-reader); color:var(--text-main); box-shadow:0 18px 48px rgba(20,32,39,.2); animation:modal-panel-in 200ms cubic-bezier(.2,.8,.2,1) both; }
+.modal-overlay.is-closing { animation:modal-fade-out 150ms ease-in both; }
+.modal-overlay.is-closing .modal-box { animation:modal-panel-out 150ms ease-in both; }
+@keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes modal-fade-out { from { opacity:1; } to { opacity:0; } }
+@keyframes modal-panel-in { from { opacity:0; transform:translateY(12px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+@keyframes modal-panel-out { from { opacity:1; transform:translateY(0) scale(1); } to { opacity:0; transform:translateY(7px) scale(.99); } }
+.modal-header { margin-bottom:16px; padding-bottom:14px; border-bottom-color:var(--border-color); }
+.modal-title { color:var(--text-main); font-size:16px; font-weight:700; }
+.modal-close { width:30px; height:30px; padding:0; border:1px solid transparent; border-radius:5px; background:transparent; color:var(--text-meta); font-size:23px; line-height:1; cursor:pointer; }
+.modal-close:hover { border-color:var(--border-color); color:var(--accent); background:rgba(15,118,110,.06); }
+.btn-refresh-toc { padding:6px 10px; border-radius:5px; border-color:var(--border-color); background:transparent; color:var(--accent); font-weight:600; }
+.btn-refresh-toc:hover { background:rgba(15,118,110,.08); color:var(--accent); border-color:var(--accent); }
+.toc-item { padding:12px 10px; border-bottom-color:var(--border-color); border-radius:5px; color:var(--text-main); }
+.toc-item:hover { background:rgba(15,118,110,.06); color:var(--accent); }
+.toc-item.active-chap { background:rgba(15,118,110,.1); color:var(--accent) !important; }
+.setting-row { margin-bottom:22px; }
+.setting-label { margin-bottom:9px; color:var(--text-main); font-size:13px; }
+.btn-action { min-height:38px; padding:8px 10px; border-radius:5px; border-color:var(--border-color); background:transparent; color:var(--text-main); }
+.btn-action:hover { border-color:var(--accent); background:rgba(15,118,110,.06); color:var(--accent); }
+.memo-input, .memo-textarea, #settingsModal select.p-input, #settingsModal input.p-input, .source-title-input { border-color:var(--border-color); border-radius:5px; background:var(--bg-reader); color:var(--text-main); }
+.memo-input:focus, .memo-textarea:focus, #settingsModal select.p-input:focus, #settingsModal input.p-input:focus, .source-title-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(15,118,110,.12); }
+.source-title-row { padding:10px; border-color:var(--border-color); border-radius:6px; background:rgba(15,118,110,.035); }
+.source-search-btn { border-radius:5px; background:var(--accent); }
+.context-menu { border-radius:6px; border-color:var(--border-color); background:var(--bg-reader); box-shadow:0 12px 32px rgba(20,32,39,.16); }
+.context-menu button { border-radius:4px; color:var(--text-main); }
+.context-menu button:hover { background:rgba(15,118,110,.08); }
+body.dark-mode .modal-box, body.dark-mode .context-menu { background:var(--bg-reader); border-color:var(--border-color); }
+body.dark-mode .modal-header, body.dark-mode .toc-item { border-color:var(--border-color); }
+body.dark-mode .toc-item { color:var(--text-main); }
+body.dark-mode .toc-item:hover { background:rgba(82,183,170,.1); }
+body.dark-mode .toc-item.active-chap { background:rgba(82,183,170,.14) !important; color:var(--accent) !important; }
+body.dark-mode .menu-item.saved { border-color:rgba(82,183,170,.52); background:rgba(82,183,170,.13); }
+body.dark-mode .btn-action { background:transparent; border-color:var(--border-color); color:var(--text-main); }
+body.dark-mode .btn-action:hover { background:rgba(82,183,170,.1); color:var(--accent); }
+body.dark-mode .source-title-row { background:rgba(82,183,170,.06); border-color:var(--border-color); }
+body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input, body.dark-mode #settingsModal input.p-input { background:var(--bg-reader); border-color:var(--border-color); color:var(--text-main); }
+@media (prefers-reduced-motion:reduce) { .modal-overlay, .modal-box, .modal-overlay.is-closing, .modal-overlay.is-closing .modal-box { animation:none; } }
+@media (max-width:980px) { .main-container { width:min(760px,calc(100% - 32px)); padding:52px 48px 42px; }.floating-menu { right:14px; } }
+@media (max-width:720px) { .header-content { width:calc(100% - 28px); }.header-right > div { display:none !important; }.btn-refresh-page { font-size:0; width:32px; height:32px; padding:0; }.btn-refresh-page::after { content:'↻'; font-size:18px; }.main-container { width:100%; margin:58px 0 0; min-height:calc(100vh - 58px); padding:38px 24px 30px; border-left:0; border-right:0; box-shadow:none; }.article-header { margin-bottom:30px; padding-bottom:19px; }.article-header h1 { font-size:23px; }.content-body { font-size:17px; line-height:1.94; }.content-body p { margin-bottom:21px; }.floating-menu { display:none; }.modal-overlay { padding:12px; }.modal-box { max-height:calc(100vh - 24px); padding:18px; }.btn-grid { grid-template-columns:1fr; } }
     </style>
     <script>
         // === [核心修复] 智能关闭 Modal ===
@@ -801,7 +878,7 @@ body.dark-mode .context-menu button {
     // 解决了“在内部选中文字拖拽到外部松开导致关闭”的 Bug
     function closeByOverlay(event, modalId) {
         if (event.target === event.currentTarget) {
-            document.getElementById(modalId).style.display = 'none';
+            hideModal(modalId);
         }
     }
     </script>
@@ -908,25 +985,25 @@ body.dark-mode .context-menu button {
 </div>
 
 <aside class="floating-menu">
-    <div class="menu-item" onclick="location.href='/'">
+    <div class="menu-item" onclick="location.href='/'" title="返回书架" aria-label="返回书架">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         <span>书架</span>
     </div>
-    <div class="menu-item" id="saveToShelfBtn" onclick="saveToShelf()" title="将当前书籍保存到书架">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div class="menu-item" id="saveToShelfBtn" onclick="saveToShelf()" title="将当前书籍保存到书架" aria-label="将当前书籍保存到书架">
+        <svg id="saveToShelfIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
         </svg>
         <span>收藏</span>
     </div>
-    <div class="menu-item" onclick="showModal('tocOverlay')">
+    <div class="menu-item" onclick="showModal('tocOverlay')" title="目录" aria-label="目录">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         <span>目录</span>
     </div>
-    <div class="menu-item" onclick="toggleDarkMode()">
+    <div class="menu-item" onclick="toggleDarkMode()" title="切换夜间模式" aria-label="切换夜间模式">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
         <span>夜间</span>
     </div>
-    <div class="menu-item" onclick="showModal('settingsModal')">
+    <div class="menu-item" onclick="showModal('settingsModal')" title="阅读设置" aria-label="阅读设置">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         <span>设置</span>
     </div>
@@ -939,7 +1016,7 @@ body.dark-mode .context-menu button {
                  <!-- 目录内刷新按钮 -->
                  <button class="btn-refresh-toc" onclick="loadTOC(true)" title="从源站重新抓取目录">🔄 刷新</button>
                  <!-- 关闭按钮 -->
-                 <button onclick="document.getElementById('tocOverlay').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+                 <button class="modal-close" onclick="hideModal('tocOverlay')" title="关闭目录" aria-label="关闭目录">×</button>
             </div>
         </div>
         <!-- 目录列表容器 -->
@@ -953,7 +1030,7 @@ body.dark-mode .context-menu button {
     <div class="modal-box" onclick="event.stopPropagation()">
         <div class="modal-header">
             <h3 class="modal-title">阅读设置</h3>
-            <button onclick="document.getElementById('settingsModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+            <button class="modal-close" onclick="hideModal('settingsModal')" title="关闭阅读设置" aria-label="关闭阅读设置">×</button>
         </div>
         
         <div class="setting-row">
@@ -1069,11 +1146,11 @@ body.dark-mode .context-menu button {
     </div>
 
     <!-- 换源模态框 -->
-    <div id="sourceModal" class="modal-overlay" onclick="if(event.target===this) this.style.display='none'">
+    <div id="sourceModal" class="modal-overlay" onclick="if(event.target===this) hideModal('sourceModal')">
     <div class="modal-box" onclick="event.stopPropagation()">
         <div class="modal-header">
             <h3 class="modal-title">选择备选源</h3>
-            <button onclick="document.getElementById('sourceModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+            <button class="modal-close" onclick="hideModal('sourceModal')" title="关闭换源" aria-label="关闭换源">×</button>
         </div>
         <div class="source-title-row">
             <input id="sourceTitleInput" class="p-input source-title-input" placeholder="书名识别错误？可手动输入" />
@@ -1086,11 +1163,11 @@ body.dark-mode .context-menu button {
 
 <div id="toast"></div>
 <!-- 分享 Modal -->
-<div id="shareModal" class="modal-overlay" onclick="this.style.display='none'">
+<div id="shareModal" class="modal-overlay" onclick="if(event.target===this) hideModal('shareModal')">
     <div class="modal-box" onclick="event.stopPropagation()" style="max-width: 380px;">
         <div class="modal-header">
             <h3 class="modal-title">📤 分享本书</h3>
-            <button onclick="document.getElementById('shareModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+            <button class="modal-close" onclick="hideModal('shareModal')" title="关闭分享" aria-label="关闭分享">×</button>
         </div>
         
         <div class="share-body">
@@ -1115,7 +1192,7 @@ body.dark-mode .context-menu button {
     <div class="modal-box" onclick="event.stopPropagation()" style="max-width: 420px;">
         <div class="modal-header">
             <h3 class="modal-title">编辑标签</h3>
-            <button onclick="document.getElementById('memoTagModal').style.display='none'" style="border:none; background:none; font-size:20px; cursor:pointer;">×</button>
+            <button class="modal-close" onclick="hideModal('memoTagModal')" title="关闭标签编辑" aria-label="关闭标签编辑">×</button>
         </div>
         <div style="padding: 15px;">
             <div style="font-size: 12px; color: #6b7280; margin-bottom: 8px;">用逗号或空格分隔标签</div>
@@ -1395,58 +1472,51 @@ body.dark-mode .context-menu button {
     const APP_VERSION = "{{ app_version }}";
     let isSubscribed = false;
     
-    // [新增] 保存到��架功能
+    // Shelf state is separate from the per-chapter bookmark feature.
     let isSaved = false;
+
+    function setShelfSaveState(saved, options = {}) {
+        isSaved = saved;
+        const btn = document.getElementById('saveToShelfBtn');
+        const icon = document.getElementById('saveToShelfIcon');
+        if (!btn || !icon) return;
+
+        const saving = Boolean(options.saving);
+        btn.classList.toggle('saved', saved);
+        btn.classList.toggle('saving', saving);
+        btn.setAttribute('aria-busy', saving ? 'true' : 'false');
+        btn.setAttribute('aria-disabled', saving ? 'true' : 'false');
+
+        if (saving) {
+            btn.title = '正在收藏到书架';
+            btn.setAttribute('aria-label', '正在收藏到书架');
+            icon.setAttribute('fill', 'none');
+            return;
+        }
+
+        const label = saved ? '已收藏到书架' : '将当前书籍收藏到书架';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+        icon.setAttribute('fill', saved ? 'currentColor' : 'none');
+    }
     
     async function saveToShelf() {
         const btn = document.getElementById('saveToShelfBtn');
-        
-        // 如果已经有 key，说明已在书架
-        if (dbKey) {
-            try {
-                // 检查是否真的存在于数据库
-                const checkRes = await fetch('/find', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ key: dbKey })
-                });
-                const checkData = await checkRes.json();
-                
-                if (checkData.status === 'success' && checkData.value) {
-                    // 已存在
-                    alert('✅ 该书籍已在书架中');
-                    btn.classList.add('saved');
-                    return;
-                }
-            } catch(e) {
-                console.error(e);
-            }
-        }
-        
-        // 需要获取目录 URL
-        if (!dbKey || !currentUrl) {
-            alert('❌ 缺少必要信息，无法保存');
+        if (isSaved) {
+            showToast('已收藏到书架');
             return;
         }
-        
-        btn.style.opacity = '0.5';
-        btn.style.pointerEvents = 'none';
+
+        if (!dbKey || !currentUrl || btn.getAttribute('aria-busy') === 'true') {
+            showToast('暂时无法收藏当前书籍');
+            return;
+        }
+
+        setShelfSaveState(false, { saving: true });
         
         try {
-            // 获取目录 URL
-            let tocUrl = currentUrl;
+            const tocUrl = {{ (article.toc_url or '')|tojson }} || currentUrl;
             
-            // 如果当前是章节页，尝试从 article.toc_url 获取
-            const tocData = await fetch(`/toc?url=${encodeURIComponent(currentUrl)}&key=${encodeURIComponent(dbKey || 'temp')}&api=1`);
-            const toc = await tocData.json();
-            
-            // 使用页面提供的目录链接或当前 URL
-            const tocLink = "{{ article.toc_url or '' }}";
-            if (tocLink) {
-                tocUrl = tocLink;
-            }
-            
-            // 调用快速保存 API
             const res = await fetch('/api/quick_save', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -1459,18 +1529,16 @@ body.dark-mode .context-menu button {
             const result = await res.json();
             
             if (result.status === 'success') {
-                alert('✅ ' + result.message);
-                btn.classList.add('saved');
-                isSaved = true;
+                setShelfSaveState(true);
+                showToast(result.already_saved ? '已收藏到书架' : '已收藏到书架');
             } else {
-                alert('❌ ' + (result.message || '保存失败'));
+                setShelfSaveState(false);
+                showToast(result.message || '收藏失败，请重试');
             }
         } catch(e) {
             console.error(e);
-            alert('❌ 保存失败：' + e.message);
-        } finally {
-            btn.style.opacity = '1';
-            btn.style.pointerEvents = 'auto';
+            setShelfSaveState(false);
+            showToast('收藏失败，请检查网络后重试');
         }
     }
     
@@ -1486,13 +1554,8 @@ body.dark-mode .context-menu button {
             });
             const data = await res.json();
             
-            if (data.status === 'success' && data.value) {
-                const btn = document.getElementById('saveToShelfBtn');
-                if (btn) {
-                    btn.classList.add('saved');
-                    btn.title = '已在书架中';
-                }
-                isSaved = true;
+            if (data.status === 'success' && data.data && Object.prototype.hasOwnProperty.call(data.data, dbKey)) {
+                setShelfSaveState(true);
             }
         } catch(e) {
             console.error(e);
@@ -1718,7 +1781,7 @@ body.dark-mode .context-menu button {
     // 1. M 键快速打开/关闭目录 (Menu)
     if (e.key.toLowerCase() === 'm' && document.activeElement.tagName !== 'INPUT') {
         const toc = document.getElementById('tocOverlay');
-        toc.style.display === 'none' ? showModal('tocOverlay') : toc.style.display = 'none';
+        getComputedStyle(toc).display === 'none' ? showModal('tocOverlay') : hideModal('tocOverlay');
     }
 
     // 2. T 键开启/停止 TTS 朗读 (Talk)
@@ -1867,7 +1930,22 @@ body.dark-mode .context-menu button {
 
     // === UI 交互逻辑 ===
     function showModal(id) {
-        document.getElementById(id).style.display = 'flex';
+        const modal = document.getElementById(id);
+        if (!modal) return;
+        clearTimeout(modal._closeTimer);
+        modal.classList.remove('is-closing');
+        modal.style.display = 'flex';
+    }
+
+    function hideModal(id) {
+        const modal = document.getElementById(id);
+        if (!modal || modal.style.display === 'none') return;
+        modal.classList.add('is-closing');
+        clearTimeout(modal._closeTimer);
+        modal._closeTimer = setTimeout(() => {
+            modal.style.display = 'none';
+            modal.classList.remove('is-closing');
+        }, 150);
         if(id === 'tocOverlay') loadTOC(false);
         if(id === 'statsModal') loadStats(); // 加载热力图
     }
@@ -2028,8 +2106,8 @@ body.dark-mode .context-menu button {
 
     // === 分享功能 ===
     function openShareModal() {
-        document.getElementById('settingsModal').style.display = 'none';
-        document.getElementById('shareModal').style.display = 'flex';
+        hideModal('settingsModal');
+        showModal('shareModal');
         
         const title = document.getElementById('chapterTitle').innerText;
         const shareUrl = window.location.href;
@@ -2101,7 +2179,7 @@ body.dark-mode .context-menu button {
     }
 
     function triggerSourceModal() {
-        document.getElementById('settingsModal').style.display = 'none';
+        hideModal('settingsModal');
         showModal('sourceModal');
         initManualSourceTitle();
         loadSourceList();
@@ -2268,7 +2346,7 @@ body.dark-mode .context-menu button {
         const tags = Array.isArray(memoTagContext.tags) ? memoTagContext.tags : [];
         if (input) input.value = tags.join(' ');
         if (commentInput) commentInput.value = memoTagContext.comment || '';
-        document.getElementById('memoTagModal').style.display = 'flex';
+        showModal('memoTagModal');
     }
 
     async function saveMemoTags() {
@@ -2301,7 +2379,7 @@ body.dark-mode .context-menu button {
                     memoParagraphEl.dataset.memoComment = comment;
                 }
                 showToast('✅ 标签已保存');
-                document.getElementById('memoTagModal').style.display = 'none';
+                hideModal('memoTagModal');
             } else {
                 showToast(json.message || '❌ 标签保存失败');
             }
@@ -2745,7 +2823,7 @@ function refreshTocHighlight() {
                 document.getElementById('link-next')?.click();
                 break;
             case 'Escape':
-                document.querySelectorAll('.modal-overlay').forEach(m => m.style.display='none');
+                document.querySelectorAll('.modal-overlay').forEach(m => hideModal(m.id));
                 break;
             case 't':
             case 'T':
@@ -2758,7 +2836,7 @@ function refreshTocHighlight() {
             case 'S':
                 if(!e.ctrlKey && !e.metaKey) {
                     e.preventDefault();
-                    showModal('settingModal');
+                    showModal('settingsModal');
                 }
                 break;
         }

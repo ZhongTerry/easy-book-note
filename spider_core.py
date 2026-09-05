@@ -4,6 +4,8 @@ import re
 import os
 import importlib.util
 import hashlib
+import uuid
+import zipfile
 from urllib.parse import urljoin, urlparse, quote
 from difflib import SequenceMatcher
 from urllib.request import getproxies
@@ -14,6 +16,8 @@ from pypinyin import lazy_pinyin, Style
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ebooklib import epub
 from werkzeug.utils import secure_filename
+from recognition import PageType, RecognitionEngine, SourceHealthTracker, find_chapter_match, get_payload_issue
+from recognition.chapter_numbers import parse_chapter_number
 # [确保这里有 CACHE_DIR]
 from shared import BASE_DIR, LIB_DIR, CACHE_DIR, debug, info, warn, error
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
@@ -100,26 +104,7 @@ def _remote_request(endpoint, payload):
     warn("Spider", f"[Cluster] ⚠️ 任务 {task_id[:8]} 等待超时 (无 Worker 接单)")
     return None
 def parse_chapter_id(text):
-    if not text: return -1
-    text = text.strip()
-    
-    # 1. 优先匹配纯数字 (例如: "49. 章节名" 或 "第49章")
-    match_num = re.search(r'(?:第)?\s*(\d+)\s*[章节回幕\.]', text)
-    if match_num: 
-        return int(match_num.group(1))
-        
-    # 2. 匹配中文数字 (例如: "第十一章")
-    # 注意：这里把两、千、万等都加全了
-    match_cn = re.search(r'(?:第)?\s*([零〇一二两三四五六七八九十百千万]+)\s*[章节回幕]', text)
-    if match_cn: 
-        return _smart_convert_int(match_cn.group(1))
-        
-    # 3. 实在不行，匹配开头的数字 (例如 "123 章节名")
-    match_start = re.search(r'^(\d+)', text)
-    if match_start: 
-        return int(match_start.group(1))
-        
-    return -1
+    return parse_chapter_number(text) or -1
 
 def _smart_convert_int(s):
     """
@@ -1637,9 +1622,42 @@ class NovelCrawler:
         self.impersonate = "chrome110"
         self.timeout = 15
         self.proxies = getproxies()
+        self.recognition_engine = RecognitionEngine()
+        self.source_health = SourceHealthTracker()
         # [新增] 任务去重机制：防止同一 URL 被重复爬取
         self._active_tasks = {}  # {url: {'event': threading.Event(), 'result': None, 'error': None}}
         self._task_lock = threading.Lock()
+
+    def _recognize_payload(self, payload, url, declared_type=None):
+        """Attach the canonical recognition contract without breaking legacy fields."""
+        return self.recognition_engine.normalize_payload(payload, url, declared_type)
+
+    def _recognize_toc_payload(self, payload, url):
+        return self._recognize_payload(payload, url, PageType.TOC)
+
+    def _source_cooldown_payload(self, url):
+        cooldown_seconds = self.source_health.cooldown_remaining(url)
+        return {
+            'title': '',
+            'page_type': PageType.UNKNOWN.value,
+            'recognition_confidence': 0.0,
+            'recognition': {
+                'page_type': PageType.UNKNOWN.value,
+                'confidence': 0.0,
+                'warnings': ['source_cooldown'],
+                'evidence': [],
+                'cooldown_seconds': cooldown_seconds,
+            },
+        }
+
+    def _record_source_result(self, url, result):
+        issue = get_payload_issue(result)
+        if not issue:
+            self.source_health.record_success(url)
+        elif issue['code'] == 'SOURCE_CHALLENGE':
+            self.source_health.record_failure(url, 'challenge')
+        else:
+            self.source_health.record_failure(url, 'fetch_or_recognition_failure')
 
     def _normalize_title(self, text):
         if not text:
@@ -1811,10 +1829,7 @@ class NovelCrawler:
     def find_best_match(self, toc_url, target_id, target_title):
         """
         在指定源(toc_url)中查找最佳匹配章节
-        策略调整：
-        1. 优先尝试标题模糊匹配 (Title Fuzzy Match) - 解决 ID 错位问题
-        2. 其次尝试 ID 匹配 (ID Match) - 解决标题被改名问题
-        3. 失败则返回第一章
+        仅在章节号和标题能形成可靠证据时返回候选章节。
         """
         info("Switch", f"🔎 正在新源 {toc_url} 查找章节: ID={target_id}, Title={target_title}")
         
@@ -1825,60 +1840,12 @@ class NovelCrawler:
                 error("Switch", "❌ 目录获取失败或为空")
                 return None 
 
-            chapters = toc['chapters']
-            if not chapters: return None
-
-            # === 1. 优先尝试标题模糊匹配 ===
-            if target_title:
-                from difflib import SequenceMatcher
-                
-                # 预处理：去掉 "第xxx章" 和空格，只比对核心文字
-                def clean_t(t):
-                    # 去除 "第xxx章"、"Episode X" 等前缀，以及所有空格和标点
-                    t = re.sub(r'^(?:第)?\s*[0-9零一二三四五六七八九十百千万]+\s*[章节回卷\.]', '', str(t))
-                    t = re.sub(r'[ \u3000\t\r\n]', '', t)
-                    return t.strip()
-                
-                clean_target = clean_t(target_title)
-                
-                if clean_target:
-                    best_ratio = 0
-                    best_url = None
-                    best_title_found = ""
-
-                    # 遍历目录查找最相似的
-                    for chap in chapters:
-                        clean_chap = clean_t(chap.get('name', '') or chap['title'])
-                        
-                        # A. 完全包含 (极高置信度，例如 "大战三百回合" vs "大战三百回合(修)")
-                        if clean_target == clean_chap and len(clean_target) > 1:
-                            info("Switch", f"✅ 标题完全一致: {chap['title']}")
-                            return chap['url']
-                        
-                        # B. 相似度计算
-                        ratio = SequenceMatcher(None, clean_target, clean_chap).ratio()
-                        
-                        # 如果相似度超过 0.7 且是目前最高的
-                        if ratio > 0.7 and ratio > best_ratio:
-                            best_ratio = ratio
-                            best_url = chap['url']
-                            best_title_found = chap['title']
-                    
-                    if best_url:
-                        info("Spider", f"[Switch] ✅ 标题相似度命中 ({best_ratio:.2f}): [{target_title}] vs [{best_title_found}]")
-                        return best_url
-
-            # === 2. 其次尝试 ID 匹配 ===
-            if target_id and target_id > 0:
-                warn("Switch", f"⚠️ 标题匹配未命中，尝试 ID 匹配: {target_id}")
-                for chap in reversed(chapters):
-                    if chap.get('id') == target_id:
-                        info("Switch", f"✅ ID 精确命中: {chap['title']}")
-                        return chap['url']
-
-            # === 3. 兜底策略：返回第一章 ===
-            error("Switch", f"⚠️ 全部匹配失败，回退到第一章")
-            return chapters[0]['url']
+            match = find_chapter_match(toc['chapters'], target_id, target_title)
+            if not match:
+                warn("Switch", "未找到足够可靠的章节匹配，拒绝自动跳转")
+                return None
+            info("Switch", f"✅ 可靠匹配 ({match['match_strategy']}, {match['match_confidence']:.2f}): {match.get('title') or match.get('name')}")
+            return match['url']
             
         except Exception as e:
             info("Switch", f"匹配过程出错: {e}")
@@ -2139,14 +2106,12 @@ class NovelCrawler:
         current_retry = retry if retry is not None else 3
         current_timeout = timeout if timeout is not None else self.timeout
 
+        headers = {
+            "Referer": url,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+        }
         for i in range(current_retry):
             try:
-                headers = {
-                    "Referer": url, 
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-                }
-                
-                # 发起请求
                 resp = cffi_requests.get(
                     url, 
                     impersonate=self.impersonate, 
@@ -2156,36 +2121,48 @@ class NovelCrawler:
                     proxies=self.proxies
                 )
                 
-                # === 编码智能识别逻辑 ===
-                
-                # A. 尝试 lxml 解析 meta 标签 (最准)
-                try:
-                    tree = lxml_html.fromstring(resp.content, parser=lxml_html.HTMLParser(encoding='utf-8'))
-                    charset = tree.xpath('//meta[contains(@content, "charset")]/@content') or tree.xpath('//meta/@charset')
-                    enc = 'utf-8'
-                    if charset:
-                        match = re.search(r'charset=([\w-]+)', str(charset[0]), re.I)
-                        enc = match.group(1) if match else charset[0]
-                    return resp.content.decode(enc)
-                except Exception:
-                    pass
-                
-                # B. 暴力尝试常见中文编码
-                for e in ['utf-8', 'gb18030', 'gbk', 'big5']:
-                    try: return resp.content.decode(e)
-                    except: continue
-                
-                # C. 最后兜底
-                return resp.content.decode('utf-8', errors='replace')
+                return self._decode_page_response(resp)
 
             except Exception as e: 
                 # 只有不是最后一次重试时才 sleep
                 if i == current_retry - 1: 
-                    # print(f"[Fetch] 最终失败: {url} | Err: {e}")
-                    return None 
+                    break
                 time.sleep(1)
-        
-        return None
+
+        # curl_cffi provides the preferred browser fingerprint, but network
+        # resolution can fail independently of the normal HTTP client.
+        try:
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=current_timeout,
+                allow_redirects=True,
+                proxies=self.proxies or None,
+            )
+            return self._decode_page_response(resp)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _decode_page_response(resp):
+        """Decode a crawler response consistently across HTTP clients."""
+        content = resp.content
+        try:
+            tree = lxml_html.fromstring(content, parser=lxml_html.HTMLParser(encoding='utf-8'))
+            charset = tree.xpath('//meta[contains(@content, "charset")]/@content') or tree.xpath('//meta/@charset')
+            encoding = 'utf-8'
+            if charset:
+                match = re.search(r'charset=([\w-]+)', str(charset[0]), re.I)
+                encoding = match.group(1) if match else charset[0]
+            return content.decode(encoding)
+        except Exception:
+            pass
+        for encoding in ['utf-8', 'gb18030', 'gbk', 'big5']:
+            try:
+                return content.decode(encoding)
+            except Exception:
+                continue
+        return content.decode('utf-8', errors='replace')
 
     def _get_smart_title(self, soup):
         h1_title = soup.find('h1', class_=re.compile(r'title|chapter|book|name', re.I))
@@ -2289,6 +2266,26 @@ class NovelCrawler:
             c['title'] = raw_title # [核心修复] 补上这个键，防止后端报错
             processed_list.append(c)
             
+        # Volumes restart chapter numbers on many sources.  Keep volume order
+        # from the source and only sort a volume when every entry is numbered.
+        if any(c.get('volume') for c in processed_list):
+            groups = []
+            group_by_volume = {}
+            for chapter in processed_list:
+                volume = chapter.get('volume') or '__unsectioned__'
+                if volume not in group_by_volume:
+                    group_by_volume[volume] = []
+                    groups.append(group_by_volume[volume])
+                group_by_volume[volume].append(chapter)
+            final_chapters = []
+            for group in groups:
+                if group and all(chapter['id'] > 0 for chapter in group):
+                    group.sort(key=lambda chapter: (chapter['id'], chapter.get('origin_idx', 0)))
+                else:
+                    group.sort(key=lambda chapter: chapter.get('origin_idx', 0))
+                final_chapters.extend(group)
+            return final_chapters
+
         numbered = [c for c in processed_list if c['id'] > 0]
         others = [c for c in processed_list if c['id'] <= 0]
         
@@ -2349,7 +2346,7 @@ class NovelCrawler:
                         data = json.load(f)
                         if data and data.get('chapters'):
                             info("Crawler", f"✅ 命中本地目录缓存: {url}")
-                            return data
+                            return self._recognize_toc_payload(data, url)
              except: pass
              
         # 2. 尝试远程集群获取目录
@@ -2365,7 +2362,7 @@ class NovelCrawler:
                 with open(cache_path, 'w', encoding='utf-8') as f:
                     json.dump(remote_data, f, ensure_ascii=False, indent=2)
             except: pass
-            return remote_data
+            return self._recognize_toc_payload(remote_data, url)
         
         # 3. 降级到本地获取
         info("Spider", f"[Crawler] 🌐 远程不可用，本地获取目录 (强制刷新={no_cache}): {url}")
@@ -2454,41 +2451,69 @@ class NovelCrawler:
             info("TOC", f"empty or no chapters: data={data}")
             return None
         
-        if data.get('manual_sort') is True: return data
+        if data.get('manual_sort') is True:
+            return self._recognize_toc_payload(data, url)
         final_chapters = self._standardize_chapters(data['chapters'])
         
         # 返回合并后的结果
-        return {
+        return self._recognize_toc_payload({
             'title': data['title'], 
             'chapters': final_chapters,
             'cover': final_meta['cover'],
             'author': final_meta['author'],
             'desc': final_meta['desc'],
             'tags': final_meta['tags']
-        }
+        }, url)
 
     def _general_toc_logic(self, toc_url):
-        html = self._fetch_page_smart(toc_url)
-        if not html: return None
-        soup = BeautifulSoup(html, 'html.parser')
-        raw_chapters = self._parse_chapters_from_soup(soup, toc_url)
-        
-        pages = set()
-        for s in soup.find_all('select'):
-            for o in s.find_all('option'):
-                v = o.get('value')
-                if v:
-                    f = urljoin(toc_url, v)
-                    if f.rstrip('/') != toc_url.rstrip('/'): pages.add(f)
-        if pages:
-            with ThreadPoolExecutor(max_workers=5) as exe:
-                results = exe.map(lambda u: self._parse_chapters_from_soup(BeautifulSoup(self._fetch_page_smart(u) or "", 'html.parser'), toc_url), sorted(list(pages)))
-                for sub in results: raw_chapters.extend(sub)
-        meta = self._get_book_meta(soup, toc_url)
-        
+        # Directory sites commonly split a long catalog into numbered pages.
+        # Keep the traversal bounded and only enqueue explicit catalog pagination.
+        pending_urls = [toc_url]
+        visited_urls = set()
+        raw_chapters = []
+        title = ''
+        meta = {'cover': '', 'author': '', 'desc': ''}
+
+        while pending_urls and len(visited_urls) < 30:
+            current_url = pending_urls.pop(0)
+            if current_url in visited_urls:
+                continue
+            visited_urls.add(current_url)
+
+            html = self._fetch_page_smart(current_url)
+            if not html:
+                continue
+            soup = BeautifulSoup(html, 'html.parser')
+            recognized = self.recognition_engine.analyze_html(html, current_url)
+            if recognized.page_type is PageType.BLOCKED:
+                if current_url == toc_url:
+                    return None
+                continue
+
+            if not title:
+                title = recognized.title or self._get_smart_title(soup)
+                meta = self._get_book_meta(soup, current_url)
+            page_chapters = recognized.chapters or self._parse_chapters_from_soup(soup, current_url)
+            raw_chapters.extend(page_chapters)
+
+            page_urls = []
+            if recognized.next_page_url and (recognized.page_type is PageType.TOC or page_chapters):
+                page_urls.append(recognized.next_page_url)
+            for select in soup.find_all('select'):
+                for option in select.find_all('option'):
+                    value = option.get('value')
+                    if value:
+                        page_url = urljoin(current_url, value)
+                        if page_url.rstrip('/') != current_url.rstrip('/'):
+                            page_urls.append(page_url)
+            for page_url in page_urls:
+                if page_url not in visited_urls and page_url not in pending_urls:
+                    pending_urls.append(page_url)
+
+        normalized = self.recognition_engine.normalize_payload({'chapters': raw_chapters}, toc_url) or {}
         return {
-            'title': self._get_smart_title(soup), 
-            'chapters': raw_chapters,
+            'title': title,
+            'chapters': normalized.get('chapters', []),
             'cover': meta['cover'],
             'author': meta['author'],
             'desc': meta['desc']
@@ -2539,12 +2564,12 @@ class NovelCrawler:
                             cached_chapter = ftcm.get_chapter_from_cache(book_key, url)
                             if cached_chapter:
                                 info("Crawler", f"🎯 命中全文缓存: {book_key}")
-                                return {
+                                return self._recognize_payload({
                                     'content': cached_chapter['content'].split('\\n'),
                                     'title': cached_chapter['title'],
                                     'book_name': book_key,
                                     'from_fulltext_cache': True
-                                }
+                                }, url, PageType.CHAPTER)
             except: pass
 
         # 1. 其次：检查临时本地缓存
@@ -2561,7 +2586,7 @@ class NovelCrawler:
                     cached_data = cache_inst.get(url)
                     if cached_data:
                         info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
-                        return cached_data
+                        return self._recognize_payload(cached_data, url)
             except: pass
         
         # 1. [核心去重] 检查是否有正在进行的任务
@@ -2600,6 +2625,7 @@ class NovelCrawler:
         # 3. 我们是执行者，开始实际爬取
         try:
             result = self._do_actual_crawl(url, no_cache=no_cache)
+            result = self._recognize_payload(result, url) if result else None
             
             # 保存结果并通知所有等待者
             with self._task_lock:
@@ -2641,6 +2667,8 @@ class NovelCrawler:
         else:
             import managers
         cache = getattr(managers, 'cache', None)
+        if self.source_health.cooldown_remaining(url) > 0:
+            return self._source_cooldown_payload(url)
         
         # 1. 尝试远程集群爬取 (Pull/Push 模式通用)
         payload = {'url': url}
@@ -2651,8 +2679,11 @@ class NovelCrawler:
         
         if remote_data:
             info("Crawler", f"📥 远程抓取成功，写入本地缓存")
-            cache.set(url, remote_data)
-            return remote_data
+            result = self._recognize_payload(remote_data, url)
+            self._record_source_result(url, result)
+            if cache and not get_payload_issue(result):
+                cache.set(url, result)
+            return result
         
         # 2. 降级回本地爬取 (原有逻辑)
         info("Run", f"🐢 远程不可用或未配置，开始本地爬取: {url}")
@@ -2663,12 +2694,19 @@ class NovelCrawler:
         if adapter:
             info("Run", f"✨ 匹配到适配器: {adapter.__class__.__name__}")
             result = adapter.run(self, url)
+            if not result:
+                self._record_source_result(url, None)
+                return None
             info("Run", f"📦 插件返回书名: {result.get('book_name', '未知')}")
+            result = self._recognize_payload(result, url)
+            self._record_source_result(url, result)
             return result
         
         info("Run", f"🌐 未找到插件，使用通用逻辑...")
         # 4. 如果没插件，执行通用逻辑
-        return self._general_run_logic(url)
+        result = self._general_run_logic(url)
+        self._record_source_result(url, result)
+        return result
     
     def _general_run_logic(self, url):
         try:
@@ -2689,13 +2727,22 @@ class NovelCrawler:
                 html = self._fetch_page_smart(current_url)
                 if not html: break
                 soup = BeautifulSoup(html, 'html.parser')
-                current_title = self._get_smart_title(soup)
+                recognized = self.recognition_engine.analyze_html(html, current_url)
+                if page_count == 0 and recognized.page_type is PageType.TOC and recognized.confidence >= 0.6:
+                    return recognized.to_payload()
+                if page_count == 0 and recognized.page_type is PageType.BLOCKED:
+                    return recognized.to_payload()
+
+                current_title = recognized.title or self._get_smart_title(soup)
                 if page_count == 0: original_title = current_title
                 elif current_title != original_title and len(current_title) > 3: break
-                content = self._extract_content_smart(soup)
+                content = recognized.content or self._extract_content_smart(soup)
                 if content and original_title in content[0]: content = content[1:]
                 combined_content.extend(content)
-                next_page_url, next_chapter_url, prev_chapter_url, toc_url = None, None, None, None
+                next_page_url = recognized.next_page_url
+                next_chapter_url = recognized.next_url
+                prev_chapter_url = recognized.prev_url
+                toc_url = recognized.toc_url
                 for a in soup.find_all('a'):
                     txt = a.get_text(strip=True).replace(' ', '')
                     href = a.get('href')
@@ -2731,7 +2778,7 @@ class NovelCrawler:
             
             if first_page_meta:
                 first_page_meta['content'] = combined_content
-                return first_page_meta
+                return self._recognize_payload(first_page_meta, url, PageType.CHAPTER)
             return None
         except Exception as e:
             error("Run", f"General logic error: {e}")
@@ -2752,6 +2799,9 @@ class NovelCrawler:
 # === spider_core.py 中的 EpubHandler 类 ===
 
 class EpubHandler:
+    MAX_ARCHIVE_FILES = 10_000
+    MAX_UNCOMPRESSED_SIZE = 150 * 1024 * 1024
+
     def __init__(self):
         self.lib_dir = LIB_DIR
         if not os.path.exists(self.lib_dir): os.makedirs(self.lib_dir)
@@ -2759,11 +2809,49 @@ class EpubHandler:
         self.CHUNK_SIZE = 1500 
 
     def save_file(self, file_obj):
-        filename = secure_filename(file_obj.filename)
-        if not filename: filename = f"book_{int(time.time())}.epub"
+        """校验 EPUB 压缩包后，以不可预测的文件名保存。"""
+        source_name = secure_filename(file_obj.filename or '')
+        if not source_name.lower().endswith('.epub'):
+            raise ValueError('仅支持 EPUB 文件')
+
+        filename = f"{uuid.uuid4().hex}_{source_name}"
         filepath = os.path.join(self.lib_dir, filename)
-        file_obj.save(filepath)
-        return filename
+        temporary_path = f"{filepath}.uploading"
+        try:
+            file_obj.save(temporary_path)
+            self._validate_epub_archive(temporary_path)
+            os.replace(temporary_path, filepath)
+            return filename
+        except Exception:
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
+            raise
+
+    @classmethod
+    def _validate_epub_archive(cls, filepath):
+        if not zipfile.is_zipfile(filepath):
+            raise ValueError('文件不是有效的 EPUB 压缩包')
+
+        with zipfile.ZipFile(filepath) as archive:
+            entries = archive.infolist()
+            if not entries or len(entries) > cls.MAX_ARCHIVE_FILES:
+                raise ValueError('EPUB 文件条目数量异常')
+
+            total_size = sum(entry.file_size for entry in entries)
+            if total_size > cls.MAX_UNCOMPRESSED_SIZE:
+                raise ValueError('EPUB 解压后的体积超过限制')
+
+            for entry in entries:
+                normalized_name = entry.filename.replace('\\', '/')
+                if normalized_name.startswith('/') or '..' in normalized_name.split('/'):
+                    raise ValueError('EPUB 包含非法文件路径')
+
+            try:
+                mimetype = archive.read('mimetype')
+            except KeyError as exc:
+                raise ValueError('EPUB 缺少 mimetype 文件') from exc
+            if mimetype.strip() != b'application/epub+zip':
+                raise ValueError('文件不是有效的 EPUB 格式')
 
     def _flatten_toc(self, toc, flat_list=None):
         """

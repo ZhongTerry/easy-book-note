@@ -15,6 +15,7 @@ from utils import (
 )
 from shared import login_required, pro_required, is_safe_url
 from services import book_service
+from recognition import get_payload_issue
 
 # 创建蓝图
 api_v2_bp = Blueprint('api_v2', __name__, url_prefix='/api/v2')
@@ -266,7 +267,14 @@ def crawl_chapter():
         from spider_core import crawler_instance
         
         result = crawler_instance.run(url)
-        
+        issue = get_payload_issue(result)
+        if issue:
+            return APIResponse.error(
+                422,
+                issue['message'],
+                issue['code'],
+                details={'recognition': result.get('recognition', {}) if isinstance(result, dict) else {}},
+            )
         if result:
             return APIResponse.success(
                 data=result,

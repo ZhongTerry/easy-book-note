@@ -1,0 +1,24 @@
+{
+  "chapter_standard": {
+    "page_type": "chapter",
+    "title": "第十二章 雨夜",
+    "content_contains": "雨落在窗台上。",
+    "next_url": "https://novel.example/book/13.html"
+  },
+  "toc_standard": {
+    "page_type": "toc",
+    "chapter_count": 4,
+    "first_chapter": "第一章 起点"
+  },
+  "blocked_challenge": {
+    "page_type": "blocked"
+  },
+  "noisy_chapter": {
+    "page_type": "chapter",
+    "content_contains": "真正的正文从这里开始。"
+  },
+  "paginated_chapter": {
+    "page_type": "chapter",
+    "content_contains": "第二页的正文继续展开。"
+  }
+}

@@ -1,161 +1,101 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+    <script src="/static/js/csrf.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ toc.title }} - 目录</title>
-    <!-- 引入 PureUI -->
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <style>
-        body { background-color: #f9fafb; color: #1f2937; margin: 0; font-family: -apple-system, sans-serif; }
-        
-        /* 顶部导航 */
-        .navbar {
-            background: #fff; padding: 12px 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            position: sticky; top: 0; z-index: 50;
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .nav-title { font-weight: 700; font-size: 16px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 50%; }
-        .nav-actions { display: flex; gap: 8px; }
-
-        /* 容器 */
-        .container { max-width: 1000px; margin: 20px auto; padding: 0 15px; }
-        
-        /* === 核心修复：恢复宽卡片布局 (三列) === */
-        .chapter-grid {
-            display: grid;
-            /* 280px 宽度能保证在大多数电脑屏幕上显示 3 列，手机显示 1 列 */
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); 
-            gap: 15px;
-            margin-top: 15px;
-        }
-
-        .chapter-item {
-            background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
-            padding: 15px; text-decoration: none; color: #374151;
-            font-size: 15px; transition: 0.2s;
-            display: flex; align-items: center; overflow: hidden;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        }
-        .chapter-item:hover {
-            border-color: #4f46e5; color: #4f46e5; box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            transform: translateY(-2px);
-        }
-        .chap-id { color: #9ca3af; font-size: 13px; margin-right: 8px; min-width: 40px; font-weight: bold; }
-        .chap-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
-
-        /* [新增] 已读高亮 */
-        .chapter-item.is-read { background: #f3f4f6; opacity: 0.8; }
-        .chapter-item.is-last-read { border: 2px solid #4f46e5; background: #eef2ff; }
-        .chapter-item.is-last-read::after { content: '上次阅读'; position: absolute; right: 5px; top: 2px; font-size: 10px; color: #4f46e5; font-weight: bold; }
-
-        /* 下载弹窗 */
-        #dl-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
-        .modal-box { background: white; padding: 25px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; }
-        .progress-bar { height: 10px; background: #f3f4f6; border-radius: 5px; margin: 15px 0; overflow: hidden; }
-        .progress-fill { height: 100%; background: #4f46e5; width: 0%; transition: width 0.3s; }
+        :root { --canvas:#f4f6f7; --surface:#fff; --ink:#16212b; --muted:#64748b; --line:#dce4e8; --teal:#0f766e; --blue:#2563eb; --soft-teal:#e7f5f2; --soft-blue:#edf4ff; }
+        * { box-sizing:border-box; }
+        body { margin:0; background:var(--canvas); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif; }
+        .navbar { min-height:62px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px max(18px,calc((100vw - 1180px) / 2)); position:sticky; top:0; z-index:50; background:rgba(255,255,255,.94); border-bottom:1px solid var(--line); backdrop-filter:blur(14px); }
+        .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+        .brand-mark { width:28px; height:28px; display:grid; place-items:center; color:var(--teal); border:1px solid #b9ddd7; border-radius:6px; font-weight:800; }
+        .nav-title { max-width:560px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:15px; font-weight:700; }
+        .nav-actions { display:flex; gap:6px; align-items:center; }
+        .icon-btn { width:34px; height:34px; display:grid; place-items:center; border:1px solid var(--line); border-radius:6px; background:var(--surface); color:#425466; cursor:pointer; font-size:17px; text-decoration:none; }
+        .icon-btn:hover { color:var(--teal); border-color:var(--teal); background:var(--soft-teal); }
+        .icon-btn.download { color:var(--teal); border-color:#a8d5cd; }
+        .container { max-width:1180px; margin:0 auto; padding:26px 20px 52px; }
+        .book-head { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; padding:8px 0 22px; }
+        .eyebrow { margin:0 0 7px; color:var(--teal); font-size:12px; font-weight:700; }
+        .book-head h1 { max-width:760px; margin:0; font-size:27px; line-height:1.28; letter-spacing:0; }
+        .source-link { color:var(--muted); font-size:13px; text-decoration:none; white-space:nowrap; }
+        .source-link:hover { color:var(--blue); }
+        .directory-bar { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:13px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+        .directory-count { color:var(--muted); font-size:13px; white-space:nowrap; }
+        .directory-count strong { color:var(--ink); font-size:14px; }
+        .chapter-search { position:relative; width:min(360px,100%); }
+        .chapter-search input { width:100%; height:36px; padding:0 34px 0 11px; border:1px solid var(--line); border-radius:6px; background:var(--surface); color:var(--ink); font-size:13px; outline:none; }
+        .chapter-search input:focus { border-color:var(--teal); box-shadow:0 0 0 3px rgba(15,118,110,.11); }
+        .clear-search { position:absolute; top:3px; right:4px; display:none; width:30px; height:30px; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:17px; }
+        .chapter-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:8px; margin-top:18px; }
+        .volume-heading { grid-column:1 / -1; margin:20px 0 4px; padding:0 0 9px; border-bottom:1px solid var(--line); color:#334155; font-size:14px; font-weight:700; }
+        .volume-heading:first-child { margin-top:0; }
+        .chapter-item { min-height:48px; display:flex; align-items:center; overflow:hidden; padding:10px 12px; border:1px solid transparent; border-radius:6px; background:var(--surface); color:#334155; font-size:14px; text-decoration:none; transition:border-color .15s,background .15s,color .15s; }
+        .chapter-item:hover { color:var(--teal); border-color:#7cc8bd; background:#fbfefd; }
+        .chap-id { min-width:36px; margin-right:10px; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+        .chap-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:560; }
+        .chapter-item.is-read { background:#f7f9fa; color:#718096; }
+        .chapter-item.is-last-read { border-color:var(--blue); background:var(--soft-blue); color:#174a9a; }
+        .chapter-item.is-last-read::after { content:'当前'; margin-left:auto; padding-left:8px; color:var(--blue); font-size:11px; font-weight:700; }
+        .chapter-item[hidden], .volume-heading[hidden] { display:none; }
+        .empty-filter { display:none; grid-column:1 / -1; padding:36px 0; color:var(--muted); text-align:center; font-size:14px; }
+        #dl-modal { position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center; padding:18px; background:rgba(18,33,43,.42); }
+        .modal-box { width:min(400px,100%); padding:26px; border-radius:8px; background:var(--surface); text-align:center; box-shadow:0 18px 42px rgba(19,35,46,.18); }
+        .progress-bar { height:6px; margin:18px 0; overflow:hidden; border-radius:3px; background:#e5eaed; }
+        .progress-fill { width:0%; height:100%; background:var(--teal); transition:width .3s; }
+        @media (max-width:640px) { .navbar { padding:10px 14px; }.nav-title { max-width:calc(100vw - 170px); }.container { padding:18px 14px 38px; }.book-head { display:block; padding-bottom:17px; }.book-head h1 { font-size:22px; }.source-link { display:inline-block; margin-top:12px; }.directory-bar { flex-direction:column; align-items:stretch; gap:10px; }.chapter-search { width:100%; }.chapter-grid { grid-template-columns:1fr; gap:6px; }.chapter-item { min-height:46px; }.nav-actions { gap:5px; }.icon-btn { width:33px; height:33px; } }
     </style>
 </head>
 <body>
-
-<div class="navbar">
-    <div class="nav-title">📚 {{ toc.title }}</div>
-    <div class="nav-actions">
-        <a href="/" class="p-btn p-btn-sm" style="text-decoration:none; background:#f3f4f6;">🏠 书架</a>
-        <button onclick="forceRefresh()" class="p-btn p-btn-sm p-btn-primary">🔄 刷新</button>
-        <button onclick="startDownload()" id="dlBtn" class="p-btn p-btn-sm" style="background:#10b981; color:white; border:none;">📥 下载TXT</button>
-    </div>
-</div>
-
-<div class="container">
-    <div style="display:flex; justify-content:space-between; color:#666; font-size:13px; margin-bottom:10px;">
-        <span>共 {{ toc.chapters|length }} 章</span>
-        <a href="{{ toc_url }}" target="_blank" style="color:#999; text-decoration:none;">源网页 ↗</a>
-    </div>
-
-    <div class="chapter-grid">
+<header class="navbar">
+    <div class="brand"><div class="brand-mark" aria-hidden="true">N</div><div class="nav-title">{{ toc.title }}</div></div>
+    <nav class="nav-actions" aria-label="目录操作">
+        <a href="/" class="icon-btn" title="返回书架" aria-label="返回书架">⌂</a>
+        <button onclick="forceRefresh()" class="icon-btn" title="刷新目录" aria-label="刷新目录">↻</button>
+        <button onclick="startDownload()" id="dlBtn" class="icon-btn download" title="下载 TXT" aria-label="下载 TXT">⇩</button>
+    </nav>
+</header>
+<main class="container">
+    <section class="book-head">
+        <div><p class="eyebrow">阅读目录</p><h1>{{ toc.title }}</h1></div>
+        <a href="{{ toc_url }}" target="_blank" rel="noopener noreferrer" class="source-link">打开源网页 ↗</a>
+    </section>
+    <section class="directory-bar" aria-label="目录筛选">
+        <div class="directory-count">共 <strong>{{ toc.chapters|length }}</strong> 章 <span id="filterCount"></span></div>
+        <label class="chapter-search"><input id="chapterFilter" type="search" placeholder="搜索章节" autocomplete="off"><button type="button" class="clear-search" id="clearFilter" title="清除搜索" aria-label="清除搜索">×</button></label>
+    </section>
+    <section class="chapter-grid" aria-label="章节列表">
         {% set last_idx = progress.last_read_index|default(-1)|int %}
+        {% set has_volumes = toc.chapters|selectattr('volume')|list|length > 0 %}
         {% for chapter in toc.chapters %}
+            {% set volume = chapter.volume|default('') %}
+            {% if volume and loop.changed(volume) %}<div class="volume-heading">{{ volume }}</div>{% endif %}
             {% set chap_idx = chapter.id|default(-1)|int %}
-            {% set is_last = (chap_idx == last_idx and last_idx != -1) or (chapter.url == progress.last_read_url) %}
-            {% set is_read = (chap_idx <= last_idx and last_idx != -1) %}
-            
-            <a href="/read?url={{ chapter.url }}&key={{ db_key }}" 
-               class="chapter-item {% if is_last %}is-last-read{% elif is_read %}is-read{% endif %}" 
-               title="{{ chapter.raw_title or chapter.title }}"
-               style="position: relative;">
-                {% if chapter.id is defined and chapter.id > 0 %}
-                    <span class="chap-id">{{ chapter.id }}</span>
-                    <span class="chap-name">{{ chapter.name }}</span>
-                {% else %}
-                    <span class="chap-name">{{ chapter.raw_title or chapter.title }}</span>
-                {% endif %}
+            {% set last_url = progress.last_read_url|default('') %}
+            {% set is_last = (chapter.url == last_url) if last_url else (chap_idx == last_idx and last_idx != -1) %}
+            {% set is_read = not has_volumes and (chap_idx <= last_idx and last_idx != -1) %}
+            <a href="/read?url={{ chapter.url }}&key={{ db_key }}" class="chapter-item {% if is_last %}is-last-read{% elif is_read %}is-read{% endif %}" data-chapter-search="{{ (chapter.raw_title or chapter.title or chapter.name)|lower }}" title="{{ chapter.raw_title or chapter.title }}">
+                {% if chapter.id is defined and chapter.id > 0 %}<span class="chap-id">{{ chapter.id }}</span><span class="chap-name">{{ chapter.name }}</span>{% else %}<span class="chap-name">{{ chapter.raw_title or chapter.title }}</span>{% endif %}
             </a>
         {% endfor %}
-    </div>
-</div>
-
-<div id="dl-modal">
-    <div class="modal-box">
-        <h3 style="margin-top:0">正在打包下载...</h3>
-        <div class="progress-bar"><div class="progress-fill" id="p-fill"></div></div>
-        <div id="p-text" style="font-size:13px; color:#666; margin-bottom:15px;">准备中...</div>
-        <div id="dl-finish" style="display:none;">
-            <a href="#" id="dl-file-link" class="p-btn p-btn-primary" style="text-decoration:none;">💾 保存文件</a>
-            <button onclick="closeModal()" class="p-btn" style="margin-left:10px; background:transparent; border:none; color:#666;">关闭</button>
-        </div>
-    </div>
-</div>
-
+        <div class="empty-filter" id="emptyFilter">没有匹配的章节</div>
+    </section>
+</main>
+<div id="dl-modal"><div class="modal-box"><h3 style="margin-top:0">正在打包下载</h3><div class="progress-bar"><div class="progress-fill" id="p-fill"></div></div><div id="p-text" style="font-size:13px;color:#64748b;margin-bottom:15px;">准备中</div><div id="dl-finish" style="display:none;"><a href="#" id="dl-file-link" class="p-btn p-btn-primary" style="text-decoration:none;">保存文件</a><button onclick="closeModal()" class="p-btn" style="margin-left:10px;background:transparent;border:none;color:#64748b;">关闭</button></div></div></div>
 <script>
-    const tocUrl = "{{ toc_url }}";
-    const bookName = "{{ toc.title }}";
+    const tocUrl = {{ toc_url|tojson }}, bookName = {{ toc.title|tojson }};
     let pollInterval = null;
-
-    function forceRefresh() {
-        let url = new URL(window.location.href);
-        url.searchParams.set('force', 'true');
-        window.location.href = url.toString();
-    }
-
-    function startDownload() {
-        if(!confirm("确定要下载全本吗？\n章节越多耗时越长，请保持网络通畅。")) return;
-        document.getElementById('dlBtn').disabled = true;
-        document.getElementById('dl-modal').style.display = 'flex';
-        document.getElementById('dl-finish').style.display = 'none';
-        
-        fetch('/api/download', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ toc_url: tocUrl, book_name: bookName })
-        }).then(r=>r.json()).then(d => {
-            if(d.status === 'success') pollProgress(d.task_id);
-            else { alert(d.message); closeModal(); }
-        }).catch(() => { alert("网络错误"); closeModal(); });
-    }
-
-    function pollProgress(tid) {
-        pollInterval = setInterval(() => {
-            fetch(`/api/download/status?task_id=${tid}`).then(r=>r.json()).then(d => {
-                const pct = Math.round((d.current / d.total) * 100);
-                document.getElementById('p-fill').style.width = pct + '%';
-                document.getElementById('p-text').innerText = `已下载: ${d.current} / ${d.total} (${pct}%)`;
-                if(d.status === 'completed' || d.status === 'error') {
-                    clearInterval(pollInterval);
-                    if(d.status === 'completed') {
-                        document.getElementById('p-text').innerText = "✅ 打包完成";
-                        document.getElementById('dl-file-link').href = `/api/download/file?task_id=${tid}`;
-                        document.getElementById('dl-finish').style.display = 'block';
-                    } else document.getElementById('p-text').innerText = "❌ 失败: " + d.error_msg;
-                }
-            });
-        }, 2000);
-    }
-    function closeModal() {
-        document.getElementById('dl-modal').style.display = 'none';
-        document.getElementById('dlBtn').disabled = false;
-        if(pollInterval) clearInterval(pollInterval);
-    }
+    function forceRefresh() { const url = new URL(window.location.href); url.searchParams.set('force', 'true'); window.location.href = url.toString(); }
+    function startDownload() { if (!confirm('确定要下载全本吗？\n章节越多耗时越长，请保持网络通畅。')) return; document.getElementById('dlBtn').disabled = true; document.getElementById('dl-modal').style.display = 'flex'; document.getElementById('dl-finish').style.display = 'none'; fetch('/api/download', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({toc_url:tocUrl,book_name:bookName}) }).then(r=>r.json()).then(d=>{ if(d.status==='success') pollProgress(d.task_id); else { alert(d.message); closeModal(); } }).catch(()=>{ alert('网络错误'); closeModal(); }); }
+    function pollProgress(tid) { pollInterval = setInterval(()=>{ fetch(`/api/download/status?task_id=${tid}`).then(r=>r.json()).then(d=>{ const pct = Math.round((d.current / d.total) * 100); document.getElementById('p-fill').style.width = pct + '%'; document.getElementById('p-text').innerText = `已下载: ${d.current} / ${d.total} (${pct}%)`; if(d.status==='completed'||d.status==='error') { clearInterval(pollInterval); if(d.status==='completed') { document.getElementById('p-text').innerText='打包完成'; document.getElementById('dl-file-link').href=`/api/download/file?task_id=${tid}`; document.getElementById('dl-finish').style.display='block'; } else document.getElementById('p-text').innerText='失败: '+d.error_msg; } }); },2000); }
+    function closeModal() { document.getElementById('dl-modal').style.display='none'; document.getElementById('dlBtn').disabled=false; if(pollInterval) clearInterval(pollInterval); }
+    const chapterFilter=document.getElementById('chapterFilter'), clearFilter=document.getElementById('clearFilter'), filterCount=document.getElementById('filterCount'), emptyFilter=document.getElementById('emptyFilter'), chapterItems=Array.from(document.querySelectorAll('.chapter-item')), volumeHeadings=Array.from(document.querySelectorAll('.volume-heading'));
+    function applyChapterFilter() { const query=chapterFilter.value.trim().toLowerCase(); let visible=0; chapterItems.forEach(item=>{ const match=!query||item.dataset.chapterSearch.includes(query); item.hidden=!match; if(match) visible+=1; }); volumeHeadings.forEach(heading=>{ let sibling=heading.nextElementSibling, hasVisible=false; while(sibling&&!sibling.classList.contains('volume-heading')) { if(sibling.classList.contains('chapter-item')&&!sibling.hidden) hasVisible=true; sibling=sibling.nextElementSibling; } heading.hidden=Boolean(query)&&!hasVisible; }); clearFilter.style.display=query?'grid':'none'; filterCount.textContent=query?`，匹配 ${visible} 章`:''; emptyFilter.style.display=query&&!visible?'block':'none'; }
+    chapterFilter.addEventListener('input',applyChapterFilter); clearFilter.addEventListener('click',()=>{chapterFilter.value='';chapterFilter.focus();applyChapterFilter();});
 </script>
 </body>
 </html>

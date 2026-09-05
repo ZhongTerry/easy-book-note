@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#ffffff" id="metaThemeColor">
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
+    <script src="/static/js/csrf.js"></script>
     <!-- 引入 PureCSS -->
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <!-- 引入 Remix Icon -->
@@ -1586,8 +1587,17 @@
                  const topMenuTitle = document.getElementById('top-menu-title');
                  if(topMenuTitle) topMenuTitle.textContent = dbKey + ": " + data.title;
                  
-                 const textDiv = document.getElementById('article-text');
-                 if(textDiv) textDiv.innerHTML = data.content.map(p => `<p>${p}</p>`).join('');
+                  const textDiv = document.getElementById('article-text');
+                  if(textDiv) {
+                      const fragment = document.createDocumentFragment();
+                      const paragraphs = Array.isArray(data.content) ? data.content : [data.content || ''];
+                      paragraphs.forEach(paragraph => {
+                          const p = document.createElement('p');
+                          p.textContent = String(paragraph);
+                          fragment.appendChild(p);
+                      });
+                      textDiv.replaceChildren(fragment);
+                  }
                  refreshMemoHighlights();
                  
                  // Update Nav Buttons

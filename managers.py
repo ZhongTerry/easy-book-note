@@ -2482,10 +2482,13 @@ class MemoManager:
             ).fetchall()
             return [dict(row) for row in rows]
     
-    def get_memo(self, memo_id):
+    def get_memo(self, username, memo_id):
         """获取单条备忘录"""
         with get_db() as conn:
-            row = conn.execute("SELECT * FROM user_memos WHERE id=?", (memo_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM user_memos WHERE id=? AND username=?",
+                (memo_id, username)
+            ).fetchone()
             return dict(row) if row else None
     
     def save_memo(self, username, memo_id=None, title=None, content=None, tags=None):
@@ -2493,14 +2496,16 @@ class MemoManager:
         with get_db() as conn:
             if memo_id:
                 # 更新现有备忘录
-                conn.execute("""
+                cursor = conn.execute("""
                     UPDATE user_memos 
                     SET title=COALESCE(?, title), 
                         content=COALESCE(?, content),
                         tags=COALESCE(?, tags),
                         updated_at=CURRENT_TIMESTAMP
-                    WHERE id=?
-                """, (title, content, tags, memo_id))
+                    WHERE id=? AND username=?
+                """, (title, content, tags, memo_id, username))
+                if cursor.rowcount == 0:
+                    return None
                 
                 # 保存历史版本
                 if content:
@@ -2519,22 +2524,29 @@ class MemoManager:
             conn.commit()
             return memo_id
     
-    def delete_memo(self, memo_id):
+    def delete_memo(self, username, memo_id):
         """删除备忘录"""
         with get_db() as conn:
-            conn.execute("DELETE FROM user_memos WHERE id=?", (memo_id,))
+            cursor = conn.execute(
+                "DELETE FROM user_memos WHERE id=? AND username=?",
+                (memo_id, username)
+            )
+            if cursor.rowcount == 0:
+                return False
             conn.execute("DELETE FROM memo_history WHERE memo_id=?", (memo_id,))
             conn.commit()
+            return True
     
-    def toggle_pin(self, memo_id):
+    def toggle_pin(self, username, memo_id):
         """置顶/取消置顶"""
         with get_db() as conn:
-            conn.execute("""
+            cursor = conn.execute("""
                 UPDATE user_memos 
                 SET is_pinned = NOT is_pinned 
-                WHERE id=?
-            """, (memo_id,))
+                WHERE id=? AND username=?
+            """, (memo_id, username))
             conn.commit()
+            return cursor.rowcount > 0
     
     def search_memos(self, username, keyword):
         """搜索备忘录"""

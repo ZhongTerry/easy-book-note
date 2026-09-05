@@ -7,6 +7,7 @@
     <!-- 引入 PureUI 样式和脚本 -->
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
+    <script src="/static/js/csrf.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <!-- 标准 Favicon -->
@@ -748,6 +749,64 @@ body.dark-mode .version-content li { color: #a0aec0 !important; }
     }
     .act-btn { padding: 4px 10px; font-size: 12px; }
 }
+
+/* Shelf refinement: keep the library dense, quiet, and oriented around reading actions. */
+:root { --shelf-bg:#eef2f3; --shelf-panel:#ffffff; --shelf-text:#26343d; --shelf-muted:#6b7b86; --shelf-border:#dce4e8; --shelf-accent:#0f766e; }
+body { background:var(--shelf-bg); color:var(--shelf-text); }
+#userBar { min-height:58px; padding:8px max(20px,calc((100% - 1120px) / 2)); background:rgba(255,255,255,.94); border-bottom-color:var(--shelf-border); box-sizing:border-box; }
+#userAvatar { width:30px !important; height:30px; border:1px solid var(--shelf-border); }
+.container { width:min(1040px,calc(100% - 40px)); max-width:none; margin:34px auto 24px; padding:0; background:transparent; border:0; border-radius:0; box-shadow:none; }
+h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; line-height:1.3; letter-spacing:0; }
+.input-group { margin-bottom:13px; }
+.input-label { color:var(--shelf-muted); font-size:12px; font-weight:650; }
+.p-input { min-height:40px; border-color:var(--shelf-border); border-radius:6px; background:var(--shelf-panel); color:var(--shelf-text); box-sizing:border-box; }
+.p-input:focus { border-color:var(--shelf-accent); box-shadow:0 0 0 3px rgba(15,118,110,.12); }
+.btn-row { margin-top:18px; gap:8px; }
+.btn-row .p-btn { flex:0 0 auto; min-width:88px; min-height:36px; border-radius:6px; font-weight:600; }
+.p-btn-primary { background:var(--shelf-accent) !important; border-color:var(--shelf-accent) !important; }
+.p-btn-outline { border-color:var(--shelf-border); color:var(--shelf-text); background:var(--shelf-panel); }
+.p-btn-outline:hover { border-color:var(--shelf-accent); color:var(--shelf-accent); background:rgba(15,118,110,.06); }
+.output { margin-top:30px; padding-top:18px; border-top-color:var(--shelf-border); }
+.filter-bar { gap:7px; padding:0 0 14px; }
+.filter-chip, .p-tag { border-radius:5px; }
+.filter-chip.active { background:var(--shelf-accent) !important; border-color:var(--shelf-accent) !important; }
+#viewToggleBar { margin-bottom:14px !important; }
+.toggle-btn { border-radius:5px; border-color:var(--shelf-border); background:var(--shelf-panel); color:var(--shelf-muted); }
+.toggle-btn.active { color:var(--shelf-accent); border-color:var(--shelf-accent); background:rgba(15,118,110,.07); }
+.bookshelf-grid { grid-template-columns:repeat(auto-fill,minmax(164px,1fr)); gap:14px; padding:0; }
+.book-card { border-color:var(--shelf-border); border-radius:6px; box-shadow:none; background:var(--shelf-panel); }
+.book-card:hover { transform:translateY(-2px); border-color:var(--shelf-accent); box-shadow:0 8px 18px rgba(30,49,60,.08); }
+.book-cover { padding:16px; background:#3f6d6a; }
+.book-title-card { font-size:15px; line-height:1.45; letter-spacing:0; }
+.book-info-row { min-height:42px; padding:7px 8px; border-top-color:var(--shelf-border); color:var(--shelf-text); gap:4px; }
+.book-info-row > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.book-info-row .p-btn { width:28px; height:28px; padding:0 !important; border-radius:4px; flex:none; }
+.book-row { border-color:var(--shelf-border); border-radius:6px; background:var(--shelf-panel); }
+.book-title { color:var(--shelf-text); }
+.act-primary { background:var(--shelf-accent); border-color:var(--shelf-accent); }
+.act-outline { border-color:var(--shelf-border); color:var(--shelf-text); }
+.act-outline:hover { border-color:var(--shelf-accent); color:var(--shelf-accent); background:rgba(15,118,110,.06); }
+.p-modal { padding:20px; box-sizing:border-box; background:rgba(20,32,39,.48); backdrop-filter:blur(3px); }
+.p-modal.active { animation:shelf-modal-fade-in 160ms ease-out both; }
+.p-modal-content { width:min(560px,100%); max-width:560px; max-height:calc(100vh - 40px); padding:22px; border:1px solid var(--shelf-border); border-radius:8px; box-shadow:0 18px 48px rgba(20,32,39,.2); color:var(--shelf-text); }
+.p-modal.active .p-modal-content { animation:shelf-modal-panel-in 200ms cubic-bezier(.2,.8,.2,1) both; }
+.p-modal-content h3 { color:var(--shelf-text); font-size:16px; line-height:1.35; }
+.p-modal-content .p-input, .p-modal-content .p-textarea { border-color:var(--shelf-border); border-radius:5px; color:var(--shelf-text); }
+.p-modal-content .p-input:focus, .p-modal-content .p-textarea:focus { border-color:var(--shelf-accent); box-shadow:0 0 0 3px rgba(15,118,110,.12); }
+.p-modal-content .p-btn { border-radius:5px; min-height:34px; }
+.p-modal-content .p-btn-primary { background:var(--shelf-accent) !important; border-color:var(--shelf-accent) !important; }
+.p-modal-content .p-btn-sm:not(.p-btn-primary):not(.p-btn-danger) { border-color:var(--shelf-border); background:var(--shelf-panel); color:var(--shelf-text); }
+.p-modal-content .p-btn-sm:not(.p-btn-primary):not(.p-btn-danger):hover { border-color:var(--shelf-accent); color:var(--shelf-accent); background:rgba(15,118,110,.06); }
+.p-modal-content [style*="border-bottom"] { border-bottom-color:var(--shelf-border) !important; }
+.p-modal-content [style*="border-top"] { border-top-color:var(--shelf-border) !important; }
+.p-modal-content [style*="background: #f9fafb"], .p-modal-content [style*="background:#f9fafb"] { background:#f5f8f8 !important; }
+.p-modal-content .action-item { border-bottom-color:var(--shelf-border); color:var(--shelf-text); }
+.p-modal-content .action-item:hover { background:rgba(15,118,110,.06); }
+@keyframes shelf-modal-fade-in { from { opacity:0; } to { opacity:1; } }
+@keyframes shelf-modal-panel-in { from { opacity:0; transform:translateY(12px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+@media (prefers-reduced-motion:reduce) { .p-modal.active, .p-modal.active .p-modal-content { animation:none; } }
+@media (max-width:600px) { #userBar { padding:8px 14px; }.container { width:calc(100% - 28px); margin-top:24px; } h1 { font-size:22px; margin-bottom:20px; }.btn-row .p-btn { min-width:0; flex:1 1 calc(50% - 4px); }.bookshelf-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.book-info-row { font-size:12px; } }
+@media (max-width:600px) { .p-modal { padding:12px; }.p-modal-content { max-height:calc(100vh - 24px); padding:18px; }.p-modal-content [style*="max-height: 80vh"] { max-height:calc(100vh - 120px) !important; } }
     </style>
         <script>
             // === [核心修复] 智能关闭 Modal ===

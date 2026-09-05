@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#ffffff" id="metaThemeColor">
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
+    <script src="/static/js/csrf.js"></script>
     <!-- 引入 PureCSS -->
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <!-- 引入 Remix Icon -->
@@ -346,6 +347,52 @@
 
         @keyframes sk-loading { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
+        /* Mobile reading refinement: preserve focus on the text while keeping tools predictable. */
+        :root { --bg:#ffffff; --text:#26343d; --text-sec:#6b7b86; --accent:#0f766e; --menu-bg:rgba(255,255,255,.96); --border:#dce4e8; --line-height:1.96; }
+        body.theme-sepia { --bg:#f6f2e6; --text:#493f34; --text-sec:#84796d; --menu-bg:rgba(253,250,242,.96); --border:#e5ded0; --accent:#79634a; }
+        body.theme-dark { --bg:#172027; --text:#d4dde1; --text-sec:#8da0aa; --menu-bg:rgba(30,41,47,.96); --border:#34434b; --accent:#52b7aa; }
+        #read-viewport { padding:calc(26px + var(--safe-top)) 22px calc(34px + var(--safe-bottom)); }
+        article { max-width:680px; }
+        article h1 { margin:26px 0 30px; font-size:22px; letter-spacing:0; }
+        article p { margin:0 0 1.15em; text-align:left; }
+        #readingProgressBar { height:3px; background:var(--accent); opacity:.9; }
+        .menu-bar { background:var(--menu-bg); border-color:var(--border); box-shadow:0 5px 18px rgba(30,49,60,.08); }
+        .top-menu { height:calc(56px + var(--safe-top)); padding-left:8px; padding-right:8px; }
+        .top-menu > i, .top-menu > div > i { border-radius:5px; }
+        .top-menu > i:active, .top-menu > div > i:active { background:rgba(15,118,110,.1); }
+        .top-menu-title { font-size:13px; font-weight:650; max-width:62%; }
+        .bottom-menu { box-shadow:0 -7px 20px rgba(30,49,60,.1); }
+        .func-grid { height:64px; }
+        .func-item { font-size:11px; color:var(--text-sec); }
+        .func-item i { color:var(--text); }
+        .func-item:active { background:rgba(15,118,110,.07); }
+        .progress-bar-wrap { padding:9px 18px; gap:12px; border-color:var(--border); }
+        .settings-box { padding:16px 18px; gap:16px; border-color:var(--border); }
+        .opt-row > span { color:var(--text-sec); font-size:13px; }
+        .font-btn-group { border-radius:6px; border-color:var(--border); }
+        .font-btn { min-width:52px; padding:7px 12px; color:var(--text); }
+        .theme-circle { width:30px; height:30px; border-color:var(--border); }
+        .theme-circle.active { outline:2px solid var(--accent); outline-offset:2px; }
+        .opt-row .p-btn { min-height:32px; border-radius:5px; border-color:var(--border); color:var(--text); background:transparent; }
+        .opt-row .p-btn:active { border-color:var(--accent); color:var(--accent); background:rgba(15,118,110,.08); }
+        .mobile-utility-btn.saved { color:var(--accent) !important; border-color:var(--accent) !important; background:rgba(15,118,110,.09) !important; }
+        .mobile-utility-btn.saving { opacity:.58; pointer-events:none; }
+        .drawer-overlay { background:rgba(20,32,39,.46); backdrop-filter:blur(2px); }
+        .drawer { width:min(86%,340px); box-shadow:10px 0 30px rgba(20,32,39,.18); }
+        .drawer-header { padding:18px; padding-top:calc(18px + var(--safe-top)); font-size:16px; border-color:var(--border); }
+        .btn-refresh-toc { border-radius:5px; border-color:var(--border); padding:6px 9px; font-weight:600; }
+        .drawer-item { padding:13px 18px; border-color:var(--border); }
+        .drawer-item.active { background:rgba(15,118,110,.1); color:var(--accent); }
+        .source-modal { height:min(72%,620px); border-radius:10px 10px 0 0; box-shadow:0 -14px 36px rgba(20,32,39,.2); }
+        .source-item { padding:14px 18px; border-color:var(--border); }
+        #toast { max-width:calc(100% - 40px); border-radius:6px; bottom:88px; background:rgba(20,32,39,.9); }
+        #toast.show { bottom:104px; }
+        .page-nav-area { margin-top:34px; gap:10px; }
+        .page-btn { padding:10px 0; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text-sec); }
+        .page-btn.next { background:var(--accent); border-color:var(--accent); box-shadow:none; }
+        body.theme-dark .menu-bar { box-shadow:none; }
+        @media (prefers-reduced-motion:reduce) { *, *::before, *::after { scroll-behavior:auto !important; transition-duration:0.01ms !important; animation-duration:0.01ms !important; } }
+
     </style>
 </head>
 <body class="theme-white">
@@ -464,6 +511,7 @@
                 <div style="display:flex; gap:10px; font-size:12px; flex-wrap: wrap;"> <!-- flex-wrap 以防按钮太多换行 -->
                     <button class="p-btn p-btn-sm" onclick="toggleTTS()" id="ttsBtn">🎧 朗读</button>
                     <button class="p-btn p-btn-sm" onclick="openSourceModal()">⇄ 换源</button>
+                    <button class="p-btn p-btn-sm mobile-utility-btn" id="saveShelfBtn" onclick="saveToShelfMobile()" title="收藏当前书籍" aria-label="收藏当前书籍">🔖 收藏</button>
                     <!-- [新增] 追更按钮 -->
                     <button class="p-btn p-btn-sm" id="subBtn" onclick="toggleSubscribe()">🔔 追更</button>
                     <!-- [新增] 标记按钮 -->
@@ -727,6 +775,75 @@
             showToast("请求失败");
         }
     }
+
+    let isSavedToShelf = false;
+
+    function setMobileShelfSaveState(saved, options = {}) {
+        isSavedToShelf = saved;
+        const btn = document.getElementById('saveShelfBtn');
+        if (!btn) return;
+        const saving = Boolean(options.saving);
+        btn.classList.toggle('saved', saved);
+        btn.classList.toggle('saving', saving);
+        btn.setAttribute('aria-busy', saving ? 'true' : 'false');
+        if (saving) {
+            btn.textContent = '收藏中';
+            return;
+        }
+        btn.textContent = saved ? '已收藏' : '🔖 收藏';
+        const label = saved ? '已收藏到书架' : '收藏当前书籍';
+        btn.title = label;
+        btn.setAttribute('aria-label', label);
+    }
+
+    async function checkIfSavedToShelf() {
+        if (!dbKey) return;
+        try {
+            const res = await fetch('/find', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey })
+            });
+            const data = await res.json();
+            if (data.status === 'success' && data.data && Object.prototype.hasOwnProperty.call(data.data, dbKey)) {
+                setMobileShelfSaveState(true);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function saveToShelfMobile() {
+        const btn = document.getElementById('saveShelfBtn');
+        if (isSavedToShelf) {
+            showToast('已收藏到书架');
+            return;
+        }
+        if (!dbKey || !currentUrl || btn?.getAttribute('aria-busy') === 'true') {
+            showToast('暂时无法收藏当前书籍');
+            return;
+        }
+
+        setMobileShelfSaveState(false, { saving: true });
+        try {
+            const response = await fetch('/api/quick_save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey, url: tocUrl || currentUrl })
+            });
+            const result = await response.json();
+            if (result.status === 'success') {
+                setMobileShelfSaveState(true);
+                showToast('已收藏到书架');
+            } else {
+                setMobileShelfSaveState(false);
+                showToast(result.message || '收藏失败，请重试');
+            }
+        } catch (e) {
+            setMobileShelfSaveState(false);
+            showToast('收藏失败，请检查网络后重试');
+        }
+    }
     let tocUrl = "{{ article.toc_url }}";
     let localChapterId = parseInt("{{ chapter_id }}") || -1;
 
@@ -755,6 +872,7 @@
         setInterval(sendHeartbeat, 60000);
         reportWordCount();
         refreshMemoHighlights();
+        checkIfSavedToShelf();
         
         // 预加载下一章和下下一章
         const nextUrl = "{{ article.next }}";
@@ -1443,8 +1561,17 @@
                  const topMenuTitle = document.getElementById('top-menu-title');
                  if(topMenuTitle) topMenuTitle.textContent = dbKey + ": " + data.title;
                  
-                 const textDiv = document.getElementById('article-text');
-                 if(textDiv) textDiv.innerHTML = data.content.map(p => `<p>${p}</p>`).join('');
+                  const textDiv = document.getElementById('article-text');
+                  if(textDiv) {
+                      const fragment = document.createDocumentFragment();
+                      const paragraphs = Array.isArray(data.content) ? data.content : [data.content || ''];
+                      paragraphs.forEach(paragraph => {
+                          const p = document.createElement('p');
+                          p.textContent = String(paragraph);
+                          fragment.appendChild(p);
+                      });
+                      textDiv.replaceChildren(fragment);
+                  }
                  refreshMemoHighlights();
                  
                  // Update Nav Buttons

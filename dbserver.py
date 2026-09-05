@@ -7,9 +7,12 @@ import sqlite3
 import threading
 import time
 import random
+import hmac
+import secrets
 from datetime import timedelta
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, session, render_template
+from flask import Flask, request, jsonify, session, render_template, redirect, url_for
+from urllib.parse import urlparse
 
 # 必须在导入本地模块前加载环境变量
 load_dotenv()
@@ -40,38 +43,78 @@ app.config['SESSION_COOKIE_NAME'] = SESSION_COOKIE_NAME
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MAX_UPLOAD_BYTES', 25 * 1024 * 1024))
 
 app.register_blueprint(core_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
 app.register_blueprint(cache_bp)
 
+@app.after_request
+def add_security_headers(response):
+    """不依赖前端改造即可启用的浏览器安全基线。"""
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'same-origin')
+    response.headers.setdefault(
+        'Permissions-Policy',
+        'camera=(), geolocation=(), microphone=()',
+    )
+    if request.is_secure:
+        response.headers.setdefault(
+            'Strict-Transport-Security',
+            'max-age=31536000; includeSubDomains',
+        )
+    return response
+
+
+def _same_origin(origin_or_referer):
+    """校验浏览器提交的来源，端口也必须一致。"""
+    if not origin_or_referer:
+        return False
+    parsed = urlparse(origin_or_referer)
+    return parsed.scheme in ('http', 'https') and parsed.netloc == request.host
+
+
+@app.after_request
+def set_csrf_cookie(response):
+    """为登录会话签发双提交 CSRF 令牌。"""
+    if session.get('user'):
+        token = session.get('csrf_token')
+        if not token:
+            token = secrets.token_urlsafe(32)
+            session['csrf_token'] = token
+        response.set_cookie(
+            'notedb_csrf',
+            token,
+            secure=app.config['SESSION_COOKIE_SECURE'],
+            samesite=app.config['SESSION_COOKIE_SAMESITE'],
+            httponly=False,
+        )
+    return response
+
 @app.before_request
 def basic_csrf_guard():
-    """基础 CSRF 防护：校验同源请求"""
+    """保护所有使用浏览器会话的写请求。"""
     info("Request", f"{request.method} {request.path} | User: {session.get('user', {}).get('username', 'None')}")
     
-    # 只拦截非 GET 请求
+    # 集群节点使用 Bearer 凭据，不使用浏览器 Cookie 会话。
     if request.method in ('POST', 'PUT', 'DELETE', 'PATCH') and session.get('user'):
         origin = request.headers.get('Origin') or request.headers.get('Referer')
-        if origin:
-            from urllib.parse import urlparse
-            origin_parsed = urlparse(origin)
-            origin_host = origin_parsed.netloc.split(':')[0]
-            request_host = request.host.split(':')[0]
-            
-            # 规范化本地地址
-            def normalize_host(h):
-                return 'localhost' if h in ('localhost', '127.0.0.1', '0.0.0.0') else h
-            
-            if normalize_host(origin_host) != normalize_host(request_host):
-                error("CSRF", f"请求被拒: {origin_host} != {request_host}")
-                return jsonify({"status": "error", "msg": "CSRF 验证失败"}), 403
+        expected_token = session.get('csrf_token', '')
+        received_token = request.headers.get('X-CSRF-Token', '')
+        if (
+            not _same_origin(origin)
+            or not expected_token
+            or not hmac.compare_digest(received_token, expected_token)
+        ):
+            error("CSRF", f"请求被拒: {request.method} {request.path}")
+            return jsonify({"status": "error", "msg": "CSRF 验证失败"}), 403
 
 @app.route('/reader_m')
 def reader_m():
-    """移动端阅读器页面"""
-    return render_template('reader_m.html')
+    """旧移动端入口没有阅读上下文，回到受保护的首页。"""
+    return redirect(url_for('core.index'))
 
 
 def schedule_cache_cleanup():

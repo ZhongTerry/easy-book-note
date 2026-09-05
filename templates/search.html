@@ -6,6 +6,7 @@
     <title>全网搜书 - Smart NoteDB</title>
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
+    <script src="/static/js/csrf.js"></script>
     <link rel="icon" href="/static/icons/favicon.ico" type="image/x-icon">
     <style>
         /* 继承 index.html 的配色方案 */
@@ -297,6 +298,51 @@
                 gap: 10px;
             }
         }
+
+        /* Search refinement: a compact research surface aligned with the shelf and reader. */
+        :root { --search-bg:#eef2f3; --search-panel:#ffffff; --search-text:#26343d; --search-muted:#6b7b86; --search-border:#dce4e8; --search-accent:#0f766e; }
+        body { padding:0; background:var(--search-bg); color:var(--search-text); }
+        #userBar { min-height:58px; padding:8px max(20px,calc((100% - 1120px) / 2)); background:rgba(255,255,255,.94); border-bottom-color:var(--search-border); }
+        #userBar a { color:var(--search-text) !important; font-size:14px; }
+        #userName { color:var(--search-muted) !important; }
+        .container { width:min(900px,calc(100% - 40px)); max-width:none; margin:94px auto 36px; padding:0; background:transparent; border:0; border-radius:0; box-shadow:none; }
+        h1 { color:var(--search-text); text-align:left; font-size:25px; line-height:1.3; letter-spacing:0; margin-bottom:6px; }
+        .subtitle { text-align:left; margin:0 0 24px; color:var(--search-muted); }
+        .search-box { gap:8px; margin-bottom:16px; }
+        .search-box .p-input { min-height:42px; border-color:var(--search-border); border-radius:6px; background:var(--search-panel); color:var(--search-text); }
+        .search-box .p-input:focus { border-color:var(--search-accent); box-shadow:0 0 0 3px rgba(15,118,110,.12); }
+        .search-box .p-btn { min-width:92px; border-radius:6px; background:var(--search-accent); border-color:var(--search-accent); font-weight:650; }
+        .feature-tabs { gap:18px; padding:12px 0 16px; margin-bottom:18px; border-bottom-color:var(--search-border); }
+        .feature-item { color:var(--search-muted); }
+        .feature-item input { accent-color:var(--search-accent); }
+        .history-title, .stats-bar { color:var(--search-muted); }
+        .history-tag, .sort-btn { padding:5px 10px; border-radius:5px; background:var(--search-panel); border-color:var(--search-border); color:var(--search-muted); }
+        .history-tag:hover, .sort-btn:hover { color:var(--search-accent); border-color:var(--search-accent); background:rgba(15,118,110,.06); }
+        .sort-btn.active { background:rgba(15,118,110,.1); border-color:var(--search-accent); color:var(--search-accent); }
+        .results-area { min-height:260px; }
+        .result-item { display:flex; align-items:center; gap:20px; padding:16px 0; margin:0; border:0; border-bottom:1px solid var(--search-border); border-radius:0; background:transparent; }
+        .result-item:hover { transform:none; border-color:var(--search-border); box-shadow:none; }
+        .res-left { min-width:0; }
+        .res-title { color:var(--search-text); font-size:16px; line-height:1.45; margin-bottom:7px; }
+        .res-author { color:var(--search-muted); font-weight:400; }
+        .res-meta { gap:8px; color:var(--search-muted); }
+        .source-tag { padding:3px 7px; border-radius:4px; }
+        .tag-baidu { background:#e7f0f8; color:#2e5877; }.tag-bing { background:#f4eee1; color:#765a22; }.tag-360 { background:#e4f2ef; color:#17645c; }.tag-direct { background:#e9edef; color:#405762; }
+        .res-url { max-width:min(380px,45vw); color:var(--search-muted); font-family:inherit; text-decoration:none; }
+        .res-url:hover { color:var(--search-accent); }
+        .res-action { display:inline-flex; align-items:center; justify-content:center; min-width:70px; height:34px; margin-left:auto; padding:0 12px; border:1px solid var(--search-border); border-radius:5px; color:var(--search-accent); font-size:13px; }
+        .res-action:hover { color:var(--search-accent); border-color:var(--search-accent); background:rgba(15,118,110,.06); }
+        .empty-state { padding:72px 20px; color:var(--search-muted); }
+        .empty-state svg { color:var(--search-accent); opacity:.36; }
+        .search-state { min-height:240px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--search-muted); }
+        .search-state .state-mark { width:42px; height:42px; display:grid; place-items:center; margin-bottom:14px; border:1px solid var(--search-border); border-radius:50%; color:var(--search-accent); font-size:19px; }
+        .search-state.error .state-mark { color:#ad3f3f; border-color:#e9caca; }
+        .search-state h2 { margin:0 0 7px; color:var(--search-text); font-size:16px; font-weight:650; }
+        .search-state p { margin:0; font-size:13px; line-height:1.6; }
+        .search-state .p-btn { min-height:34px; margin-top:18px; border:1px solid var(--search-border); border-radius:5px; background:var(--search-panel); color:var(--search-accent); font-weight:600; }
+        .search-state .p-btn:hover { border-color:var(--search-accent); background:rgba(15,118,110,.06); }
+        .search-spinner { width:28px; height:28px; margin-bottom:16px; border:3px solid var(--search-border); border-top-color:var(--search-accent); border-radius:50%; animation:spin .75s linear infinite; }
+        @media (max-width:640px) { body { padding:0; }.container { width:calc(100% - 28px); margin:78px auto 28px; }.container h1 { font-size:22px; }.search-box { flex-direction:row; }.search-box .p-btn { min-width:70px; }.feature-tabs { display:flex; gap:12px; padding-top:4px; }.feature-item:nth-child(3) { display:none; }.result-item { display:block; padding:14px 0; }.res-meta { align-items:center; }.res-url { max-width:calc(100vw - 178px); }.res-action { position:absolute; right:0; bottom:0; }.result-item { position:relative; padding-right:84px; }.res-action { margin:0; }.stats-bar { flex-direction:row; align-items:center; }.sort-options { gap:6px; } }
     </style>
 </head>
 <body>
@@ -447,6 +493,24 @@
             localStorage.setItem('search_history', JSON.stringify(searchHistory));
             renderHistory();
         }
+
+        function renderSearchState(kind, detail = '') {
+            const container = document.getElementById('resultsContainer');
+            const states = {
+                loading: { mark: '', title: '正在搜索', message: '正在聚合多个书源，请稍候。' },
+                empty: { mark: '⌕', title: '没有找到相关结果', message: '试试简化关键词，或改用作者名搜索。' },
+                timeout: { mark: '!', title: '搜索耗时较长', message: '当前书源响应较慢，可以重新搜索。' },
+                error: { mark: '!', title: '搜索暂时不可用', message: detail || '请检查网络后重试。' },
+                expired: { mark: '!', title: '搜索任务已失效', message: '请重新提交一次搜索。' }
+            };
+            const state = states[kind] || states.error;
+            const retry = kind !== 'loading' && kind !== 'empty';
+            container.innerHTML = `<div class="search-state ${kind === 'error' ? 'error' : ''}">
+                ${kind === 'loading' ? '<div class="search-spinner"></div>' : `<div class="state-mark">${state.mark}</div>`}
+                <h2>${state.title}</h2><p>${state.message}</p>
+                ${retry ? '<button type="button" class="p-btn" onclick="doSearch()">重新搜索</button>' : ''}
+            </div>`;
+        }
         
         // 执行搜索
         async function doSearch() {
@@ -462,12 +526,7 @@
             const container = document.getElementById('resultsContainer');
             const statsBar = document.getElementById('statsBar');
             
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div style="width:50px; height:50px; margin:0 auto 15px; border:3px solid #f3f4f6; border-top-color:#4f46e5; border-radius:50%; animation:spin 1s linear infinite;"></div>
-                    <p style="font-size:14px; color:#4f46e5; font-weight:600;">🔍 正在搜索...</p>
-                </div>
-            `;
+            renderSearchState('loading');
             statsBar.style.display = 'none';
             
             try {
@@ -487,12 +546,8 @@
                     handleSearchResults([]);
                 }
             } catch(e) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <p style="font-size:16px; color:#ef4444; margin-bottom:10px;">❌ 搜索失败</p>
-                        <p style="font-size:13px; color:#9ca3af;">请检查网络连接或稍后重试</p>
-                    </div>
-                `;
+                console.error('Search request failed:', e);
+                renderSearchState('error');
             } finally {
                 PureUI.loading.hide();
             }
@@ -610,7 +665,7 @@
             const poll = async () => {
                 if (attempts >= maxAttempts) {
                     PureUI.loading.close();
-                    document.getElementById('resultsContainer').innerHTML = '<div class="empty-state"><p>搜索超时</p></div>';
+                    renderSearchState('timeout');
                     return;
                 }
                 
@@ -624,16 +679,17 @@
                             handleSearchResults(t.result); // Should be full result by now
                         } catch (err) {
                             console.error("Render error:", err);
-                             document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>渲染结果出错: ${escapeHtml(err.message)}</p></div>`;
+                             renderSearchState('error');
                         }
                         return;
                     } else if (t.status === 'failed') {
                         PureUI.loading.hide();
-                        document.getElementById('resultsContainer').innerHTML = `<div class="empty-state"><p>搜索出错: ${escapeHtml(t.error)}</p></div>`;
+                        console.error('Search task failed:', t.error);
+                        renderSearchState('error');
                         return;
                     } else if (t.status === 'not_found') {
                         PureUI.loading.hide();
-                         document.getElementById('resultsContainer').innerHTML = '<div class="empty-state"><p>任务已失效，请重试</p></div>';
+                         renderSearchState('expired');
                         return;
                     } else {
                         // [New] Update Progress UI
@@ -670,17 +726,7 @@
                  document.getElementById('resultCount').innerText = currentResults.length;
              } else {
                  statsBar.style.display = 'none'; // Hide stats if no results
-                 container.innerHTML = `
-                        <div class="empty-state">
-                            <p style="font-size:16px; color:#6b7280; margin-bottom:10px;">😢 未找到相关结果</p>
-                            <p style="font-size:13px; color:#9ca3af;">尝试：</p>
-                            <ul style="text-align:left; display:inline-block; color:#9ca3af; font-size:13px; margin-top:8px;">
-                                <li>简化关键词（如："凡人修仙传" → "凡人"）</li>
-                                <li>搜索作者名</li>
-                                <li>检查拼写是否正确</li>
-                            </ul>
-                        </div>
-                 `;
+                 renderSearchState('empty');
              }
         }
     </script>

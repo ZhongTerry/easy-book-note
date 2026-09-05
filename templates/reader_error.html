@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - Smart NoteDB</title>
+    <style>
+        :root { --bg:#eef2f3; --panel:#ffffff; --text:#26343d; --muted:#6b7b86; --border:#dce4e8; --accent:#0f766e; }
+        * { box-sizing:border-box; }
+        body { min-height:100vh; margin:0; padding:24px; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+        main { width:min(560px,100%); padding:34px; border:1px solid var(--border); background:var(--panel); }
+        .eyebrow { margin:0 0 10px; color:var(--accent); font-size:12px; font-weight:700; }
+        h1 { margin:0 0 12px; font-size:24px; line-height:1.35; }
+        .message { margin:0; color:var(--muted); line-height:1.7; }
+        .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:28px; }
+        .action { min-height:38px; padding:0 14px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--border); border-radius:6px; color:var(--text); background:#fff; text-decoration:none; font-size:14px; font-weight:600; cursor:pointer; }
+        .action:hover { border-color:var(--accent); color:var(--accent); background:rgba(15,118,110,.06); }
+        .action.primary { border-color:var(--accent); background:var(--accent); color:#fff; }
+        .action.primary:hover { color:#fff; background:#0b625c; }
+        .context { margin:24px 0 0; padding-top:16px; border-top:1px solid var(--border); color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+        .context strong { color:var(--text); font-weight:600; }
+        @media (max-width:540px) { body { padding:0; align-items:stretch; } main { width:100%; padding:28px 22px; border:0; } h1 { font-size:22px; }.actions { display:grid; grid-template-columns:1fr 1fr; }.action.primary { grid-column:1 / -1; } }
+    </style>
+</head>
+<body>
+    <main>
+        <p class="eyebrow">阅读恢复</p>
+        <h1>{{ title }}</h1>
+        <p class="message">{{ message }}</p>
+        <div class="actions">
+            <a class="action primary" href="/read?url={{ current_url|urlencode }}&key={{ db_key|urlencode }}&force=true">重新抓取</a>
+            <a class="action" href="/toc?url={{ toc_url|urlencode }}&key={{ db_key|urlencode }}">查看目录</a>
+            <a class="action" href="/">返回书架</a>
+            <button class="action" type="button" onclick="history.back()">返回上一页</button>
+        </div>
+        <p class="context"><strong>当前来源：</strong>{{ current_url }}</p>
+    </main>
+</body>
+</html>

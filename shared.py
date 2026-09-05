@@ -1,11 +1,9 @@
 import os
-import json
-import time
 from flask import session, jsonify, redirect, url_for, request, send_file
 from functools import wraps
 from urllib.parse import urlparse
 import socket
-from ipaddress import ip_address, ip_network
+from ipaddress import ip_address
 from utils import debug, info, warn, error
 
 # === 基础路径配置 ===
@@ -82,126 +80,51 @@ def pro_required(f):
     return decorated
 
 # === 安全工具 ===
-# === 域名验证缓存管理器 ===
-class DomainVerificationCache:
-    """智能域名验证缓存（30天有效期）"""
-    def __init__(self):
-        self.cache_file = os.path.join(USER_DATA_DIR, 'domain_verification_cache.json')
-        self.cache = self._load_cache()
-        self.cache_ttl = 30 * 24 * 3600  # 30天（秒）
-    
-    def _load_cache(self):
-        """加载缓存"""
-        try:
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except:
-            pass
-        return {}
-    
-    def _save_cache(self):
-        """保存缓存"""
-        try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[DomainCache] 保存失败: {e}")
-    
-    def get(self, domain):
-        """获取缓存的验证结果"""
-        if domain not in self.cache:
-            return None
-        
-        record = self.cache[domain]
-        # 检查是否过期
-        if time.time() - record['timestamp'] > self.cache_ttl:
-            return None
-        
-        return record['is_valid']
-    
-    def set(self, domain, is_valid):
-        """设置验证结果"""
-        self.cache[domain] = {
-            'is_valid': is_valid,
-            'timestamp': time.time()
-        }
-        self._save_cache()
+def _ssrf_check_disabled():
+    """只允许在明确标记的本地环境关闭 SSRF 检查。"""
+    environment = os.getenv('APP_ENV', '').lower()
+    return (
+        os.getenv('DISABLE_SSRF_CHECK', '0') == '1'
+        and environment in {'development', 'test', 'local'}
+    )
 
-# 全局缓存实例
-_domain_cache = DomainVerificationCache()
+
+def _resolve_public_addresses(hostname, port):
+    """解析主机的全部地址；任一非公网地址都会使校验失败。"""
+    addresses = {
+        item[4][0]
+        for item in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    }
+    if not addresses:
+        return False
+    return all(ip_address(address).is_global for address in addresses)
+
 
 def verify_domain_online(domain):
-    """
-    通过第三方方式验证域名是否合法
-    1. 尝试 DNS 解析
-    2. 尝试 HTTP HEAD 请求
-    """
+    """兼容旧调用方：域名必须仅解析到公网地址。"""
     try:
-        # 方法1: DNS 解析测试
-        socket.gethostbyname(domain)
-        
-        # 方法2: HTTP 连通性测试（HEAD 请求，不下载内容）
-        import requests
-        response = requests.head(f'http://{domain}', timeout=5, allow_redirects=True)
-        
-        # 如果返回 200-499 状态码，说明域名可访问（包括403、404等）
-        # 5xx 表示服务器错误，也说明域名存在
-        if 200 <= response.status_code < 600:
-            return True
-        
+        return _resolve_public_addresses(domain, 80)
+    except (OSError, ValueError, UnicodeError):
         return False
-    except Exception as e:
-        print(f"[DomainVerify] {domain} 验证失败: {e}")
-        return False
+
 
 def is_safe_url(url):
-    """智能 SSRF 防护（带域名验证缓存）"""
+    """拒绝可能访问本机、内网或保留地址的外部 URL。"""
     try:
-        # [快速路径1] 环境变量控制：完全关闭 SSRF 检查
-        if os.getenv('DISABLE_SSRF_CHECK', '0') == '1':
-            parsed = urlparse(url)
-            return parsed.scheme in ('http', 'https')
-        
         parsed = urlparse(url)
-        if parsed.scheme not in ('http', 'https'):
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+            return False
+        if parsed.username is not None or parsed.password is not None:
             return False
 
-        hostname = parsed.hostname
-        if not hostname:
+        hostname = parsed.hostname.rstrip('.').lower()
+        if hostname == 'localhost' or hostname.endswith('.local'):
             return False
 
-        # [快速路径2] 白名单：已知的小说网站域名，直接放行
-        trusted_domains = [
-            '22biqu.com', 'sxgread.com', 'fanqienovel.com',
-            'xbqg77.com', 'qidian.com', 'zongheng.com', 'ciweimao.com',
-            'luoxiawu.com',
-        ]
-        
-        for trusted in trusted_domains:
-            if hostname == trusted or hostname.endswith('.' + trusted):
-                return True
-
-        # [快速路径3] 检查缓存（30天内验证过的域名）
-        cached_result = _domain_cache.get(hostname)
-        if cached_result is not None:
-            print(f"[SSRF] 🚀 使用缓存结果: {hostname} = {cached_result}")
-            return cached_result
-
-        # [智能验证] 在线验证域名合法性
-        print(f"[SSRF] 🔍 首次验证域名: {hostname}")
-        is_valid = verify_domain_online(hostname)
-        
-        # 缓存验证结果（无论成功或失败）
-        _domain_cache.set(hostname, is_valid)
-        
-        if is_valid:
-            print(f"[SSRF] ✅ 域名验证通过: {hostname}")
-        else:
-            print(f"[SSRF] ❌ 域名验证失败: {hostname}")
-        
-        return is_valid
-        
-    except Exception as e:
-        print(f"[SSRF] 检查异常: {e}")
+        # 解析 parsed.port 也会拒绝非法端口。
+        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+        if _ssrf_check_disabled():
+            return True
+        return _resolve_public_addresses(hostname, port)
+    except (OSError, ValueError, UnicodeError):
         return False

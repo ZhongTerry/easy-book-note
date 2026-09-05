@@ -5,8 +5,12 @@ import os
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, warn, error
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
+from recognition import get_payload_issue, is_cacheable_payload
 import re
+import hmac
+import secrets
 import time
+from urllib.parse import urlencode
 core_bp = Blueprint('core', __name__)
 DEFAULT_SERVER = 'https://auth.ztrztr.top'
 DEFAULT_CALLBACK = 'https://book.ztrztr.top/callback'
@@ -30,7 +34,7 @@ def detect_page_type(data):
     # === [优先级1] 适配器明确标记 ===
     if 'page_type' in data:
         declared_type = data['page_type']
-        if declared_type in ('toc', 'chapter'):
+        if declared_type in ('toc', 'chapter', 'blocked'):
             info("Smart Detect", f"适配器声明类型: {declared_type}")
             return declared_type
     
@@ -101,19 +105,60 @@ def calculate_real_chapter_id(book_key, chapter_url, chapter_title):
     
     return -1
 @core_bp.route('/login')
-def login(): return redirect(f"{AUTH_SERVER}/oauth/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}")
+def login():
+    if not CLIENT_ID or not REDIRECT_URI:
+        return "Login is not configured", 503
+
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+    query = urlencode({
+        'client_id': CLIENT_ID,
+        'redirect_uri': REDIRECT_URI,
+        'state': state,
+    })
+    return redirect(f"{AUTH_SERVER.rstrip('/')}/oauth/authorize?{query}")
 
 @core_bp.route('/callback')
 def callback():
     code = request.args.get('code')
+    received_state = request.args.get('state', '')
+    expected_state = session.pop('oauth_state', '')
+    if not code or not expected_state or not hmac.compare_digest(received_state, expected_state):
+        warn("OAuth", "拒绝缺少授权码或 state 不匹配的回调")
+        return "Login Failed", 400
+
     try:
-        resp = requests.post(f"{AUTH_SERVER}/oauth/token", json={'grant_type': 'authorization_code', 'client_id': CLIENT_ID, 'client_secret': CLIENT_SECRET, 'code': code}).json()
-        if 'access_token' in resp:
-            u = requests.get(f"{AUTH_SERVER}/api/user", headers={'Authorization': f"Bearer {resp['access_token']}"}).json()
-            session.permanent = True
-            session['user'] = u
-            return redirect(url_for('core.index'))
-    except: pass
+        token_response = requests.post(
+            f"{AUTH_SERVER.rstrip('/')}/oauth/token",
+            json={
+                'grant_type': 'authorization_code',
+                'client_id': CLIENT_ID,
+                'client_secret': CLIENT_SECRET,
+                'code': code,
+                'redirect_uri': REDIRECT_URI,
+            },
+            timeout=10,
+        )
+        token_response.raise_for_status()
+        access_token = token_response.json().get('access_token')
+        if not access_token:
+            raise ValueError("OAuth token response has no access_token")
+
+        user_response = requests.get(
+            f"{AUTH_SERVER.rstrip('/')}/api/user",
+            headers={'Authorization': f"Bearer {access_token}"},
+            timeout=10,
+        )
+        user_response.raise_for_status()
+        user = user_response.json()
+        if not isinstance(user, dict) or not user.get('username'):
+            raise ValueError("OAuth user response is invalid")
+
+        session.permanent = True
+        session['user'] = user
+        return redirect(url_for('core.index'))
+    except (requests.RequestException, ValueError) as exc:
+        warn("OAuth", f"登录回调失败: {exc}")
     return "Login Failed", 400
 
 @core_bp.route('/logout')
@@ -171,7 +216,8 @@ def api_get_memos():
 @login_required
 def api_get_memo(memo_id):
     """获取单条备忘录"""
-    memo = managers.memo_manager.get_memo(memo_id)
+    username = session.get('user', {}).get('username')
+    memo = managers.memo_manager.get_memo(username, memo_id)
     if memo:
         response = jsonify({"status": "success", "data": memo})
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -195,20 +241,26 @@ def api_save_memo():
         tags=data.get('tags')
     )
     
+    if memo_id is None:
+        return jsonify({"status": "error", "message": "备忘录不存在"}), 404
     return jsonify({"status": "success", "memo_id": memo_id})
 
 @core_bp.route('/api/memos/<int:memo_id>', methods=['DELETE'])
 @login_required
 def api_delete_memo(memo_id):
     """删除备忘录"""
-    managers.memo_manager.delete_memo(memo_id)
+    username = session.get('user', {}).get('username')
+    if not managers.memo_manager.delete_memo(username, memo_id):
+        return jsonify({"status": "error", "message": "备忘录不存在"}), 404
     return jsonify({"status": "success"})
 
 @core_bp.route('/api/memos/<int:memo_id>/pin', methods=['POST'])
 @login_required
 def api_toggle_pin(memo_id):
     """置顶/取消置顶"""
-    managers.memo_manager.toggle_pin(memo_id)
+    username = session.get('user', {}).get('username')
+    if not managers.memo_manager.toggle_pin(username, memo_id):
+        return jsonify({"status": "error", "message": "备忘录不存在"}), 404
     return jsonify({"status": "success"})
 
 @core_bp.route('/api/memos/search', methods=['GET'])
@@ -310,12 +362,30 @@ def read_mode():
             if not data:
                 # [关键修复] 当 force=True 时，告知爬虫跳过它内部的缓存
                 data = crawler.run(u, no_cache=force)
-                if data: managers.cache.set(u, data)
+                if is_cacheable_payload(data): managers.cache.set(u, data)
 
     except Exception as e:
-        # 捕获爬虫内部的错误
         info("Read Error", f"{e}")
-        return f"解析发生错误: {str(e)}", 500
+        return render_template(
+            'reader_error.html',
+            title='暂时无法阅读',
+            message='读取正文时发生了问题。可以重新抓取，或回到目录选择其他章节。',
+            current_url=u,
+            toc_url=u,
+            db_key=k,
+        ), 500
+
+    issue = get_payload_issue(data)
+    if issue:
+        status_code = 503 if issue['code'] == 'SOURCE_CHALLENGE' else 422
+        return render_template(
+            'reader_error.html',
+            title='暂时无法阅读',
+            message=issue['message'],
+            current_url=u,
+            toc_url=u,
+            db_key=k,
+        ), status_code
 
     # 3. [智能检测] 如果获取的内容实际上是目录页，自动跳转到目录页
     if data and not u.startswith('epub:'):
@@ -327,47 +397,14 @@ def read_mode():
     
     # 4. [核心修复] 必须先判断 data 是否存在
     if not data:
-        return render_template_string("""
-            <!DOCTYPE html>
-            <html><head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>解析失败</title>
-                <style>
-                    body { font-family: -apple-system, sans-serif; text-align:center; padding:50px; background:#f9fafb; }
-                    .error-box { max-width:500px; margin:0 auto; background:white; padding:40px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1); }
-                    h2 { color:#ef4444; margin-bottom:15px; }
-                    p { color:#6b7280; line-height:1.6; margin-bottom:20px; }
-                    .tips { text-align:left; background:#fef3c7; padding:15px; border-radius:8px; margin-top:20px; font-size:14px; color:#92400e; }
-                    .btn { display:inline-block; padding:10px 20px; background:#4f46e5; color:white; text-decoration:none; border-radius:6px; margin-top:15px; }
-                    .btn:hover { background:#4338ca; }
-                    .debug { margin-top:20px; padding:15px; background:#f3f4f6; border-radius:8px; text-align:left; font-size:12px; color:#6b7280; overflow-wrap:break-word; }
-                </style>
-            </head><body>
-                <div class="error-box">
-                    <h2>🚫 内容提取失败</h2>
-                    <p>可能原因：</p>
-                    <ul style="text-align:left; color:#6b7280; line-height:1.8;">
-                        <li>源站连接超时或暂时不可用</li>
-                        <li>该章节需要登录或付费才能阅读</li>
-                        <li>网站结构变动，解析规则需要更新</li>
-                        <li>被反爬虫机制拦截</li>
-                    </ul>
-                    <div class="tips">
-                        <strong>💡 解决建议：</strong><br>
-                        1. 返回目录尝试其他章节<br>
-                        2. 稍后重试，或检查源站是否正常<br>
-                        3. 考虑更换书源（在搜索页重新搜索该书）
-                    </div>
-                    <a href="javascript:history.back()" class="btn">← 返回上一页</a>
-                    <div class="debug">
-                        <strong>调试信息：</strong><br>
-                        URL: {{ url }}<br>
-                        Key: {{ key }}
-                    </div>
-                </div>
-            </body></html>
-        """, url=escape(u), key=escape(k)), 404
+        return render_template(
+            'reader_error.html',
+            title='没有获取到正文',
+            message='当前章节暂时没有可阅读的正文。可以重新抓取，或从目录选择其他章节。',
+            current_url=u,
+            toc_url=u,
+            db_key=k,
+        ), 404
 
     # 5. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
@@ -871,12 +908,18 @@ def api_quick_save():
     
     if not key or not url:
         return jsonify({"status": "error", "message": "缺少参数"})
+
+    # The reader can be opened from a direct link.  A repeated save must never
+    # replace the existing value object, which may already contain progress,
+    # metadata, highlights, and subscriptions.
+    if managers.db.get_raw_book(get_current_user(), key):
+        return jsonify({"status": "success", "message": "已在书架中", "already_saved": True})
     
     # 保存到数据库
     res = managers.db.insert(key, url)
     
     if res.get('status') == 'success':
-        return jsonify({"status": "success", "message": "已保存到书架"})
+        return jsonify({"status": "success", "message": "已收藏到书架", "already_saved": False})
     else:
         return jsonify({"status": "error", "message": res.get('message', '保存失败')})
 @core_bp.route('/update', methods=['POST'])
@@ -1267,9 +1310,11 @@ def api_upload_epub():
         v = f"epub:{fn}:toc"
         managers.db.insert(k, v)
         return jsonify({"status": "success", "key": k, "value": v})
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
     except Exception as e:
         info("Upload Error", f"{e}")
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({"status": "error", "message": "EPUB 上传失败"}), 500
 # ... 引入 update_manager ...
 from managers import db, update_manager, booklist_manager, task_manager, get_current_user
 
