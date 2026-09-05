@@ -89,6 +89,23 @@ class TestRecognitionFixtures(unittest.TestCase):
         self.assertIn('第一页的正文从清晨开始。', result.content)
         self.assertEqual(result.next_page_url, 'https://novel.example/book/10_2.html')
 
+    def test_numeric_chapter_suffix_is_recognized_as_next_page(self):
+        result = self.engine.analyze_html(
+            '''<html><head><title>第2657章 测试（1 / 2）</title></head>
+            <body><h1>第2657章 测试（1 / 2）</h1>
+            <article>这一页有足够长度的正文，用于验证真实书源常见的分段章节导航不会被误判为下一章。</article>
+            <a href="/xs/23389/34786180.html">上一章</a>
+            <a href="/xs/23389/34786186_2.html">下一页</a>
+            <a href="/xs/23389/">书页/目录</a></body></html>''',
+            'https://www.luyouxs.com/xs/23389/34786186.html',
+        )
+
+        self.assertEqual(
+            result.next_page_url,
+            'https://www.luyouxs.com/xs/23389/34786186_2.html',
+        )
+        self.assertIsNone(result.next_url)
+
     def test_paginated_titles_normalize_to_the_same_chapter(self):
         self.assertEqual(
             normalize_chapter_title('第3169章 示例（1 / 2）'),

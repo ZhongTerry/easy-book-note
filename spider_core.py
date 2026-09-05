@@ -22,6 +22,11 @@ from recognition.chapter_numbers import parse_chapter_number
 from shared import BASE_DIR, LIB_DIR, CACHE_DIR, debug, info, warn, error
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
+# Bump this whenever a worker result depends on a changed recognition contract.
+# Older workers are then ignored by the master, which falls back to local crawl
+# instead of silently returning an incomplete chapter.
+CRAWLER_PROTOCOL_VERSION = 2
+
 # ==========================================
 # 0. 辅助工具 (中文数字转阿拉伯数字 - 增强版)
 # ==========================================
@@ -80,6 +85,12 @@ def _remote_request(endpoint, payload):
             json_res = json.loads(res)
             
             if json_res.get('status') == 'success':
+                if json_res.get('crawler_protocol_version') != CRAWLER_PROTOCOL_VERSION:
+                    warn(
+                        "Cluster",
+                        "Worker recognition protocol is outdated; falling back to local crawl",
+                    )
+                    return None
                 data = json_res.get('data')
                 worker_uuid = json_res.get('worker_uuid', 'unknown')
                 

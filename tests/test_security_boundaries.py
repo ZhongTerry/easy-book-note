@@ -171,6 +171,61 @@ class TestQuickSave(unittest.TestCase):
         insert.assert_called_once_with('new-book', 'https://example.test/toc')
 
 
+class TestForceRefreshBook(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from flask import Flask
+        from routes.core_bp import core_bp
+
+        cls.app = Flask(__name__)
+        cls.app.config.update(TESTING=True, SECRET_KEY='test-secret')
+        cls.app.register_blueprint(core_bp)
+
+    def setUp(self):
+        self.client = self.app.test_client()
+        with self.client.session_transaction() as login_session:
+            login_session['user'] = {'username': 'alice'}
+
+    @patch('routes.core_bp.managers.fulltext_cache_manager.delete_cache')
+    @patch('routes.core_bp.managers.cache.delete')
+    @patch('routes.core_bp.managers.db.save_raw_book')
+    @patch('routes.core_bp.managers.db.get_raw_book')
+    def test_force_refresh_preserves_reader_data_only(self, get_book, save_book, delete_cache, delete_fulltext):
+        get_book.return_value = {
+            'key': 'book',
+            'value': {
+                'url': 'https://example.test/toc',
+                'title': '旧书名',
+                'author': '旧作者',
+                'last_read_url': 'https://example.test/3.html',
+                'last_read_index': 3,
+                'marked_chapters': [{'url': 'https://example.test/2.html'}],
+                'memos': [{'text': '保留'}],
+            },
+            'tags': ['正在读'],
+            'meta': {'cover': 'https://example.test/cover.jpg'},
+            'cache': {'toc': {'chapters': [{'url': 'https://example.test/1.html'}]}},
+            'update_info': {'latest': '旧章节'},
+        }
+        save_book.return_value = True
+        delete_fulltext.return_value = {'status': 'success'}
+
+        response = self.client.post('/api/book/force_refresh', json={'key': 'book'})
+
+        self.assertEqual(response.status_code, 200)
+        saved = save_book.call_args.args[2]
+        self.assertEqual(saved['value']['url'], 'https://example.test/toc')
+        self.assertEqual(saved['value']['last_read_index'], 3)
+        self.assertEqual(saved['value']['marked_chapters'], [{'url': 'https://example.test/2.html'}])
+        self.assertEqual(saved['tags'], ['正在读'])
+        self.assertEqual(saved['meta'], {})
+        self.assertEqual(saved['cache'], {})
+        self.assertEqual(saved['update_info'], {})
+        self.assertNotIn('title', saved['value'])
+        self.assertGreaterEqual(delete_cache.call_count, 3)
+        delete_fulltext.assert_called_once_with('book', 'alice')
+
+
 class TestEpubUploadValidation(unittest.TestCase):
     def setUp(self):
         from spider_core import EpubHandler

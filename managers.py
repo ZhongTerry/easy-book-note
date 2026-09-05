@@ -621,6 +621,19 @@ class CacheManager:
                 json.dump(data, f, ensure_ascii=False)
         except Exception as e:
             error("Cache", f"Write Error: {e}")
+
+    def delete(self, url):
+        """Delete one URL cache entry and report whether a file was removed."""
+        if not isinstance(url, str) or not url:
+            return False
+        try:
+            fp = self._get_filename(url)
+            if os.path.isfile(fp):
+                os.remove(fp)
+                return True
+        except OSError as exc:
+            error("Cache", f"Delete Error: {exc}")
+        return False
             
     def cleanup_expired(self):
         now = time.time(); count = 0; size = 0

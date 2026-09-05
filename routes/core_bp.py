@@ -922,6 +922,80 @@ def api_quick_save():
         return jsonify({"status": "success", "message": "已收藏到书架", "already_saved": False})
     else:
         return jsonify({"status": "error", "message": res.get('message', '保存失败')})
+
+
+@core_bp.route('/api/book/force_refresh', methods=['POST'])
+@login_required
+def force_refresh_book():
+    """Remove derived book data while preserving the reader's own data."""
+    payload = request.get_json(silent=True) or {}
+    key = payload.get('key') if isinstance(payload, dict) else None
+    if not isinstance(key, str) or not key.strip():
+        return jsonify({"status": "error", "message": "缺少书籍标识"}), 400
+
+    username = get_current_user()
+    book = managers.db.get_raw_book(username, key)
+    if not book:
+        return jsonify({"status": "error", "message": "书籍不存在或无权操作"}), 404
+
+    # Gather known source URLs before discarding the extracted TOC and metadata.
+    # URL caches contain only regenerable crawl results; user-owned data remains
+    # isolated in the book record and is handled separately below.
+    cache_urls = set()
+
+    def collect_urls(value):
+        if isinstance(value, str):
+            if value.startswith(('http://', 'https://')):
+                cache_urls.add(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect_urls(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect_urls(item)
+
+    collect_urls(book.get('value', {}))
+    collect_urls(book.get('cache', {}))
+    collect_urls(book.get('meta', {}))
+    source_url = book.get('value', {}).get('url', '')
+
+    persistent_value_keys = {
+        'url', 'last_read_index', 'last_read_url', 'last_read_title',
+        'last_read_time', 'marked_chapters', 'memos',
+    }
+    old_value = book.get('value', {})
+    persistent_value = {
+        field: old_value[field]
+        for field in persistent_value_keys
+        if field in old_value
+    }
+    if source_url and 'url' not in persistent_value:
+        persistent_value['url'] = source_url
+
+    refreshed_book = {
+        'key': key,
+        'value': persistent_value,
+        'tags': book.get('tags', []),
+        'meta': {},
+        'cache': {},
+        'update_info': {},
+    }
+    if not managers.db.save_raw_book(username, key, refreshed_book):
+        return jsonify({"status": "error", "message": "重置书籍数据失败"}), 500
+
+    removed_cache_entries = sum(
+        1 for cache_url in cache_urls if managers.cache.delete(cache_url)
+    )
+    fulltext_result = managers.fulltext_cache_manager.delete_cache(key, username)
+    if fulltext_result.get('status') != 'success':
+        warn("Force refresh", f"全文缓存清理失败: {key}")
+
+    return jsonify({
+        "status": "success",
+        "message": "已清除可重新获取的书籍数据",
+        "url": source_url,
+        "removed_cache_entries": removed_cache_entries,
+    })
 @core_bp.route('/update', methods=['POST'])
 @login_required
 def update():

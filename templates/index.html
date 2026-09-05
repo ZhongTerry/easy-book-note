@@ -782,6 +782,19 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
 .book-info-row > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .book-info-row .p-btn { width:28px; height:28px; padding:0 !important; border-radius:4px; flex:none; }
 .book-row { border-color:var(--shelf-border); border-radius:6px; background:var(--shelf-panel); }
+.book-list-container { gap:10px; margin-top:0; }
+.book-row { min-height:128px; padding:14px; box-shadow:none; }
+.book-row:hover { transform:none; border-color:var(--shelf-accent); box-shadow:0 7px 16px rgba(30,49,60,.07); }
+.book-cover-img, .book-cover-default { width:74px; height:98px; border-radius:5px; }
+.book-info { min-width:0; margin-left:14px; }
+.book-header { gap:6px; min-width:0; }
+.book-title { max-width:100%; color:var(--shelf-text); font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.book-meta { gap:10px; color:var(--shelf-muted); font-size:12px; }
+.book-desc { color:var(--shelf-muted); margin-bottom:0; }
+.tag-badge { border-radius:4px; background:#eef3f3; color:#50636b; }
+.progress-container { margin:8px 0 5px; }.progress-bg { height:3px; background:#e4eaec; }.progress-bar-fill { background:var(--shelf-accent); }.progress-text { color:var(--shelf-muted); }
+.action-col { min-width:84px; gap:6px; padding-left:14px; border-left-color:var(--shelf-border); }
+.act-btn { min-height:32px; padding:5px 10px; border-radius:5px; font-size:12px; }.act-primary { background:var(--shelf-accent); border-color:var(--shelf-accent); }.act-outline { border-color:var(--shelf-border); color:var(--shelf-muted); }.act-outline:hover { border-color:var(--shelf-accent); color:var(--shelf-accent); }
 .book-title { color:var(--shelf-text); }
 .act-primary { background:var(--shelf-accent); border-color:var(--shelf-accent); }
 .act-outline { border-color:var(--shelf-border); color:var(--shelf-text); }
@@ -805,7 +818,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
 @keyframes shelf-modal-fade-in { from { opacity:0; } to { opacity:1; } }
 @keyframes shelf-modal-panel-in { from { opacity:0; transform:translateY(12px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
 @media (prefers-reduced-motion:reduce) { .p-modal.active, .p-modal.active .p-modal-content { animation:none; } }
-@media (max-width:600px) { #userBar { padding:8px 14px; }.container { width:calc(100% - 28px); margin-top:24px; } h1 { font-size:22px; margin-bottom:20px; }.btn-row .p-btn { min-width:0; flex:1 1 calc(50% - 4px); }.bookshelf-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.book-info-row { font-size:12px; } }
+@media (max-width:600px) { #userBar { padding:8px 14px; }.container { width:calc(100% - 28px); margin-top:24px; } h1 { font-size:22px; margin-bottom:20px; }.btn-row .p-btn { min-width:0; flex:1 1 calc(50% - 4px); }.bookshelf-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }.book-info-row { font-size:12px; }.book-row { min-height:118px; padding:12px; padding-bottom:48px; }.book-cover-img,.book-cover-default { width:64px; height:86px; }.book-info { margin-left:12px; }.action-col { left:88px; bottom:9px; right:12px; }.act-btn { min-height:29px; }.book-meta { gap:6px; }.book-desc { display:none; } }
 @media (max-width:600px) { .p-modal { padding:12px; }.p-modal-content { max-height:calc(100vh - 24px); padding:18px; }.p-modal-content [style*="max-height: 80vh"] { max-height:calc(100vh - 120px) !important; } }
     </style>
         <script>
@@ -1330,6 +1343,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     // 对 http/https 链接显示目录选项
     if (isLink && !isEpub) {
         items.unshift({ icon: '📚', text: '打开目录', click: `${closeCmd} window.open('/toc?url=${encodeURIComponent(value)}&key=${encodeURIComponent(key)}', '_blank')` });
+        items.push({ icon: '↻', text: '强制刷新书籍', click: asyncAct(`forceRefreshBook('${safeKey}', '${safeTitle}')`) });
     }
 
     if (isLink) {
@@ -1351,6 +1365,31 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
 
     container.innerHTML = html;
     PureUI.modal.open('moreMenuModal');
+}
+
+async function forceRefreshBook(key, title) {
+    const name = title || key;
+    if (!confirm(`确定强制刷新“${name}”？\n\n将清除目录、章节和提取信息，并重新抓取。阅读进度、标记、笔记、标签和书单会保留。`)) return;
+    try {
+        const response = await fetch('/api/book/force_refresh', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({key})
+        });
+        const result = await response.json();
+        if (result.status !== 'success') {
+            PureUI.notification.show(result.message || '刷新准备失败', 'error');
+            return;
+        }
+        PureUI.notification.show('已清除旧数据，正在重新抓取目录', 'success');
+        if (result.url) {
+            window.open(`/toc?url=${encodeURIComponent(result.url)}&key=${encodeURIComponent(key)}&force=true`, '_blank');
+        }
+        doAction('list');
+    } catch (e) {
+        console.error(e);
+        PureUI.notification.show('请求不可达，请稍后重试', 'error');
+    }
 }
 
 // --- 标记章节模态框 ---
@@ -2465,9 +2504,6 @@ function renderTable(data) {
             return false;
         });
     }
-    if (homeMode !== 'history' && activeFilter !== 'all') {
-        filteredKeys = filteredKeys.filter(k => (globalTags[k] || []).includes(activeFilter));
-    }
     
     if (filteredKeys.length === 0) { 
         container.innerHTML = '<div style="text-align:center;padding:40px;color:#999">空空如也</div>'; 
@@ -2484,19 +2520,20 @@ function renderTable(data) {
     filteredKeys.forEach(k => {
         let valObj = data[k];
         let url = "", cover = "", author = "未知", desc = "暂无简介", lastRead = 0;
-        let officialTags = valObj.official_tags || [];
+        let officialTags = (valObj && typeof valObj === 'object' && valObj.official_tags) || [];
 
         const userTags = globalTags[k] || []; // 用户标签
         // 兼容旧数据
         let lastReadTitle = "";
         let lastReadIndex = 0;
+        let totalChapters = 0;
 
         if (typeof valObj === 'object' && valObj !== null) {
             url = valObj.url || "";
             cover = valObj.cover || "";
             author = valObj.author || "未知";
             desc = valObj.desc || "暂无简介";
-            lastRead = valObj.last_read_at || 0;
+            lastRead = valObj.last_read_time || valObj.last_read_at || 0;
             // [新增] 读取 SQLite 中的进阶进度
             lastReadTitle = valObj.last_read_title || "";
             lastReadIndex = valObj.last_read_index || 0;
@@ -2653,10 +2690,11 @@ function restoreVersion(key, value) {
     // 执行保存 (这会作为一次新的 manual save，生成新的历史记录，这是符合逻辑的)
     doAction('update');
 }
-        function renderGrid(data, container, keys) {
-            let html = '<div class="bookshelf-grid">';
-            keys.forEach(k => {
-                const v = data[k];
+function renderGrid(data, container, keys) {
+    let html = '<div class="bookshelf-grid">';
+    keys.forEach(k => {
+        const record = data[k];
+        const v = record && typeof record === 'object' ? (record.url || '') : String(record || '');
                 const parts = k.split('/');
                 const title = parts[parts.length - 1];
                 const bg = stringToColor(title);

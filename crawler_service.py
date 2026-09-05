@@ -75,7 +75,7 @@ sys.modules['managers.cache'] = MockManagers.cache
 # =========================================================
 # 导入爬虫核心 (必须在注入之后)
 # =========================================================
-from spider_core import crawler_instance as crawler, searcher
+from spider_core import CRAWLER_PROTOCOL_VERSION, crawler_instance as crawler, searcher
 
 # === 配置区 ===
 MASTER_URL = os.environ.get("MASTER_URL", "https://book.ztrztr.top")
@@ -207,7 +207,12 @@ def do_work(task):
                 warn("Crawler", "⚠️ 检测到不可序列化数据，执行深度清洗...")
                 data = clean_data(data)
 
-            result = {"status": "success", "data": data, "worker_uuid": NODE_UUID}
+            result = {
+                "status": "success",
+                "data": data,
+                "worker_uuid": NODE_UUID,
+                "crawler_protocol_version": CRAWLER_PROTOCOL_VERSION,
+            }
         else:
             result = {"status": "failed", "msg": "Empty data from crawler", "worker_uuid": NODE_UUID}
             

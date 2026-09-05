@@ -847,6 +847,8 @@ body.dark-mode .main-container { border-color:var(--border-color); box-shadow:no
 .toc-item { padding:12px 10px; border-bottom-color:var(--border-color); border-radius:5px; color:var(--text-main); }
 .toc-item:hover { background:rgba(15,118,110,.06); color:var(--accent); }
 .toc-item.active-chap { background:rgba(15,118,110,.1); color:var(--accent) !important; }
+.toc-filter { width:100%; min-height:36px; margin:0 0 12px; padding:0 10px; border:1px solid var(--border-color); border-radius:5px; background:var(--bg-reader); color:var(--text-main); font:inherit; font-size:13px; }
+.toc-filter:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(15,118,110,.12); }
 .setting-row { margin-bottom:22px; }
 .setting-label { margin-bottom:9px; color:var(--text-main); font-size:13px; }
 .btn-action { min-height:38px; padding:8px 10px; border-radius:5px; border-color:var(--border-color); background:transparent; color:var(--text-main); }
@@ -863,6 +865,7 @@ body.dark-mode .modal-header, body.dark-mode .toc-item { border-color:var(--bord
 body.dark-mode .toc-item { color:var(--text-main); }
 body.dark-mode .toc-item:hover { background:rgba(82,183,170,.1); }
 body.dark-mode .toc-item.active-chap { background:rgba(82,183,170,.14) !important; color:var(--accent) !important; }
+body.dark-mode .toc-filter { background:var(--bg-reader); color:var(--text-main); }
 body.dark-mode .menu-item.saved { border-color:rgba(82,183,170,.52); background:rgba(82,183,170,.13); }
 body.dark-mode .btn-action { background:transparent; border-color:var(--border-color); color:var(--text-main); }
 body.dark-mode .btn-action:hover { background:rgba(82,183,170,.1); color:var(--accent); }
@@ -1019,6 +1022,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                  <button class="modal-close" onclick="hideModal('tocOverlay')" title="关闭目录" aria-label="关闭目录">×</button>
             </div>
         </div>
+        <input id="tocFilter" class="toc-filter" type="search" placeholder="搜索章节" autocomplete="off" oninput="filterPcTOC(this.value)">
         <!-- 目录列表容器 -->
         <div id="tocList" style="flex: 1; overflow-y: auto;">
             <!-- 目录将通过 JS 动态加载到这里 -->
@@ -2087,6 +2091,8 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                             </a>`;
                 }).join('');
 
+                filterPcTOC(document.getElementById('tocFilter')?.value || '');
+
                 // 自动滚动
                 setTimeout(() => {
                     const activeItem = list.querySelector('.active-chap');
@@ -2101,6 +2107,13 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         .catch(e => {
             console.error(e);
             list.innerText = "网络异常";
+        });
+    }
+
+    function filterPcTOC(query) {
+        const normalized = String(query || '').trim().toLocaleLowerCase();
+        document.querySelectorAll('#tocList .toc-item').forEach(item => {
+            item.style.display = !normalized || item.textContent.toLocaleLowerCase().includes(normalized) ? '' : 'none';
         });
     }
 
