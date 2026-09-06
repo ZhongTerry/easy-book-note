@@ -1218,6 +1218,9 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     // 从后端获取当前页面对应的 URL (通常是未编码或部分编码的)
     let currentUrl = "{{ current_url }}"; // 允许 AJAX 导航后更新当前章节 URL
     let progressRevision = {{ progress_revision|default(0)|int }};
+    let progressRemoteUrl = {{ progress_remote_url|default('')|tojson }};
+    let progressBaseUrl = currentUrl;
+    let progressConflictPending = false;
 
     let memoParagraphText = '';
     let memoSelectionText = '';
@@ -1755,9 +1758,12 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         const revision = Number(remoteRevision || 0);
         if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) {
             progressRevision = Math.max(progressRevision, revision);
+            progressRemoteUrl = remoteUrl;
+            progressBaseUrl = currentUrl;
+            progressConflictPending = false;
             return false;
         }
-        return revision > progressRevision;
+        return Boolean(remoteUrl) && (progressConflictPending || revision >= progressRevision);
     }
     document.addEventListener('keydown', (e) => {
     // 1. M 键快速打开/关闭目录 (Menu)
@@ -1820,6 +1826,9 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     // === 同步核心逻辑 (Check First, Save Later) ===
     async function checkRemoteAndInit() {
         if(!dbKey) return;
+        progressConflictPending = Boolean(
+            progressRemoteUrl && normalizeUrl(progressRemoteUrl) !== normalizeUrl(currentUrl)
+        );
         try {
             const res = await fetch('/api/get_value', { 
                 method: 'POST', 
@@ -1872,6 +1881,10 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     // Called only after a deliberate navigation. A restored page never calls it.
     async function autoSyncProgress(force=false) {
         if(!dbKey) return;
+        if (!force && progressConflictPending) {
+            showSyncAlert(progressRemoteUrl, { chapter_id: 0 });
+            return;
+        }
         
         // 获取当前标题 (用于后端计算真实ID)
         const currentTitle = document.getElementById('chapterTitle')?.innerText || '';
@@ -1882,7 +1895,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         try {
             const response = await fetch('/update', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, base_revision: progressRevision, force })
+                body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, base_revision: progressRevision, base_url: progressBaseUrl, force })
             });
             const result = await response.json();
             if (result.status === 'success' && result.applied === false && result.progress?.last_read_url) {
@@ -1893,6 +1906,9 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 console.warn('[Sync] progress update rejected:', result.message);
             } else {
                 progressRevision = Number(result.progress?.last_read_revision || progressRevision);
+                progressRemoteUrl = result.progress?.last_read_url || currentUrl;
+                progressBaseUrl = currentUrl;
+                progressConflictPending = false;
                 document.getElementById('syncAlert').classList.remove('active');
                 fetch('/api/last_read', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},

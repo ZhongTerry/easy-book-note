@@ -418,7 +418,7 @@ class IsolatedDB:
         return {"status": "error", "message": "Update failed"}
 
     def update_reading_progress(self, key, chapter_url, chapter_title='', chapter_index=0,
-                                expected_revision=None, force=False, username=None):
+                                expected_revision=None, expected_url='', force=False, username=None):
         """Commit an intentional reader action without letting a stale page overwrite progress."""
         u = username or get_current_user()
         try:
@@ -452,14 +452,18 @@ class IsolatedDB:
                     content['value'] = value
 
                 stored_revision = int(value.get('last_read_revision') or 0)
-                if not force and expected_revision != stored_revision:
+                stored_url = value.get('last_read_url') or ''
+                if not force and (
+                    expected_revision != stored_revision
+                    or (stored_url and expected_url != stored_url)
+                ):
                     return {
                         "status": "success",
                         "applied": False,
                         "conflict": True,
                         "message": "另一台设备已更新阅读进度",
                         "progress": {
-                            "last_read_url": value.get('last_read_url', ''),
+                            "last_read_url": stored_url,
                             "last_read_title": value.get('last_read_title', ''),
                             "last_read_index": int(value.get('last_read_index') or 0),
                             "last_read_revision": stored_revision,

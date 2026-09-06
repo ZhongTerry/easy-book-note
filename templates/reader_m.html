@@ -590,6 +590,9 @@
     let chapterTitle = {{ (article.title or "")|tojson }};
     let currentUrl = "{{ current_url }}"; // AJAX 翻页后需更新
     let progressRevision = {{ progress_revision|default(0)|int }};
+    let progressRemoteUrl = {{ progress_remote_url|default('')|tojson }};
+    let progressBaseUrl = currentUrl;
+    let progressConflictPending = false;
     let memoParagraphText = '';
     let memoSelectionText = '';
     let memoParagraphEl = null;
@@ -1100,13 +1103,19 @@
         const revision = Number(remoteRevision || 0);
         if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) {
             progressRevision = Math.max(progressRevision, revision);
+            progressRemoteUrl = remoteUrl;
+            progressBaseUrl = currentUrl;
+            progressConflictPending = false;
             return false;
         }
-        return revision > progressRevision;
+        return Boolean(remoteUrl) && (progressConflictPending || revision >= progressRevision);
     }
 
     async function checkRemoteAndInit() {
         if(!dbKey) return;
+        progressConflictPending = Boolean(
+            progressRemoteUrl && normalizeUrl(progressRemoteUrl) !== normalizeUrl(currentUrl)
+        );
         try {
             const res = await fetch('/api/get_value', { 
                 method: 'POST', headers: {'Content-Type': 'application/json'}, 
@@ -1132,6 +1141,10 @@
 
     async function autoSyncProgress(force=false) {
         if(!dbKey) return;
+        if (!force && progressConflictPending) {
+            showSyncAlert(progressRemoteUrl, { chapter_id: 0 });
+            return;
+        }
         
         const currentTitle = document.getElementById('chapter-title')?.innerText || '';
         
@@ -1141,7 +1154,7 @@
         try {
             const response = await fetch('/update', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, base_revision: progressRevision, force })
+                body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, base_revision: progressRevision, base_url: progressBaseUrl, force })
             });
             const result = await response.json();
             if (result.status === 'success' && result.applied === false && result.progress?.last_read_url) {
@@ -1152,6 +1165,9 @@
                 console.warn('[Sync] progress update rejected:', result.message);
             } else {
                 progressRevision = Number(result.progress?.last_read_revision || progressRevision);
+                progressRemoteUrl = result.progress?.last_read_url || currentUrl;
+                progressBaseUrl = currentUrl;
+                progressConflictPending = false;
                 document.getElementById('syncAlert').classList.remove('active');
                 fetch('/api/last_read', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
