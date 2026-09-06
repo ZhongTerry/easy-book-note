@@ -417,6 +417,89 @@ class IsolatedDB:
             return {"status": "success", "message": f"Updated: {key}"}
         return {"status": "error", "message": "Update failed"}
 
+    def update_reading_progress(self, key, chapter_url, chapter_title='', chapter_index=0,
+                                expected_revision=None, force=False, username=None):
+        """Commit an intentional reader action without letting a stale page overwrite progress."""
+        u = username or get_current_user()
+        try:
+            candidate_index = int(chapter_index or 0)
+        except (TypeError, ValueError):
+            candidate_index = 0
+        try:
+            expected_revision = int(expected_revision)
+        except (TypeError, ValueError):
+            return {
+                "status": "error",
+                "message": "阅读页面已过期，请刷新后重试",
+                "code": "MISSING_REVISION",
+            }
+
+        try:
+            with get_db() as conn:
+                # Serialize the read/compare/write sequence across browser clients.
+                conn.execute('BEGIN IMMEDIATE')
+                row = conn.execute(
+                    'SELECT id, content FROM books_v2 WHERE username=? AND book_key=?',
+                    (u, key),
+                ).fetchone()
+                if not row:
+                    return {"status": "error", "message": "Book not found"}
+
+                content = json.loads(row['content'])
+                value = content.get('value')
+                if not isinstance(value, dict):
+                    value = {}
+                    content['value'] = value
+
+                stored_revision = int(value.get('last_read_revision') or 0)
+                if not force and expected_revision != stored_revision:
+                    return {
+                        "status": "success",
+                        "applied": False,
+                        "conflict": True,
+                        "message": "另一台设备已更新阅读进度",
+                        "progress": {
+                            "last_read_url": value.get('last_read_url', ''),
+                            "last_read_title": value.get('last_read_title', ''),
+                            "last_read_index": int(value.get('last_read_index') or 0),
+                            "last_read_revision": stored_revision,
+                        },
+                    }
+
+                value.update({
+                    'last_read_url': chapter_url,
+                    'last_read_title': chapter_title or '',
+                    'last_read_time': int(time.time()),
+                    'last_read_revision': int(value.get('last_read_revision') or 0) + 1,
+                })
+                value['last_read_index'] = candidate_index
+                meta = content.get('meta')
+                if not isinstance(meta, dict):
+                    meta = {}
+                    content['meta'] = meta
+                meta['chapter_id'] = candidate_index
+                meta['updated_at'] = int(time.time())
+
+                conn.execute(
+                    'UPDATE books_v2 SET content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                    (json.dumps(content, ensure_ascii=False), row['id']),
+                )
+                conn.commit()
+                return {
+                    "status": "success",
+                    "applied": True,
+                    "message": "阅读进度已同步",
+                    "progress": {
+                        "last_read_url": value.get('last_read_url', ''),
+                        "last_read_title": value.get('last_read_title', ''),
+                        "last_read_index": int(value.get('last_read_index') or 0),
+                        "last_read_revision": value['last_read_revision'],
+                    },
+                }
+        except Exception as e:
+            error("DB", f"Reading progress update failed: {type(e).__name__}")
+            return {"status": "error", "message": "Reading progress update failed"}
+
     def get_val(self, key, username=None):
         if key.endswith(':meta'):
             real_key = key.replace(':meta', '')

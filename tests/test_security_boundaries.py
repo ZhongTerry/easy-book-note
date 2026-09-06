@@ -171,6 +171,81 @@ class TestQuickSave(unittest.TestCase):
         insert.assert_called_once_with('new-book', 'https://example.test/toc')
 
 
+class TestReadingProgressVersioning(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, 'test.sqlite')
+        connection = sqlite3.connect(self.db_path)
+        try:
+            connection.execute('''CREATE TABLE books_v2 (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                book_key TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(username, book_key)
+            )''')
+            connection.execute(
+                'INSERT INTO books_v2 (id, username, book_key, content) VALUES (?, ?, ?, ?)',
+                ('book-id', 'alice', 'book', '{"key":"book","value":{"url":"https://example.test/toc"}}'),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        @contextlib.contextmanager
+        def temporary_db():
+            connection = sqlite3.connect(self.db_path)
+            connection.row_factory = sqlite3.Row
+            try:
+                yield connection
+            finally:
+                connection.close()
+
+        self.db_patcher = patch('managers.get_db', temporary_db)
+        self.db_patcher.start()
+        self.manager = object.__new__(managers.IsolatedDB)
+
+    def tearDown(self):
+        self.db_patcher.stop()
+        self.temp_dir.cleanup()
+
+    def test_stale_page_cannot_overwrite_newer_shared_progress(self):
+        newer = self.manager.update_reading_progress(
+            'book', 'https://example.test/chapter/50', '第50章', 50,
+            expected_revision=0, username='alice',
+        )
+        stale = self.manager.update_reading_progress(
+            'book', 'https://example.test/chapter/40', '第40章', 40,
+            expected_revision=0, username='alice',
+        )
+        stored = self.manager.get_full_data('book', username='alice')
+
+        self.assertTrue(newer['applied'])
+        self.assertFalse(stale['applied'])
+        self.assertTrue(stale['conflict'])
+        self.assertEqual(stale['progress']['last_read_index'], 50)
+        self.assertEqual(stored['last_read_url'], 'https://example.test/chapter/50')
+        self.assertEqual(stored['url'], 'https://example.test/toc')
+
+    def test_current_page_can_intentionally_rewind_progress(self):
+        newer = self.manager.update_reading_progress(
+            'book', 'https://example.test/chapter/50', '第50章', 50,
+            expected_revision=0, username='alice',
+        )
+        rewind = self.manager.update_reading_progress(
+            'book', 'https://example.test/chapter/40', '第40章', 40,
+            expected_revision=newer['progress']['last_read_revision'], username='alice',
+        )
+        stored = self.manager.get_full_data('book', username='alice')
+
+        self.assertTrue(rewind['applied'])
+        self.assertEqual(stored['last_read_url'], 'https://example.test/chapter/40')
+        self.assertEqual(stored['last_read_index'], 40)
+        self.assertEqual(stored['url'], 'https://example.test/toc')
+
+
 class TestForceRefreshBook(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -249,23 +324,23 @@ class TestForceRefreshBook(unittest.TestCase):
         self.assertEqual(payload['diagnostic']['code'], 'MISSING_URL')
         self.assertEqual(payload['diagnostic']['stage'], 'request')
 
-    @patch('routes.core_bp.managers.db.get_val', return_value=None)
-    @patch('routes.core_bp.managers.db.update')
+    @patch('routes.core_bp.managers.db.update_reading_progress')
     @patch('routes.core_bp.calculate_real_chapter_id', return_value=12)
-    def test_progress_sync_never_replaces_the_book_source(self, chapter_id, update_book, get_meta):
-        update_book.return_value = {'status': 'success'}
+    def test_progress_sync_requires_the_page_revision(self, chapter_id, update_progress):
+        update_progress.return_value = {'status': 'success', 'applied': True, 'progress': {}}
 
         response = self.client.post('/update', json={
             'key': 'book',
             'value': 'https://example.test/chapter/12',
             'title': '第12章',
+            'base_revision': 3,
         })
 
         self.assertEqual(response.status_code, 200)
-        first_update = update_book.call_args_list[0].args
-        self.assertEqual(first_update[0], 'book')
-        self.assertEqual(first_update[1]['last_read_url'], 'https://example.test/chapter/12')
-        self.assertNotIn('url', first_update[1])
+        update_progress.assert_called_once_with(
+            'book', 'https://example.test/chapter/12', '第12章', 12,
+            expected_revision=3, force=False,
+        )
 
     @patch('routes.core_bp.managers.booklist_manager.save')
     @patch('routes.core_bp.managers.db.save_raw_book', return_value=True)

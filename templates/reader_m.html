@@ -408,6 +408,7 @@
         <span>📢 远端进度：<span id="syncRemoteChapter">未知</span></span>
         <div>
             <a id="syncLink" href="#" class="sync-btn">跳转</a>
+            <button onclick="forceSyncProgress()" class="sync-btn" style="margin-left:6px;">以当前为准</button>
             <span onclick="closeSyncAlert()" style="margin-left:10px; font-size:20px;">×</span>
         </div>
     </div>
@@ -588,6 +589,7 @@
     const dbKey = "{{ db_key }}";
     let chapterTitle = {{ (article.title or "")|tojson }};
     let currentUrl = "{{ current_url }}"; // AJAX 翻页后需更新
+    let progressRevision = {{ progress_revision|default(0)|int }};
     let memoParagraphText = '';
     let memoSelectionText = '';
     let memoParagraphEl = null;
@@ -1093,13 +1095,14 @@
         return res.trim();
     }
 
-    function shouldSync(remoteUrl, remoteMeta) {
+    function shouldSync(remoteUrl, remoteRevision) {
         if (currentUrl.startsWith('epub:')) return false;
-        if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) return false;
-        if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
-            return remoteMeta.chapter_id > localChapterId;
+        const revision = Number(remoteRevision || 0);
+        if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) {
+            progressRevision = Math.max(progressRevision, revision);
+            return false;
         }
-        return true;
+        return revision > progressRevision;
     }
 
     async function checkRemoteAndInit() {
@@ -1111,10 +1114,8 @@
             });
             const d = await res.json();
             
-            if (d.status === 'success' && d.value && shouldSync(d.value, d.meta)) {
+            if (d.status === 'success' && d.value && shouldSync(d.value, d.revision)) {
                 showSyncAlert(d.value, d.meta);
-            } else {
-                autoSyncProgress();
             }
         } catch (e) {}
         setInterval(checkRemoteLoop, 5000);
@@ -1123,15 +1124,13 @@
     function checkRemoteLoop() {
         fetch('/api/get_value', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) })
         .then(r => r.json()).then(d => {
-            if (d.status === 'success' && d.value && shouldSync(d.value, d.meta)) {
+            if (d.status === 'success' && d.value && shouldSync(d.value, d.revision)) {
                 showSyncAlert(d.value, d.meta);
-            } else {
-                document.getElementById('syncAlert').classList.remove('active');
             }
         });
     }
 
-    function autoSyncProgress(forceManual=false) {
+    async function autoSyncProgress(force=false) {
         if(!dbKey) return;
         
         const currentTitle = document.getElementById('chapter-title')?.innerText || '';
@@ -1139,11 +1138,29 @@
         // [新增] 调试日志
         console.log(`[Sync] 保存进度: 书籍=${dbKey}, URL=${currentUrl}, 标题="${currentTitle}", 本地ID=${localChapterId}`);
         
-        fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
-        fetch('/update', { 
-            method: 'POST', headers: {'Content-Type': 'application/json'}, 
-            body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, manual: !!forceManual, resolve: !forceManual }) 
-        });
+        try {
+            const response = await fetch('/update', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, base_revision: progressRevision, force })
+            });
+            const result = await response.json();
+            if (result.status === 'success' && result.applied === false && result.progress?.last_read_url) {
+                showSyncAlert(result.progress.last_read_url, {
+                    chapter_id: result.progress.last_read_index,
+                });
+            } else if (result.status !== 'success') {
+                console.warn('[Sync] progress update rejected:', result.message);
+            } else {
+                progressRevision = Number(result.progress?.last_read_revision || progressRevision);
+                document.getElementById('syncAlert').classList.remove('active');
+                fetch('/api/last_read', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ key: dbKey }),
+                });
+            }
+        } catch (error) {
+            console.warn('[Sync] progress update failed:', error);
+        }
     }
 
     function showSyncAlert(targetUrl, remoteMeta) {
@@ -1160,7 +1177,6 @@
     }
     function closeSyncAlert() {
         document.getElementById('syncAlert').classList.remove('active');
-        autoSyncProgress(true);
     }
 
     // === 6. 功能模块 (目录、换源、TTS) ===
@@ -1196,7 +1212,7 @@
                     const isUrlMatch = normalizeUrl(c.url) === normCurrent;
                     const isCurrent = isIdMatch || isUrlMatch;
                     const activeClass = isCurrent ? 'active' : '';
-                    return `<div class="drawer-item ${activeClass}" data-chapter-id="${Number(c.id) || ''}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
+                    return `<div class="drawer-item ${activeClass}" data-chapter-id="${Number(c.id) || ''}" onclick="loadChapterMobile('/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}')">${c.title}</div>`;
                 }).join('');
                 filterMobileTOC(document.getElementById('mobileTocFilter')?.value || '');
                 
@@ -1255,7 +1271,7 @@
                             const isUrlMatch = normalizeUrl(c.url) === normCurrent;
                             const isCurrent = isIdMatch || isUrlMatch;
                             const activeClass = isCurrent ? 'active' : '';
-                            return `<div class="drawer-item ${activeClass}" data-chapter-id="${Number(c.id) || ''}" onclick="location.href='/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}'">${c.title}</div>`;
+                            return `<div class="drawer-item ${activeClass}" data-chapter-id="${Number(c.id) || ''}" onclick="loadChapterMobile('/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}')">${c.title}</div>`;
                         }).join('');
                         filterMobileTOC(document.getElementById('mobileTocFilter')?.value || '');
                         tocLoaded = true;
@@ -1353,6 +1369,7 @@
             showToast(error.message || '切换书源失败');
         }
     }
+    function forceSyncProgress() { autoSyncProgress(true); }
 
     // TTS
     let isSpeaking = false;

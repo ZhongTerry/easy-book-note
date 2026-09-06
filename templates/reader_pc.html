@@ -894,6 +894,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         <a id="syncLink" href="#" style="background:white; color:var(--accent); text-decoration:none; padding:4px 12px; border-radius:12px; cursor:pointer; margin-left:10px; font-weight:bold; font-size:13px;">
             跳转最新
         </a>
+        <button onclick="forceSyncProgress()" style="background:transparent; border:1px solid rgba(255,255,255,.78); color:white; padding:3px 10px; border-radius:12px; cursor:pointer; margin-left:8px; font-weight:bold; font-size:13px;">以当前为准</button>
         <button onclick="closeSyncAlert()" style="background:none; border:none; color:white; margin-left:10px; cursor:pointer; font-size:16px;">×</button>
     </div>
 
@@ -1216,6 +1217,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     let chapterTitle = {{ (article.title or "")|tojson }};
     // 从后端获取当前页面对应的 URL (通常是未编码或部分编码的)
     let currentUrl = "{{ current_url }}"; // 允许 AJAX 导航后更新当前章节 URL
+    let progressRevision = {{ progress_revision|default(0)|int }};
 
     let memoParagraphText = '';
     let memoSelectionText = '';
@@ -1747,39 +1749,15 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             if(!savedUrl) btn.innerText = "☁️ 加载";
         }
     }
-    // 判断是否应该同步
-    function shouldSync(remoteUrl, remoteMeta) {
+    // Chapter order is not a conflict signal: users may intentionally reread.
+    function shouldSync(remoteUrl, remoteRevision) {
         if (currentUrl.startsWith('epub:')) return false;
-        
-        console.log('[Sync Debug] 比对参数:', {
-            currentUrl,
-            remoteUrl,
-            remoteMeta,
-            localChapterId
-        });
-        
-        // 1. URL 相同，直接跳过
+        const revision = Number(remoteRevision || 0);
         if (normalizeUrl(currentUrl) === normalizeUrl(remoteUrl)) {
-            console.log('[Sync] URL相同，无需同步');
+            progressRevision = Math.max(progressRevision, revision);
             return false;
         }
-
-        // 2. [核心] ID 比对 (整数比大小)
-        // remoteMeta.chapter_id 是后端根据存入时的标题算出来的，绝对准确
-        // localChapterId 是后端渲染当前页时算出来的，绝对准确
-        if (remoteMeta && remoteMeta.chapter_id > 0 && localChapterId > 0) {
-            if (remoteMeta.chapter_id > localChapterId) {
-                console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) > 本地ID(${localChapterId}) -> 提示更新`);
-                return true;
-            }
-            // 远程 <= 本地，无需提示
-            console.log(`[Sync] 远程ID(${remoteMeta.chapter_id}) <= 本地ID(${localChapterId}) -> 无需同步`);
-            return false;
-        }
-
-        // 3. 兜底：如果没 ID，只能瞎猜 (URL 不同就提示)
-        console.log('[Sync] 缺少章节ID，使用URL比对（兜底）');
-        return true; 
+        return revision > progressRevision;
     }
     document.addEventListener('keydown', (e) => {
     // 1. M 键快速打开/关闭目录 (Menu)
@@ -1826,7 +1804,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         initCustomColors();
         initPreferences();
 
-        // 3. [核心] 启动同步检查 (先检查，无冲突再自动保存)
+        // 3. 只检查远端状态；刷新或后台恢复不自动写入进度。
         checkRemoteAndInit(); 
 
         // 4. 启动后台任务
@@ -1850,19 +1828,8 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             });
             const d = await res.json();
             
-            console.log('[Sync Debug] 获取远程进度:', d);  // 调试日志
-            
-            if (d.status === 'success' && d.value) {
-                // 传入 meta 数据进行智能对比
-                if (shouldSync(d.value, d.meta)) {
-                    console.log("[Sync] 发现更新的远程进度，暂停自动保存。");
-                    showSyncAlert(d.value, d.meta);
-                } else {
-                    // 远程没我新，或者一样 -> 开启自动保存 (覆盖远程)
-                    autoSyncProgress();
-                }
-            } else {
-                autoSyncProgress();
+            if (d.status === 'success' && d.value && shouldSync(d.value, d.revision)) {
+                showSyncAlert(d.value, d.meta);
             }
         } catch (e) { console.error(e); }
         
@@ -1876,11 +1843,8 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         .then(r => r.json()).then(d => {
             if (d.status === 'success' && d.value) {
                 // 轮询时也使用智能对比
-                if (shouldSync(d.value, d.meta)) {
+                if (shouldSync(d.value, d.revision)) {
                     showSyncAlert(d.value, d.meta);
-                } else {
-                    // 只要本地 >= 远程，就隐藏提示
-                    document.getElementById('syncAlert').classList.remove('active');
                 }
             }
         });
@@ -1903,12 +1867,10 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         }
     }
     function closeSyncAlert() {
-        document.getElementById('syncAlert').classList.remove('active')
-        autoSyncProgress(true);
+        document.getElementById('syncAlert').classList.remove('active');
     }
-    // 执行保存 (更新阅读进度)
-    // 执行保存
-    function autoSyncProgress(forceManual=false) {
+    // Called only after a deliberate navigation. A restored page never calls it.
+    async function autoSyncProgress(force=false) {
         if(!dbKey) return;
         
         // 获取当前标题 (用于后端计算真实ID)
@@ -1917,20 +1879,31 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         // [新增] 调试日志
         console.log(`[Sync] 保存进度: 书籍=${dbKey}, URL=${currentUrl}, 标题="${currentTitle}", 本地ID=${localChapterId}`);
 
-        fetch('/api/last_read', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey }) });
-        
-        fetch('/update', { 
-            method: 'POST', 
-            headers: {'Content-Type': 'application/json'}, 
-            body: JSON.stringify({ 
-                key: dbKey, 
-                value: currentUrl,
-                title: currentTitle, // <--- [新增] 必须带上标题！
-                manual: !!forceManual,
-                resolve: !forceManual
-            }) 
-        });
+        try {
+            const response = await fetch('/update', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey, value: currentUrl, title: currentTitle, base_revision: progressRevision, force })
+            });
+            const result = await response.json();
+            if (result.status === 'success' && result.applied === false && result.progress?.last_read_url) {
+                showSyncAlert(result.progress.last_read_url, {
+                    chapter_id: result.progress.last_read_index,
+                });
+            } else if (result.status !== 'success') {
+                console.warn('[Sync] progress update rejected:', result.message);
+            } else {
+                progressRevision = Number(result.progress?.last_read_revision || progressRevision);
+                document.getElementById('syncAlert').classList.remove('active');
+                fetch('/api/last_read', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ key: dbKey }),
+                });
+            }
+        } catch (error) {
+            console.warn('[Sync] progress update failed:', error);
+        }
     }
+    function forceSyncProgress() { autoSyncProgress(true); }
 
     // === UI 交互逻辑 ===
     function showModal(id) {
@@ -2090,6 +2063,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                                ${displayTitle}
                             </a>`;
                 }).join('');
+                bindTocNavigation(list);
 
                 filterPcTOC(document.getElementById('tocFilter')?.value || '');
 
@@ -2114,6 +2088,19 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         const normalized = String(query || '').trim().toLocaleLowerCase();
         document.querySelectorAll('#tocList .toc-item').forEach(item => {
             item.style.display = !normalized || item.textContent.toLocaleLowerCase().includes(normalized) ? '' : 'none';
+        });
+    }
+
+    function bindTocNavigation(list) {
+        list.querySelectorAll('.toc-item').forEach((item) => {
+            if (item.dataset.ajaxBound) return;
+            item.dataset.ajaxBound = 'true';
+            item.addEventListener('click', (event) => {
+                if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
+                event.preventDefault();
+                hideModal('tocOverlay');
+                loadChapter(item.href);
+            });
         });
     }
 

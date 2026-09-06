@@ -459,48 +459,13 @@ def read_mode():
             else:
                 warn("History", f"跳过目录页历史记录: {data.get('title')}")
 
-        # 阅读只能更新阅读状态；书籍主 URL 必须保留为目录/书源地址。
-        if k and page_type != 'toc':
-            read_title = data.get('title', '')
-            real_id = calculate_real_chapter_id(k, u, read_title)
-            if real_id > 0:
-                try:
-                    import json
-                    meta_key = f"{k}:meta"
-                    old_meta_str = managers.db.get_val(meta_key)
-                    meta = json.loads(old_meta_str) if old_meta_str else {}
-                    meta['chapter_id'] = real_id
-                    meta['updated_at'] = int(time.time())
-                    managers.db.update(meta_key, json.dumps(meta))
-                except Exception as e:
-                    error("Read Sync", f"Meta save error: {e}")
-            else:
-                info("Read Sync", f"未识别章节号，跳过更新: {k}")
-
         # 计算 ID
         current_chapter_id = -1
         if data.get('title'):
             current_chapter_id = parse_chapter_id(data['title'])
         
-        # [V2 增强] 自动保存阅读进度与序号到 SQLite
-        if k and current_chapter_id > 0:
-            # [核心修复] 实现进度锁定：仅在阅读到更后的章节时才更新主进度
-            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-            old_index = 0
-            if book_data and 'value' in book_data:
-                old_index = book_data['value'].get('last_read_index', 0)
-            
-            if current_chapter_id >= old_index:
-                # 更新书籍的主记录，方便后续排序和进度追踪
-                managers.db.update(k, {
-                    "last_read_index": current_chapter_id,
-                    "last_read_url": u,
-                    "last_read_title": data.get('title', ''),
-                    "last_read_time": int(time.time())
-                })
-                info("DB", f"已同步阅读进度: {k} -> 第 {current_chapter_id} 章")
-            else:
-                info("DB", f"跳过进度同步 (当前 {current_chapter_id} < 已读 {old_index}): {k}")
+        # Rendering a chapter must never write progress. A restored mobile page
+        # is only a view; explicit navigation is committed through /update.
 
         # [新增] AJAX 模式支持 (用于前端骨架屏无刷新加载)
         if request.args.get('mode') == 'ajax':
@@ -540,12 +505,19 @@ def read_mode():
                 marks = book_data['value'].get('marked_chapters', [])
                 is_marked = any(m.get('url') == u for m in marks)
 
+        progress_revision = 0
+        if k:
+            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
+            if book_data and isinstance(book_data.get('value'), dict):
+                progress_revision = int(book_data['value'].get('last_read_revision') or 0)
+
         context = {
             'article': data,
             'current_url': u,
             'db_key': k,
             'chapter_id': current_chapter_id,
-            'is_marked': is_marked
+            'is_marked': is_marked,
+            'progress_revision': progress_revision,
         }
 
         if is_mobile:
@@ -1041,40 +1013,21 @@ def update():
     key = request.json.get('key')
     value = request.json.get('value')
     title = request.json.get('title', '')
+    expected_revision = request.json.get('base_revision')
+    force = request.json.get('force') is True
     if not key or not isinstance(value, str) or not value:
         return jsonify({"status": "error", "message": "Missing reading progress"}), 400
 
-    # /update is a reader-progress endpoint. Never overwrite value.url here:
-    # it is the persistent book source / TOC address.
+    # Only an explicit reader action may call this endpoint. A version mismatch
+    # means another device moved the shared cursor after this page was opened.
     real_id = calculate_real_chapter_id(key, value, title)
-    progress = {
-        'last_read_url': value,
-        'last_read_title': title,
-        'last_read_time': int(time.time()),
-    }
-    if real_id > 0:
-        progress['last_read_index'] = real_id
-
-    res = managers.db.update(key, progress)
+    res = managers.db.update_reading_progress(
+        key, value, title, real_id, expected_revision=expected_revision, force=force,
+    )
     if res.get('status') != 'success':
-        return jsonify(res), 404
-
-    if real_id > 0:
-        try:
-            meta_key = f"{key}:meta"
-            old_meta_str = managers.db.get_val(meta_key)
-            meta = json.loads(old_meta_str) if old_meta_str else {}
-            meta['chapter_id'] = real_id
-            meta['updated_at'] = int(time.time())
-            managers.db.update(meta_key, json.dumps(meta))
-        except Exception as e:
-            error("Sync", f"Meta save error: {type(e).__name__}")
-
-    return jsonify({
-        "status": "success",
-        "message": "阅读进度已同步",
-        "chapter_id": real_id,
-    })
+        return jsonify(res), 400
+    res['chapter_id'] = real_id
+    return jsonify(res), (409 if res.get('conflict') else 200)
 
 @core_bp.route('/api/switch_source', methods=['POST'])
 @login_required
@@ -1290,7 +1243,8 @@ def get_val():
             "status": "success", 
             "value": v,
             "source_url": source_url,
-            "meta": meta # 这里面包含准确的 chapter_id
+            "meta": meta, # 这里面包含准确的 chapter_id
+            "revision": int(book.get('last_read_revision') or 0),
         })
         
     return jsonify({"status": "error"})
