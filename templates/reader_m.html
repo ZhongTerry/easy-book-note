@@ -530,9 +530,9 @@
 
         <!-- 进度条 -->
         <div class="progress-bar-wrap">
-            <span style="font-size:14px;" onclick="if('{{article.prev}}') location.href='/read?url={{article.prev}}&key={{db_key}}'">❮</span>
+            <span style="font-size:14px;" onclick="navigateMobileChapter({{ article.prev|default('')|tojson }})">❮</span>
             <input type="range" id="progressSlider" min="0" max="100" value="0" oninput="seekProgress(this.value)">
-            <span style="font-size:14px;" onclick="if('{{article.next}}') location.href='/read?url={{article.next}}&key={{db_key}}'">❯</span>
+            <span style="font-size:14px;" onclick="navigateMobileChapter({{ article.next|default('')|tojson }})">❯</span>
         </div>
 
         <!-- 功能按钮 -->
@@ -1140,10 +1140,10 @@
     }
 
     async function autoSyncProgress(force=false) {
-        if(!dbKey) return;
+        if(!dbKey) return true;
         if (!force && progressConflictPending) {
             showSyncAlert(progressRemoteUrl, { chapter_id: 0 });
-            return;
+            return false;
         }
         
         const currentTitle = document.getElementById('chapter-title')?.innerText || '';
@@ -1161,8 +1161,10 @@
                 showSyncAlert(result.progress.last_read_url, {
                     chapter_id: result.progress.last_read_index,
                 });
+                return false;
             } else if (result.status !== 'success') {
                 console.warn('[Sync] progress update rejected:', result.message);
+                return false;
             } else {
                 progressRevision = Number(result.progress?.last_read_revision || progressRevision);
                 progressRemoteUrl = result.progress?.last_read_url || currentUrl;
@@ -1173,9 +1175,11 @@
                     method: 'POST', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ key: dbKey }),
                 });
+                return true;
             }
         } catch (error) {
             console.warn('[Sync] progress update failed:', error);
+            return false;
         }
     }
 
@@ -1572,6 +1576,11 @@
         bindAjax(prevBtn);
     }
 
+    function navigateMobileChapter(chapterUrl) {
+        if (!chapterUrl) return;
+        loadChapterMobile(`/read?url=${encodeURIComponent(chapterUrl)}&key=${encodeURIComponent(dbKey)}`);
+    }
+
     let mobileChapterNavigationBusy = false;
     function setMobileChapterNavigationBusy(busy) {
         document.querySelectorAll('.page-nav-area a').forEach((link) => {
@@ -1719,9 +1728,12 @@
                     }, 500);
                  }
 
-                 // 统计与同步
+                 // A chapter navigation is explicit user intent. It may replace
+                 // another device's cursor; page restore and refresh never do.
                  reportWordCount();
-                 autoSyncProgress();
+                 if (!await autoSyncProgress(true)) {
+                     showToast('本章已打开，但阅读进度暂未同步');
+                 }
 
              } else {
                  location.href = url;

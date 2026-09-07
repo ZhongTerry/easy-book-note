@@ -1025,8 +1025,8 @@ def update():
     if not key or not isinstance(value, str) or not value:
         return jsonify({"status": "error", "message": "Missing reading progress"}), 400
 
-    # Only an explicit reader action may call this endpoint. A version mismatch
-    # means another device moved the shared cursor after this page was opened.
+    # Only an explicit reader action may call this endpoint. Explicit navigation
+    # intentionally wins; passive page loads never submit an update.
     real_id = calculate_real_chapter_id(key, value, title)
     res = managers.db.update_reading_progress(
         key, value, title, real_id, expected_revision=expected_revision,
