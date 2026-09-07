@@ -419,7 +419,7 @@ class IsolatedDB:
 
     def update_reading_progress(self, key, chapter_url, chapter_title='', chapter_index=0,
                                 expected_revision=None, expected_url='', force=False, username=None):
-        """Commit an intentional reader action; passive page loads never call it."""
+        """Commit an intentional reader action without letting a stale page overwrite progress."""
         u = username or get_current_user()
         try:
             candidate_index = int(chapter_index or 0)

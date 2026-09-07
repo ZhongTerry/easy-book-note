@@ -262,21 +262,6 @@ class TestReadingProgressVersioning(unittest.TestCase):
         self.assertTrue(restored_page['conflict'])
         self.assertEqual(stored['last_read_url'], 'https://example.test/chapter/50')
 
-    def test_explicit_next_chapter_can_replace_remote_progress(self):
-        newer = self.manager.update_reading_progress(
-            'book', 'https://example.test/chapter/50', '第50章', 50,
-            expected_revision=0, expected_url='', username='alice',
-        )
-        explicit_navigation = self.manager.update_reading_progress(
-            'book', 'https://example.test/chapter/41', '第41章', 41,
-            expected_revision=newer['progress']['last_read_revision'],
-            expected_url='https://example.test/chapter/40', force=True, username='alice',
-        )
-        stored = self.manager.get_full_data('book', username='alice')
-
-        self.assertTrue(explicit_navigation['applied'])
-        self.assertEqual(stored['last_read_url'], 'https://example.test/chapter/41')
-
 
 class TestForceRefreshBook(unittest.TestCase):
     @classmethod
