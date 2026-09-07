@@ -214,11 +214,11 @@ class TestReadingProgressVersioning(unittest.TestCase):
     def test_stale_page_cannot_overwrite_newer_shared_progress(self):
         newer = self.manager.update_reading_progress(
             'book', 'https://example.test/chapter/50', '第50章', 50,
-            expected_revision=0, expected_url='', username='alice',
+            expected_revision=0, username='alice',
         )
         stale = self.manager.update_reading_progress(
             'book', 'https://example.test/chapter/40', '第40章', 40,
-            expected_revision=0, expected_url='', username='alice',
+            expected_revision=0, username='alice',
         )
         stored = self.manager.get_full_data('book', username='alice')
 
@@ -232,12 +232,11 @@ class TestReadingProgressVersioning(unittest.TestCase):
     def test_current_page_can_intentionally_rewind_progress(self):
         newer = self.manager.update_reading_progress(
             'book', 'https://example.test/chapter/50', '第50章', 50,
-            expected_revision=0, expected_url='', username='alice',
+            expected_revision=0, username='alice',
         )
         rewind = self.manager.update_reading_progress(
             'book', 'https://example.test/chapter/40', '第40章', 40,
-            expected_revision=newer['progress']['last_read_revision'],
-            expected_url='https://example.test/chapter/50', username='alice',
+            expected_revision=newer['progress']['last_read_revision'], username='alice',
         )
         stored = self.manager.get_full_data('book', username='alice')
 
@@ -245,22 +244,6 @@ class TestReadingProgressVersioning(unittest.TestCase):
         self.assertEqual(stored['last_read_url'], 'https://example.test/chapter/40')
         self.assertEqual(stored['last_read_index'], 40)
         self.assertEqual(stored['url'], 'https://example.test/toc')
-
-    def test_refreshed_stale_page_is_rejected_even_with_current_revision(self):
-        newer = self.manager.update_reading_progress(
-            'book', 'https://example.test/chapter/50', '第50章', 50,
-            expected_revision=0, expected_url='', username='alice',
-        )
-        restored_page = self.manager.update_reading_progress(
-            'book', 'https://example.test/chapter/41', '第41章', 41,
-            expected_revision=newer['progress']['last_read_revision'],
-            expected_url='https://example.test/chapter/40', username='alice',
-        )
-        stored = self.manager.get_full_data('book', username='alice')
-
-        self.assertFalse(restored_page['applied'])
-        self.assertTrue(restored_page['conflict'])
-        self.assertEqual(stored['last_read_url'], 'https://example.test/chapter/50')
 
 
 class TestForceRefreshBook(unittest.TestCase):
@@ -351,13 +334,12 @@ class TestForceRefreshBook(unittest.TestCase):
             'value': 'https://example.test/chapter/12',
             'title': '第12章',
             'base_revision': 3,
-            'base_url': 'https://example.test/chapter/11',
         })
 
         self.assertEqual(response.status_code, 200)
         update_progress.assert_called_once_with(
             'book', 'https://example.test/chapter/12', '第12章', 12,
-            expected_revision=3, expected_url='https://example.test/chapter/11', force=False,
+            expected_revision=3, force=False,
         )
 
     @patch('routes.core_bp.managers.booklist_manager.save')

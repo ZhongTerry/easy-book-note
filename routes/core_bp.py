@@ -506,12 +506,10 @@ def read_mode():
                 is_marked = any(m.get('url') == u for m in marks)
 
         progress_revision = 0
-        progress_remote_url = ''
         if k:
             book_data = managers.db.get_raw_book(managers.get_current_user(), k)
             if book_data and isinstance(book_data.get('value'), dict):
                 progress_revision = int(book_data['value'].get('last_read_revision') or 0)
-                progress_remote_url = book_data['value'].get('last_read_url') or ''
 
         context = {
             'article': data,
@@ -520,10 +518,6 @@ def read_mode():
             'chapter_id': current_chapter_id,
             'is_marked': is_marked,
             'progress_revision': progress_revision,
-            # The reader uses this separately from the revision. If a restored
-            # page displays another chapter, it remains read-only until the user
-            # explicitly chooses to replace the shared cursor.
-            'progress_remote_url': progress_remote_url,
         }
 
         if is_mobile:
@@ -1020,7 +1014,6 @@ def update():
     value = request.json.get('value')
     title = request.json.get('title', '')
     expected_revision = request.json.get('base_revision')
-    expected_url = request.json.get('base_url', '')
     force = request.json.get('force') is True
     if not key or not isinstance(value, str) or not value:
         return jsonify({"status": "error", "message": "Missing reading progress"}), 400
@@ -1029,8 +1022,7 @@ def update():
     # means another device moved the shared cursor after this page was opened.
     real_id = calculate_real_chapter_id(key, value, title)
     res = managers.db.update_reading_progress(
-        key, value, title, real_id, expected_revision=expected_revision,
-        expected_url=expected_url, force=force,
+        key, value, title, real_id, expected_revision=expected_revision, force=force,
     )
     if res.get('status') != 'success':
         return jsonify(res), 400
