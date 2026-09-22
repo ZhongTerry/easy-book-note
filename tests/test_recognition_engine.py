@@ -227,6 +227,22 @@ class TestRecognitionNormalization(unittest.TestCase):
         self.assertIsNone(find_chapter_match(chapters, 2, '完全不同的章节'))
         self.assertIsNone(find_chapter_match(chapters, 9, '无关内容'))
 
+    def test_catalog_verification_requires_identity_and_enough_chapters(self):
+        from spider_core import SearchHelper
+
+        self.assertTrue(SearchHelper._catalog_is_reliable({
+            'title': '凡人修仙传 - 忘语',
+            'chapters': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }, '凡人修仙传'))
+        self.assertFalse(SearchHelper._catalog_is_reliable({
+            'title': '凡人修仙传 - 忘语',
+            'chapters': [{'id': 1}, {'id': 2}],
+        }, '凡人修仙传'))
+        self.assertFalse(SearchHelper._catalog_is_reliable({
+            'title': '无关作品',
+            'chapters': [{'id': 1}, {'id': 2}, {'id': 3}],
+        }, '凡人修仙传'))
+
 
 class TestCrawlerRecognitionIntegration(unittest.TestCase):
     def _crawler_with_fixture(self, fixture_name):

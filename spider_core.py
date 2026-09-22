@@ -18,8 +18,9 @@ from ebooklib import epub
 from werkzeug.utils import secure_filename
 from recognition import PageType, RecognitionEngine, SourceHealthTracker, find_chapter_match, get_payload_issue
 from recognition.chapter_numbers import parse_chapter_number
+from services.searxng_search import SearxngNovelSearch
 # [确保这里有 CACHE_DIR]
-from shared import BASE_DIR, LIB_DIR, CACHE_DIR, debug, info, warn, error
+from shared import BASE_DIR, LIB_DIR, CACHE_DIR, debug, info, warn, error, is_safe_url
 from curl_cffi import requests as cffi_requests, CurlHttpVersion
 
 # Bump this whenever a worker result depends on a changed recognition contract.
@@ -273,123 +274,86 @@ def debug_log(message):
         f.write(f"[{timestamp}] {message}\n")
 class SearchHelper:
     def __init__(self):
-        # [Owllook 配置] 模拟 Chrome 指纹，这是过盾的关键
-        self.impersonate = "chrome110" 
-        self.timeout = 10
-        
-        # [Owllook 移植] 域名黑名单 (Black Domain)
-        # 来源: owllook/config/config.py
-        self.black_domains = {
-            'baidu.com', 'tieba.baidu.com', 'zhidao.baidu.com', 'wenku.baidu.com',
-            # 'so.com', 'baike.so.com', 'wenda.so.com',
-            'zhihu.com', 'douban.com', '163.com', 'qq.com', 'sina.com.cn',
-            'amazon.cn', 'dangdang.com', 'jd.com', 'tmall.com', 'taobao.com',
-            # 'qidian.com', 'zongheng.com', '17k.com', 'faloo.com', 'jjwxc.net',
-            'facebook.com', 'twitter.com', 'youtube.com', 'bilibili.com'
-        }
-        self.plugins = []
-        self._load_search_plugins()
-        self.sites = [
-            {
-                "name": "笔趣阁.cc", 
-                "url": "https://www.biquge.cc", 
-                "search": "/search.php", 
-                "param": "q", 
-                "encoding": "gbk" # GBK编码站点
-            },
-            {
-                "name": "笔趣卡", 
-                "url": "https://www.bqgka.com", 
-                "search": "/search.php", 
-                "param": "q", 
-                "encoding": "utf-8"
-            },
-            {
-                "name": "52小说", 
-                "url": "https://www.52bqg.cc", 
-                "search": "/modules/article/search.php", 
-                "param": "searchkey", 
-                "encoding": "gbk"
-            },
-            {
-                "name": "新笔趣阁", 
-                "url": "https://www.xbiquge.so", 
-                "search": "/search.php", 
-                "param": "keyword", 
-                "encoding": "utf-8"
-            },
-            {
-                "name": "23小说", 
-                "url": "https://www.23us.so", 
-                "search": "/files/article/search.html", 
-                "param": "searchkey", 
-                "encoding": "gbk"
-            }
-        ]
+        # Search traffic is intentionally centralized in the configured SearXNG
+        # instance. Legacy direct-source/search-engine code remains below only
+        # as dormant migration history and is no longer initialized or called.
+        self.searxng = SearxngNovelSearch()
 
     @lru_cache(maxsize=100)
     def search_bing_cached(self, keyword):
-        """[新增] 带缓存的搜索入口 (兼容旧接口并提高性能)"""
-        # print(f"[Search Cache] Miss, fetching: {keyword}")
-        return self.search_bing(keyword)
+        """Compatibility entry point backed by the SearXNG TTL cache."""
+        return self.searxng.search(keyword, verifier=self._verify_candidate)
 
     def search_concurrent(self, keyword, callback=None):
-        """[异步版] 并发搜索"""
-        info("Spider", f"\n[Search] 🚀 启动全网并发聚合搜索 (Async): {keyword}")
+        """Search exclusively through SearXNG while preserving task callbacks."""
+        return self.searxng.search(keyword, callback, verifier=self._verify_candidate)
 
-        # 定义搜索源 (函数, 名称, 权重)
-        search_sources = [
-            (self._do_direct_source_search, "直连源", 0),
-            (self._do_so_search, "360搜索", 1),
-            # (self._do_bing_search, "Bing国际", 2)
-        ]
+    def _verify_candidate(self, candidate):
+        """Classify a search result without persisting it into the user's shelf."""
+        url = candidate.get('url', '')
+        requested_title = candidate.get('_search_keyword', '')
+        if not is_safe_url(url):
+            return {'status': 'unsafe', 'status_detail': '链接未通过安全校验'}
 
-        all_results = []
-        seen_urls = set()
-        completed_count = 0
-        total_sources = len(search_sources)
-
-        if callback: callback(0, f"正在初始化 {total_sources} 个搜索引擎...")
-
-        with ThreadPoolExecutor(max_workers=total_sources) as exe:
-            future_to_source = {
-                exe.submit(func, keyword): (name, weight)
-                for func, name, weight in search_sources
+        # Most SearXNG novel queries yield catalog pages. Keep this fast path
+        # bounded before using the more expensive full-page reader pipeline.
+        toc = crawler_instance.get_toc(url, fast_mode=True)
+        if toc and toc.get('chapters'):
+            if not self._catalog_is_reliable(toc, requested_title):
+                return {
+                    'status': 'unavailable',
+                    'status_detail': '目录章节不足或无法确认属于目标书籍',
+                }
+            return {
+                'status': 'ready_catalog',
+                'status_detail': f"已识别目录，{len(toc['chapters'])} 章",
+                'content_type': 'catalog',
             }
 
-            for future in as_completed(future_to_source):
-                name, weight = future_to_source[future]
-                new_items = []
-                try:
-                    if callback: callback(None, f"正在搜索 {name}...")
-                    results = future.result()
+        payload = crawler_instance.run(url)
+        issue = get_payload_issue(payload)
+        if issue:
+            status = 'blocked' if issue['code'] == 'SOURCE_CHALLENGE' else 'unavailable'
+            return {'status': status, 'status_detail': issue['message']}
+        page_type = (payload or {}).get('page_type', '')
+        if page_type == PageType.TOC.value:
+            chapters = (payload or {}).get('chapters') or []
+            if not self._catalog_is_reliable(payload, requested_title):
+                return {
+                    'status': 'unavailable',
+                    'status_detail': '目录章节不足或无法确认属于目标书籍',
+                }
+            return {
+                'status': 'ready_catalog',
+                'status_detail': f'已识别目录，{len(chapters)} 章',
+                'content_type': 'catalog',
+            }
+        if page_type == PageType.CHAPTER.value:
+            return {
+                'status': 'ready_chapter',
+                'status_detail': '已识别可阅读正文',
+                'content_type': 'chapter',
+            }
+        return {'status': 'unavailable', 'status_detail': '未识别到可靠目录或正文'}
 
-                    if results:
-                        for item in results:
-                            clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
-                            if clean_url not in seen_urls:
-                                seen_urls.add(clean_url)
-                                item['_weight'] = weight
-                                new_items.append(item)
-                                all_results.append(item)
+    @staticmethod
+    def _catalog_is_reliable(toc, requested_title):
+        """Require enough chapters and matching page metadata, not merely links."""
+        if len(toc.get('chapters') or []) < 3:
+            return False
 
-                    msg = f"{name} 完成，找到 {len(results) if results else 0} 条"
-                except Exception as e:
-                    info("Search Error", f"{name}: {e}")
-                    msg = f"{name} 搜索失败"
+        def compact(value):
+            return re.sub(r'[^\u4e00-\u9fffA-Za-z0-9]', '', str(value or '')).lower()
 
-                completed_count += 1
-                progress = int((completed_count / total_sources) * 90)
-
-                if callback:
-                    callback(progress, msg, new_items if new_items else None)
-
-        if callback: callback(95, "正在聚合排序...")
-
-        all_results.sort(key=lambda x: (x.get('_weight', 99), -len(x.get('description', ''))))
-
-        if callback: callback(100, f"聚合完成，共 {len(all_results)} 条结果")
-        return all_results
+        requested = compact(requested_title)
+        # A two-character search is too ambiguous to validate a catalog safely.
+        if len(requested) < 3:
+            return False
+        metadata = ' '.join(str(toc.get(key) or '') for key in (
+            'title', 'book_name', 'name', 'desc', 'description',
+        ))
+        observed = compact(metadata)
+        return requested in observed or (len(observed) >= 4 and observed in requested)
 
     def _search_single_site(self, site, keyword):
         """搜索单个站点"""
@@ -878,71 +842,8 @@ class SearchHelper:
 
     # === [核心升级] 全网并发聚合搜索 (Aggregated Search) ===
     def search_bing(self, keyword):
-        info("Spider", f"\n[Search] 🚀 启动全网并发聚合搜索: {keyword}")
-        start_time = time.time()
-        
-        # 1. 定义参赛选手
-        # _do_direct_source_search 会自动加载 search_plugins 里的所有插件
-        # 包括我们刚写的 fanqie_local_source 和之前的 sxg_source
-        search_funcs = [
-            self._do_direct_source_search, # 插件大军 (番茄、书香阁等)
-            self._do_so_search,            # 360 (主力)
-            # self._do_bing_search        # Bing CN (辅助)
-        ]
-
-        all_results = []
-        seen_urls = set()  # URL 去重
-        # with open('debug.json', 'w', encoding='utf-8') as f:
-                # f.write(str(search_funcs))
-        # 2. 并发执行
-        # for func in search_funcs:
-        #     try:
-        #         results = func(keyword)  # 直接调用函数
-        #         if results:
-        #             for item in results:
-        #                 # 简单去重
-        #                 clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
-        #                 if clean_url not in seen_urls:
-        #                     seen_urls.add(clean_url)
-        #                     all_results.append(item)
-        #     except Exception: 
-        #         pass  # 忽略单个函数的异常
-        with ThreadPoolExecutor(max_workers=len(search_funcs)) as exe:
-            future_to_name = {
-                exe.submit(func, keyword): func.__name__ 
-                for func in search_funcs
-            }
-            
-            for future in as_completed(future_to_name):
-                try:
-                    results = future.result()
-                    if results:
-                        for item in results:
-                            # 简单去重
-                            clean_url = item['url'].replace('https://', '').replace('http://', '').rstrip('/')
-                            if clean_url not in seen_urls:
-                                seen_urls.add(clean_url)
-                                all_results.append(item)
-                except Exception: pass
-
-        # === 3. [关键修改] 结果优先级排序 ===
-        # 优先级规则: 
-        # 1. 番茄 (Fanqie) -> 最顶层
-        # 2. 书香阁 (书香阁/sxg) -> 第二层
-        # 3. 其他 -> 后面
-        def get_priority(item):
-            src = item.get('source', '')
-            if '番茄' in src or 'Fanqie' in src:
-                return 0  # 优先级最高
-            if '书香阁' in src:
-                return 1  # 优先级次之
-            return 2      # 其他
-
-        # 执行排序
-        all_results.sort(key=get_priority)
-
-        info("Spider", f"[Search] 聚合完成，耗时 {time.time() - start_time:.2f}s，共 {len(all_results)} 条结果")
-        return all_results
+        """Compatibility entry point for source switching and legacy callers."""
+        return self.searxng.search(keyword, verifier=self._verify_candidate)
 
 
 class SearchHelperOld:
@@ -1753,8 +1654,11 @@ class NovelCrawler:
             from adapters.fanqie_adapter import FanqieLocalAdapter
             from spider_core import searcher
 
-            results = searcher._do_direct_source_search(book_name) or []
-            fanqie_candidates = [r for r in results if '番茄' in (r.get('source') or '')]
+            results = searcher.search_bing_cached(book_name) or []
+            fanqie_candidates = [
+                result for result in results
+                if 'fanqienovel.com' in (result.get('url') or '').lower()
+            ]
             best = self._pick_best_match(fanqie_candidates, book_name)
             if not best:
                 return None

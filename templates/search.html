@@ -191,6 +191,10 @@
         .tag-bing { background: #fef3c7; color: #92400e; }
         .tag-360 { background: #d1fae5; color: #065f46; }
         .tag-direct { background: #e0e7ff; color: #4338ca; }
+        .tag-searx { background: #e5eefb; color: #24558f; }
+        .status-ready { background: #dcf3e6; color: #1e6b45; }
+        .status-unverified { background: #edf1f3; color: #596a74; }
+        .status-blocked, .status-unavailable, .status-unsafe { background: #f8e7e7; color: #9b3b3b; }
         
         .res-url {
             font-family: monospace;
@@ -327,7 +331,7 @@
         .res-author { color:var(--search-muted); font-weight:400; }
         .res-meta { gap:8px; color:var(--search-muted); }
         .source-tag { padding:3px 7px; border-radius:4px; }
-        .tag-baidu { background:#e7f0f8; color:#2e5877; }.tag-bing { background:#f4eee1; color:#765a22; }.tag-360 { background:#e4f2ef; color:#17645c; }.tag-direct { background:#e9edef; color:#405762; }
+        .tag-baidu { background:#e7f0f8; color:#2e5877; }.tag-bing { background:#f4eee1; color:#765a22; }.tag-360 { background:#e4f2ef; color:#17645c; }.tag-direct { background:#e9edef; color:#405762; }.tag-searx { background:#e5eefb; color:#24558f; }.status-ready { background:#dcf3e6; color:#1e6b45; }.status-unverified { background:#edf1f3; color:#596a74; }.status-blocked, .status-unavailable, .status-unsafe { background:#f8e7e7; color:#9b3b3b; }
         .res-url { max-width:min(380px,45vw); color:var(--search-muted); font-family:inherit; text-decoration:none; }
         .res-url:hover { color:var(--search-accent); }
         .res-action { display:inline-flex; align-items:center; justify-content:center; min-width:70px; height:34px; margin-left:auto; padding:0 12px; border:1px solid var(--search-border); border-radius:5px; color:var(--search-accent); font-size:13px; }
@@ -384,7 +388,7 @@
                 <label for="showUrl">显示源链接</label>
             </div>
             <div class="feature-item">
-                <span style="color: #4b5563;">搜索源数量: <strong id="sourceCount">3</strong></span>
+                <span style="color: #4b5563;">搜索服务: <strong id="sourceCount">SearXNG</strong></span>
             </div>
         </div>
         
@@ -560,7 +564,8 @@
             
             container.innerHTML = results.map(item => {
                 let tagClass = 'tag-360';
-                if (item.source.includes('Baidu')) tagClass = 'tag-baidu';
+                if (item.source.includes('SearXNG')) tagClass = 'tag-searx';
+                else if (item.source.includes('Baidu')) tagClass = 'tag-baidu';
                 else if (item.source.includes('Bing')) tagClass = 'tag-bing';
                 else if (item.source.includes('书香') || item.source.includes('笔趣') || item.source.includes('Direct')) tagClass = 'tag-direct';
                 
@@ -596,6 +601,17 @@
                     line2 += `<span class="res-url" onclick="event.stopPropagation(); window.open('${jsSafeUrl}', '_blank');" title="点击在新标签页打开">${safeUrl}</span>`;
                 }
                 line2 += `<span class="source-tag ${tagClass}">${safeSource}</span>`;
+                if (Number.isFinite(Number(item.match_score))) {
+                    line2 += `<span>匹配 ${Math.round(Number(item.match_score))}%</span>`;
+                }
+                const statusLabels = {
+                    ready_catalog: '目录可读', ready_chapter: '正文可读',
+                    blocked: '访问受限', unavailable: '暂不可读',
+                    unsafe: '链接受限', unverified: '尚未验证'
+                };
+                const status = item.status || 'unverified';
+                const statusClass = status.startsWith('ready_') ? 'status-ready' : `status-${status}`;
+                line2 += `<span class="source-tag ${statusClass}" title="${escapeHtml(item.status_detail || '')}">${statusLabels[status] || '暂不可读'}</span>`;
                 line2 += `<span class="res-action" onclick="selectResult('${jsSafeKey}', '${jsSafeUrl}', '${jsSafeTitle}')">阅读 →</span>`;
                 line2 += `</div>`;
                 
@@ -624,29 +640,31 @@
         
         // 选择结果 - 直接保存并打开（依赖自动判断toc/content逻辑）
         async function selectResult(key, url, title) {
-            PureUI.loading.show('💾 保存中...');
+            const autoSave = document.getElementById('autoSave').checked;
+            PureUI.loading.show(autoSave ? '💾 保存中...' : '📖 正在打开...');
             
             try {
-                // 1. 保存到书架
-                await fetch(`${API_URL}/insert`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ key: key, value: url, manual: true })
-                });
+                if (autoSave) {
+                    const saveRes = await fetch(`${API_URL}/insert`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ key: key, value: url, manual: true })
+                    });
+                    if (!saveRes.ok) throw new Error('保存失败');
+                    PureUI.toast('✅ 已保存到书架');
+                }
                 
-                PureUI.toast('✅ 已保存到书架');
-                
-                // 2. 直接跳转到阅读页面（让后端自动判断是toc还是content）
                 setTimeout(() => {
-                    window.location.href = `/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`;
+                    window.location.href = autoSave
+                        ? `/read?url=${encodeURIComponent(url)}&key=${encodeURIComponent(key)}`
+                        : `/read?url=${encodeURIComponent(url)}`;
                 }, 300);
                 
             } catch(e) {
-                console.error('获取目录失败:', e);
-                // 失败则直接跳转原URL
+                console.error('保存搜索结果失败:', e);
                 PureUI.loading.hide();
                 if (autoSave) {
-                    PureUI.toast('已保存，正在跳转...', 'info');
+                    PureUI.toast('保存失败，已直接打开', 'info');
                 }
                 setTimeout(() => {
                     if (autoSave) {

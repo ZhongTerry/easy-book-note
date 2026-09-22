@@ -89,6 +89,16 @@ DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
 REQUEST_TIMEOUT = 10  # HTTP 请求超时(秒)
 
 # ==========================================
+# SearXNG 搜书配置
+# ==========================================
+# 搜书统一经由 SearXNG，不再由应用直接请求各搜索引擎或小说站。
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://100.71.136.3:8888").rstrip('/')
+SEARXNG_TIMEOUT = float(os.environ.get("SEARXNG_TIMEOUT", "8"))
+SEARXNG_CACHE_TTL = int(os.environ.get("SEARXNG_CACHE_TTL", "600"))
+SEARXNG_VERIFY_LIMIT = int(os.environ.get("SEARXNG_VERIFY_LIMIT", "4"))
+SEARXNG_VERIFY_WORKERS = int(os.environ.get("SEARXNG_VERIFY_WORKERS", "2"))
+
+# ==========================================
 # 权限配置
 # ==========================================
 ROLE_GUEST = "guest"
