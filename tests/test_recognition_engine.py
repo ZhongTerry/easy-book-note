@@ -45,6 +45,23 @@ class TestRecognitionFixtures(unittest.TestCase):
         self.assertEqual(result.chapters[0]['title'], expected['first_chapter'])
         self.assertGreaterEqual(result.confidence, 0.65)
 
+    def test_paginated_toc_preserves_next_page_url(self):
+        result = self.engine.analyze_html(
+            '''<html><head><title>测试书目录</title></head><body>
+            <div class="dir">
+              <a href="/book/1.html">第一章 起点</a>
+              <a href="/book/2.html">第二章 夜航</a>
+              <a href="/book/3.html">第三章 分段标题（8 / 8）</a>
+              <a href="/book/4.html">第四章 终章</a>
+            </div>
+            <div class="pages"><a href="p-2.html#dir">下一页</a></div>
+            </body></html>''',
+            'https://novel.example/book/#dir',
+        )
+
+        self.assertEqual(result.page_type, PageType.TOC)
+        self.assertEqual(result.next_page_url, 'https://novel.example/book/p-2.html#dir')
+
     def test_volume_headings_are_attached_to_chapters(self):
         result = self.analyze('toc_volumes')
 
@@ -298,6 +315,35 @@ class TestCrawlerRecognitionIntegration(unittest.TestCase):
 
         self.assertEqual([chapter['id'] for chapter in result['chapters']], [1, 2, 3, 4])
         self.assertEqual(result['chapters'][-1]['url'], 'https://novel.example/book/4.html')
+
+    def test_large_toc_follows_next_page_without_treating_numeric_select_as_url(self):
+        from spider_core import NovelCrawler
+
+        first = '''<html><head><title>测试书目录</title></head><body>
+          <div class="dir">
+            <a href="1.html">第一章 起点</a><a href="2.html">第二章 夜航</a>
+            <a href="3.html">第三章 回声</a><a href="4.html">第四章 雨停</a>
+          </div>
+          <select><option value="index-1" selected>第1页</option><option value="2">第2页</option></select>
+          <a href="p-2.html#dir">下一页</a>
+        </body></html>'''
+        second = '''<html><head><title>测试书目录</title></head><body><div class="dir">
+          <a href="5.html">第五章 终章</a><a href="6.html">第六章 尾声</a>
+          <a href="7.html">第七章 后记</a>
+        </div></body></html>'''
+        crawler = NovelCrawler()
+        fetched_urls = []
+
+        def fetch(url):
+            fetched_urls.append(url)
+            return second if url.endswith('p-2.html#dir') else first
+
+        crawler._fetch_page_smart = fetch
+        result = crawler._general_toc_logic('https://novel.example/book/#dir')
+
+        self.assertEqual([chapter['id'] for chapter in result['chapters']], list(range(1, 8)))
+        self.assertIn('https://novel.example/book/p-2.html#dir', fetched_urls)
+        self.assertNotIn('https://novel.example/book/2', fetched_urls)
 
     def test_standardization_sorts_only_within_each_numbered_volume(self):
         from spider_core import NovelCrawler

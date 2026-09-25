@@ -1,15 +1,10 @@
 import logging
 import sys
-import os
-from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
-# 获取应用根目录 (假设 utils 文件夹在根目录下)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOG_FILE = os.path.join(BASE_DIR, "debug.txt")
+from config import DEFAULT_LOG_LEVEL, LOG_BACKUP_COUNT, LOG_FILE, LOG_MAX_BYTES
 
-# 从环境变量或配置文件读取日志级别，默认为 INFO
-# 可选值: DEBUG, INFO, WARNING, ERROR, CRITICAL
-DEFAULT_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# Set LOG_LEVEL=INFO or DEBUG temporarily when a detailed trace is needed.
 
 # 创建一个自定义的日志记录器
 class NoteDBLogger:
@@ -28,14 +23,30 @@ class NoteDBLogger:
             
             # 终端输出: 只显示级别和消息
             console_formatter = logging.Formatter('[%(levelname)s] %(message)s')
+            # Windows terminals may still use GBK; escape unsupported characters
+            # instead of producing a logging traceback for an otherwise valid log.
+            try:
+                sys.stdout.reconfigure(errors='backslashreplace')
+            except (AttributeError, OSError):
+                pass
             console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(level)
             console_handler.setFormatter(console_formatter)
             self.logger.addHandler(console_handler)
 
-            # 文件输出: 显示完整时间戳和模块
-            file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+            # Keep persistent diagnostics bounded even when a source is noisy.
+            file_handler = RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=max(1, LOG_MAX_BYTES),
+                backupCount=max(0, LOG_BACKUP_COUNT),
+                encoding='utf-8',
+            )
+            file_handler.setLevel(level)
             file_handler.setFormatter(full_formatter)
             self.logger.addHandler(file_handler)
+
+            # Do not forward records to Flask/root handlers a second time.
+            self.logger.propagate = False
 
     def _format_msg(self, module, msg):
         return f"[{module}] {msg}"

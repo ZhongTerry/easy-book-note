@@ -116,4 +116,8 @@ DEFAULT_CALLBACK = 'https://book.ztrztr.top/callback'
 # 日志配置
 # ==========================================
 LOG_FILE = os.path.join(BASE_DIR, "debug.txt")
-DEFAULT_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+# Normal operation keeps only actionable records. Set LOG_LEVEL=INFO or DEBUG
+# temporarily when diagnosing a crawler or source issue.
+DEFAULT_LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARNING").upper()
+LOG_MAX_BYTES = int(os.environ.get("LOG_MAX_BYTES", str(1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.environ.get("LOG_BACKUP_COUNT", "3"))

@@ -266,12 +266,7 @@ from curl_cffi import requests as cffi_requests
 from pypinyin import lazy_pinyin, Style
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import datetime
 
-def debug_log(message):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open('debug.txt', 'a', encoding='utf-8') as f:
-        f.write(f"[{timestamp}] {message}\n")
 class SearchHelper:
     def __init__(self):
         # Search traffic is intentionally centralized in the configured SearXNG
@@ -801,7 +796,7 @@ class SearchHelper:
                             if 'suggested_key' not in item:
                                 item['suggested_key'] = self.get_pinyin_key(keyword)
                         all_results.extend(res)
-                        debug_log(f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
+                        debug("Spider", f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
                         info("Spider", f"  -> {plugin.source_name} 贡献了 {len(res)} 条结果")
                 except Exception as e:
                     info("Spider", f"  -> {plugin.source_name} 运行时异常: {e}")
@@ -2416,8 +2411,11 @@ class NovelCrawler:
                 page_urls.append(recognized.next_page_url)
             for select in soup.find_all('select'):
                 for option in select.find_all('option'):
-                    value = option.get('value')
-                    if value:
+                    value = (option.get('value') or '').strip()
+                    # A numeric option commonly relies on site-specific
+                    # JavaScript (for example value="2" -> p-2.html). It is
+                    # not a URL and resolving it creates a false 404 request.
+                    if value and not value.isdigit():
                         page_url = urljoin(current_url, value)
                         if page_url.rstrip('/') != current_url.rstrip('/'):
                             page_urls.append(page_url)

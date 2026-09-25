@@ -77,6 +77,9 @@ class RecognitionEngine:
                 confidence=min(0.99, 0.45 + toc_score / 2),
                 title=title,
                 chapters=chapters,
+                # Catalog pages can be paginated too. Preserve the discovered
+                # next page so the crawler can continue collecting chapters.
+                next_page_url=next_page_url,
                 evidence=evidence,
             )
         if content:
@@ -396,7 +399,10 @@ class RecognitionEngine:
         """Recognize chapter continuations without treating arbitrary next links as pages."""
         if not _PAGINATION_LABEL.search(label):
             return False
-        if re.search(r'(?:下一?页|下页|next\s*page|page\s*next|继续阅读|\d+\s*/\s*\d+)', label, re.I):
+        # A bare "1 / 2" is also common in chapter titles on a catalog page.
+        # Treat it as pagination only after the URL shape confirms that it is a
+        # continuation of the current chapter (the check below).
+        if re.search(r'(?:下一?页|下页|next\s*page|page\s*next|继续阅读)', label, re.I):
             return True
 
         current = urlsplit(base_url)
