@@ -1595,7 +1595,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     }
     
     async function toggleSubscribePC() {
-        const tocUrl = "{{ article.toc_url }}" || "{{ current_url }}";
+        const tocUrl = {{ (article.toc_url or current_url)|tojson }};
         // 简单正则提取ID
         let cid = 0;
         const m = "{{ current_url }}".match(/\/(\d+)(?:_\d+)?(?:\.html)?$/);
@@ -2050,9 +2050,10 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         list.innerHTML = force ? '正在刷新目录，请稍候...' : '正在加载...';
         
         const normCurrent = normalizeUrl(currentUrl);
+        const tocRequestUrl = {{ (article.toc_url or current_url)|tojson }};
         console.log('[TOC Debug] 当前URL:', normCurrent);
 
-        fetch(`/toc?url={{ article.toc_url }}&key=${dbKey}&api=true${force ? '&force=true' : ''}`)
+        fetch(`/toc?url=${encodeURIComponent(tocRequestUrl)}&key=${encodeURIComponent(dbKey)}&api=true${force ? '&force=true' : ''}`)
         .then(async r => {
             const contentType = r.headers.get('content-type') || '';
             if (r.status === 401) throw new Error('登录已失效，请重新登录');

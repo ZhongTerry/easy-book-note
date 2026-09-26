@@ -401,6 +401,23 @@ class TestTocPresentation(unittest.TestCase):
         self.assertEqual(html.count('class="chapter-item is-last-read"'), 1)
         self.assertNotIn('chapter-item is-read', html)
 
+    def test_desktop_toc_request_encodes_fragment_in_catalog_url(self):
+        article = {
+            'title': '测试章节',
+            'content': ['正文'],
+            'toc_url': 'https://www.shudugu.org/473/#dir',
+            'toc': 'https://www.shudugu.org/473/#dir',
+        }
+        with self.app.test_request_context('/'):
+            html = render_template(
+                'reader_pc.html', article=article,
+                current_url='https://www.shudugu.org/473/959296.html',
+                db_key='test-book', chapter_id=1, is_marked=False,
+            )
+
+        self.assertIn('const tocRequestUrl = "https://www.shudugu.org/473/#dir"', html)
+        self.assertIn('url=${encodeURIComponent(tocRequestUrl)}', html)
+
 
 if __name__ == '__main__':
     unittest.main()
