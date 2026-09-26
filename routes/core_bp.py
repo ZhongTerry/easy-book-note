@@ -1809,7 +1809,12 @@ def dl_file():
 @core_bp.route('/manifest.json')
 def serve_manifest(): return send_file('manifest.json')
 @core_bp.route('/sw.js')
-def serve_sw(): return send_file('sw.js')
+def serve_sw():
+    response = send_file('sw.js', mimetype='application/javascript')
+    # Browsers check a service worker on navigation; never let an HTTP cache
+    # delay delivery of a fix for the request-interception layer.
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    return response
 @core_bp.route('/static/<path:filename>')
 def serve_static(filename): return send_from_directory(os.path.join(BASE_DIR, 'static'), filename)
 @core_bp.route('/purecss/<path:path>')
