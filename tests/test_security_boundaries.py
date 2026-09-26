@@ -122,6 +122,13 @@ class TestOAuthState(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         post.assert_not_called()
 
+    def test_unauthenticated_toc_api_returns_json_instead_of_guest_html(self):
+        response = self.client.get('/toc?url=https%3A%2F%2Fexample.test%2F&api=true')
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.mimetype, 'application/json')
+        self.assertEqual(response.get_json()['code'], 401)
+
 
 class TestQuickSave(unittest.TestCase):
     @classmethod

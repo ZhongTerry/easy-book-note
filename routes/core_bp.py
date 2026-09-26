@@ -812,6 +812,12 @@ def toc_page():
     force = force_raw in ['true', '1', 'yes', 'on']
     is_api = request.args.get('api')
     if not u or (not u.startswith('epub:') and not is_safe_url(u)):
+        if is_api:
+            return jsonify({
+                'status': 'error',
+                'message': '目录链接未通过安全校验',
+                'code': 'INVALID_TOC_URL',
+            }), 403
         return "Illegal URL", 403
 
     if u.startswith('epub:'):

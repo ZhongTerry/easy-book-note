@@ -2055,6 +2055,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         fetch(`/toc?url={{ article.toc_url }}&key=${dbKey}&api=true${force ? '&force=true' : ''}`)
         .then(async r => {
             const contentType = r.headers.get('content-type') || '';
+            if (r.status === 401) throw new Error('登录已失效，请重新登录');
             if (!r.ok) throw new Error(`目录请求失败（HTTP ${r.status}）`);
             if (!contentType.includes('application/json')) {
                 throw new Error('目录服务返回了非 JSON 内容，请重新登录后重试');

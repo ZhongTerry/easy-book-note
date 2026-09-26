@@ -30,7 +30,11 @@ def login_required(f):
             
             # 1. 如果是 API 请求，返回 JSON 错误
             # 这样前端 fetch 收到 401 可以静默处理，而不是收到一堆 HTML 报错
-            if request.path.startswith('/api/') or request.is_json:
+            # Some legacy JSON endpoints live outside /api (for example
+            # /toc?api=true). They must not receive a guest HTML page, because
+            # callers correctly expect a machine-readable authentication error.
+            api_mode = request.args.get('api', '').lower() in {'1', 'true', 'yes', 'on'}
+            if request.path.startswith('/api/') or request.is_json or api_mode:
                 return jsonify({
                     "status": "error", 
                     "msg": "Unauthorized: Please login first", 
