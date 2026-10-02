@@ -832,6 +832,8 @@ body.dark-mode .article-header h1 { color:var(--text-main); }
 body.dark-mode .main-container { border-color:var(--border-color); box-shadow:none; }
 .modal-overlay { background:rgba(20,32,39,.48); padding:20px; box-sizing:border-box; backdrop-filter:blur(3px); animation:modal-fade-in 160ms ease-out both; }
 .modal-box { width:min(500px,100%); max-width:500px; max-height:min(720px,calc(100vh - 40px)); padding:22px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-reader); color:var(--text-main); box-shadow:0 18px 48px rgba(20,32,39,.2); animation:modal-panel-in 200ms cubic-bezier(.2,.8,.2,1) both; }
+#tocOverlay .modal-box { height:min(720px,calc(100vh - 40px)); }
+#tocList { min-height:0; }
 .modal-overlay.is-closing { animation:modal-fade-out 150ms ease-in both; }
 .modal-overlay.is-closing .modal-box { animation:modal-panel-out 150ms ease-in both; }
 @keyframes modal-fade-in { from { opacity:0; } to { opacity:1; } }
@@ -1215,7 +1217,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     const dbKey = "{{ db_key }}";
     let chapterTitle = {{ (article.title or "")|tojson }};
     // 从后端获取当前页面对应的 URL (通常是未编码或部分编码的)
-    let currentUrl = "{{ current_url }}"; // 允许 AJAX 导航后更新当前章节 URL
+    let currentUrl = {{ current_url|tojson }}; // 允许 AJAX 导航后更新当前章节 URL
 
     let memoParagraphText = '';
     let memoSelectionText = '';
@@ -2072,14 +2074,6 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 tocData.chapters.sort((a, b) => (a.id || 0) - (b.id || 0));
                 
                 list.innerHTML = tocData.chapters.map(c => {
-                    const normChapterUrl = normalizeUrl(c.url);
-                    // [增强匹配] 优先使用 ID 匹配 (最准确)，URL 匹配作为兜底
-                    const isIdMatch = (c.id > 0 && localChapterId > 0 && c.id === localChapterId);
-                    const isUrlMatch = normChapterUrl === normCurrent;
-                    const isCurrent = isIdMatch || isUrlMatch;
-                    
-                    if(isCurrent) console.log('[TOC Debug] 匹配到当前章节:', { title: c.title, method: isIdMatch ? 'ID' : 'URL' });
-                    
                     // [修复] 优先使用 title，解决 undefined 问题
                     let nameText = c.title || c.name || c.raw_title || "无标题";
                     let displayTitle = nameText;
@@ -2094,19 +2088,14 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                          }
                     }
 
-                    return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${dbKey}" 
-                               class="toc-item ${isCurrent ? 'active-chap' : ''}">
+                    return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}"
+                               class="toc-item" data-url="${encodeURIComponent(c.url)}" data-chapter-id="${Number(c.id) || ''}">
                                ${displayTitle}
                             </a>`;
                 }).join('');
 
                 filterPcTOC(document.getElementById('tocFilter')?.value || '');
-
-                // 自动滚动
-                setTimeout(() => {
-                    const activeItem = list.querySelector('.active-chap');
-                    if (activeItem) activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                }, 100);
+                refreshTocHighlight();
 
                 if(force) showToast("✅ 目录已更新");
             } else { 
@@ -2742,22 +2731,38 @@ function refreshTocHighlight() {
     const tocList = document.getElementById('tocList');
     if(!tocList || tocList.innerHTML === '正在加载...') return;
     
-    const items = tocList.querySelectorAll('.toc-item');
-    // 使用当前页面 URL 而不是初始 currentUrl
-    const currentPageUrl = window.location.href;
-    const normCurrent = normalizeUrl(currentPageUrl);
-    
-    items.forEach(item => {
-        const itemUrl = normalizeUrl(item.dataset.url || '');
-        if(itemUrl === normCurrent) {
-            item.classList.add('active');
-            item.classList.add('active-chap');
-            item.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        } else {
-            item.classList.remove('active');
-            item.classList.remove('active-chap');
-        }
+    const items = Array.from(tocList.querySelectorAll('.toc-item'));
+    const normalizedCurrent = normalizeUrl(currentUrl);
+    // URL is authoritative for sources with opaque/random chapter URLs. Fall
+    // back to the numeric id only when a URL comparison cannot identify one.
+    let activeItem = items.find((item) =>
+        normalizeUrl(item.dataset.url || '') === normalizedCurrent,
+    );
+    if (!activeItem && localChapterId > 0) {
+        activeItem = items.find((item) => Number(item.dataset.chapterId) === localChapterId);
+    }
+
+    items.forEach((item) => {
+        const isCurrent = item === activeItem;
+        item.classList.toggle('active', isCurrent);
+        item.classList.toggle('active-chap', isCurrent);
+        item.toggleAttribute('aria-current', isCurrent);
     });
+    if (!activeItem) {
+        console.warn('[TOC] 未在目录中定位当前章节', { currentUrl, localChapterId });
+        return;
+    }
+
+    console.log('[TOC] 已定位当前章节', {
+        url: activeItem.dataset.url,
+        chapterId: activeItem.dataset.chapterId,
+    });
+    // Wait until the list has a measured scroll height, then move its own
+    // scroll position. This is reliable inside the desktop client's modal.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        const targetTop = activeItem.offsetTop - (tocList.clientHeight - activeItem.offsetHeight) / 2;
+        tocList.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+    }));
 }
     
     document.addEventListener('DOMContentLoaded', () => {

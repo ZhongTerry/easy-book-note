@@ -418,6 +418,13 @@ class TestTocPresentation(unittest.TestCase):
         self.assertIn('const tocRequestUrl = "https://www.shudugu.org/473/#dir"', html)
         self.assertIn('url=${encodeURIComponent(tocRequestUrl)}', html)
 
+    def test_desktop_toc_items_keep_urls_for_reliable_current_chapter_matching(self):
+        html = (Path(__file__).resolve().parents[1] / 'templates' / 'reader_pc.html').read_text(encoding='utf-8')
+
+        self.assertIn('data-url="${encodeURIComponent(c.url)}"', html)
+        self.assertIn('normalizeUrl(item.dataset.url || \'\') === normalizedCurrent', html)
+        self.assertIn('tocList.scrollTo({ top: Math.max(0, targetTop)', html)
+
 
 if __name__ == '__main__':
     unittest.main()
