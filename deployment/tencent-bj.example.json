@@ -1,0 +1,25 @@
+{
+  "target": "/www/wwwroot/book.ztrztr.top/src",
+  "branch": "master",
+  "state_dir": "/www/wwwroot/book.ztrztr.top/notedb-update-state",
+  "keep_releases": 3,
+  "health_url": "http://127.0.0.1:5000/healthz",
+  "health_timeout": 45,
+  "command_timeout": 90,
+  "stop_command": [
+    "/www/server/pyporject_evn/versions/3.12.3/bin/python3.12",
+    "/www/wwwroot/book.ztrztr.top/notedb-updater/service_control.py",
+    "stop",
+    "--target", "/www/wwwroot/book.ztrztr.top/src",
+    "--pidfile", "/www/wwwroot/book.ztrztr.top/src/gunicorn.pid"
+  ],
+  "start_command": [
+    "/www/server/pyporject_evn/versions/3.12.3/bin/python3.12",
+    "/www/wwwroot/book.ztrztr.top/notedb-updater/service_control.py",
+    "start",
+    "--target", "/www/wwwroot/book.ztrztr.top/src",
+    "--pidfile", "/www/wwwroot/book.ztrztr.top/src/gunicorn.pid",
+    "--gunicorn", "/www/server/pyporject_evn/versions/3.12.3/bin/gunicorn",
+    "--config", "/www/wwwroot/book.ztrztr.top/src/gunicorn_conf.py"
+  ]
+}

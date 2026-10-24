@@ -1941,6 +1941,8 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         clearTimeout(modal._closeTimer);
         modal.classList.remove('is-closing');
         modal.style.display = 'flex';
+        if (id === 'tocOverlay') loadTOC(false);
+        if (id === 'statsModal') loadStats();
     }
 
     function hideModal(id) {
@@ -1952,8 +1954,12 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             modal.style.display = 'none';
             modal.classList.remove('is-closing');
         }, 150);
-        if(id === 'tocOverlay') loadTOC(false);
-        if(id === 'statsModal') loadStats(); // 加载热力图
+        if (id === 'tocOverlay') tocLoadController?.abort();
+        if (id === 'sourceModal') {
+            sourceRequestController?.abort();
+            sourceRequestController = null;
+            sourceSwitchBusy = false;
+        }
     }
 
     // 强制刷新
@@ -2046,7 +2052,12 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     }
 
     // === 目录加载 ===
+    let tocLoadController = null;
     function loadTOC(force = false) {
+        tocLoadController?.abort();
+        const controller = new AbortController();
+        tocLoadController = controller;
+        const timeout = setTimeout(() => controller.abort(), 30000);
         const list = document.getElementById('tocList');
         if(force) showToast("🔍 正在重新爬取目录...");
         list.innerHTML = force ? '正在刷新目录，请稍候...' : '正在加载...';
@@ -2055,7 +2066,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         const tocRequestUrl = {{ (article.toc_url or current_url)|tojson }};
         console.log('[TOC Debug] 当前URL:', normCurrent);
 
-        fetch(`/toc?url=${encodeURIComponent(tocRequestUrl)}&key=${encodeURIComponent(dbKey)}&api=true${force ? '&force=true' : ''}`)
+        return fetch(`/toc?url=${encodeURIComponent(tocRequestUrl)}&key=${encodeURIComponent(dbKey)}&api=true${force ? '&force=true' : ''}`, {signal: controller.signal})
         .then(async r => {
             const contentType = r.headers.get('content-type') || '';
             if (r.status === 401) throw new Error('登录已失效，请重新登录');
@@ -2066,12 +2077,12 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             return r.json();
         })
         .then(d => {
+            if (controller !== tocLoadController || controller.signal.aborted) return;
             // [兼容性修复] 处理新的后端返回结构 {"toc": data, "progress": ...}
             const tocData = d.toc || d;
             
             if(tocData.chapters && tocData.chapters.length > 0) {
-                // 强制排序
-                tocData.chapters.sort((a, b) => (a.id || 0) - (b.id || 0));
+                // 保留识别引擎提供的目录顺序，分卷章节可能重新编号。
                 
                 list.innerHTML = tocData.chapters.map(c => {
                     // [修复] 优先使用 title，解决 undefined 问题
@@ -2090,7 +2101,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
 
                     return `<a href="/read?url=${encodeURIComponent(c.url)}&key=${encodeURIComponent(dbKey)}"
                                class="toc-item" data-url="${encodeURIComponent(c.url)}" data-chapter-id="${Number(c.id) || ''}">
-                               ${displayTitle}
+                               ${escapeHtml(displayTitle)}
                             </a>`;
                 }).join('');
 
@@ -2103,9 +2114,11 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             }
         })
         .catch(e => {
+            if (controller !== tocLoadController) return;
             console.error('TOC load failed:', e);
-            list.innerText = `目录加载失败：${e.message}`;
-        });
+            list.innerText = e.name === 'AbortError' ? '目录加载已取消或超时，请重新打开重试' : `目录加载失败：${e.message}`;
+        })
+        .finally(() => clearTimeout(timeout));
     }
 
     function filterPcTOC(query) {
@@ -2195,16 +2208,24 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         initManualSourceTitle();
         loadSourceList();
     }
+    let sourceRequestController = null;
+    let sourceSwitchBusy = false;
     async function loadSourceList(force = false) {
+        sourceRequestController?.abort();
+        const controller = new AbortController();
+        sourceRequestController = controller;
+        sourceSwitchBusy = false;
+        const timeout = setTimeout(() => controller.abort(), 60000);
         const list = document.getElementById('sourceList');
         const loading = document.getElementById('sourceLoading');
-        list.innerHTML = ''; loading.style.display = 'block';
+        list.innerHTML = ''; list.style.display = 'block'; loading.style.display = 'block';
         loading.innerText = '🔍 正在聚合全网搜索结果...';
         const manualTitle = getManualSourceTitle();
         saveManualSourceTitle(manualTitle);
         
         try {
             const res = await fetch('/api/source/list', {
+                signal: controller.signal,
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -2216,16 +2237,18 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 })
             });
             const json = await res.json();
+            if (controller !== sourceRequestController || controller.signal.aborted) return;
+            if (!res.ok) throw new Error(json.msg || json.message || `HTTP ${res.status}`);
             loading.style.display = 'none';
             if (json.status === 'success') {
                 switchContext = json.match_info || {};
                 switchContext.current_title = switchContext.current_title || document.getElementById('chapterTitle').innerText;
-                list.innerHTML = json.data.map(src => {
+                list.innerHTML = json.data.map((src, index) => {
                     let domain = '';
                     try { domain = new URL(src.url).hostname; } catch(e) { domain = src.url; }
                     
                     return `
-                    <div onclick="requestSwitch(${JSON.stringify(src.url || '')}, ${JSON.stringify(src.source || '')})" 
+                    <div role="button" tabindex="0" data-source-index="${index}"
                          style="padding:15px; border:1px solid #eee; border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; background:#fff;" 
                          onmouseover="this.style.borderColor='var(--accent)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.05)'" 
                          onmouseout="this.style.borderColor='#eee'; this.style.boxShadow='none'">
@@ -2242,10 +2265,33 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                         </div>
                     </div>`;
                 }).join('');
+                list.querySelectorAll('[data-source-index]').forEach(item => {
+                    const src = json.data[Number(item.dataset.sourceIndex)];
+                    item.addEventListener('click', () => requestSwitch(src.url || '', src.source || ''));
+                    item.addEventListener('keydown', event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            item.click();
+                        }
+                    });
+                });
             } else { list.innerHTML = `<div style="text-align:center; padding: 20px;">${escapeHtml(json.msg || '')}</div>`; }
-        } catch(e) { showToast("换源服务暂时不可用"); }
+        } catch(e) {
+            if (controller !== sourceRequestController) return;
+            loading.style.display = 'none';
+            list.innerText = e.name === 'AbortError' ? '换源搜索超时，请点击刷新重试。' : `换源列表加载失败：${e.message}。请点击刷新重试。`;
+            showToast("换源服务暂时不可用");
+        } finally {
+            clearTimeout(timeout);
+        }
     }
     async function requestSwitch(targetUrl, sourceName) {
+        if (sourceSwitchBusy) return;
+        sourceSwitchBusy = true;
+        sourceRequestController?.abort();
+        const controller = new AbortController();
+        sourceRequestController = controller;
+        const timeout = setTimeout(() => controller.abort(), 60000);
         const list = document.getElementById('sourceList');
         const loading = document.getElementById('sourceLoading');
         
@@ -2256,6 +2302,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
 
         try {
             const res = await fetch('/api/source/confirm_switch', {
+                signal: controller.signal,
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
@@ -2266,10 +2313,15 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             });
             
             const json = await res.json();
+            if (controller !== sourceRequestController || controller.signal.aborted) return;
+            if (!res.ok) throw new Error(json.msg || json.message || `HTTP ${res.status}`);
             
             if (json.status === 'success') {
                 loading.innerText = '✅ 跳转中...';
-                await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: json.new_url }) });
+                const saved = await fetch('/update', { signal: controller.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: json.new_url }) });
+                const savedResult = await saved.json();
+                if (controller !== sourceRequestController || controller.signal.aborted) return;
+                if (!saved.ok || savedResult.status !== 'success') throw new Error(savedResult.msg || savedResult.message || '换源进度保存失败');
                 window.location.href = `/read?url=${encodeURIComponent(json.new_url)}&key=${encodeURIComponent(dbKey)}`;
             } else {
                 showToast(json.msg || "切换失败");
@@ -2277,9 +2329,13 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 list.style.display = 'block';
             }
         } catch (e) {
-            showToast("请求超时");
+            if (controller !== sourceRequestController) return;
+            showToast(e.name === 'AbortError' ? '换源请求超时，请重试' : e.message);
             loading.style.display = 'none';
             list.style.display = 'block';
+        } finally {
+            clearTimeout(timeout);
+            if (controller === sourceRequestController) sourceSwitchBusy = false;
         }
     }
 
@@ -2739,7 +2795,8 @@ function refreshTocHighlight() {
         normalizeUrl(item.dataset.url || '') === normalizedCurrent,
     );
     if (!activeItem && localChapterId > 0) {
-        activeItem = items.find((item) => Number(item.dataset.chapterId) === localChapterId);
+        const matches = items.filter((item) => Number(item.dataset.chapterId) === localChapterId);
+        if (matches.length === 1) activeItem = matches[0];
     }
 
     items.forEach((item) => {
@@ -2760,7 +2817,10 @@ function refreshTocHighlight() {
     // Wait until the list has a measured scroll height, then move its own
     // scroll position. This is reliable inside the desktop client's modal.
     requestAnimationFrame(() => requestAnimationFrame(() => {
-        const targetTop = activeItem.offsetTop - (tocList.clientHeight - activeItem.offsetHeight) / 2;
+        if (activeItem.style.display === 'none' || !activeItem.isConnected) return;
+        const targetTop = tocList.scrollTop + activeItem.getBoundingClientRect().top
+            - tocList.getBoundingClientRect().top - tocList.clientTop
+            - (tocList.clientHeight - activeItem.offsetHeight) / 2;
         tocList.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
     }));
 }

@@ -342,7 +342,7 @@
         .search-state .state-mark { width:42px; height:42px; display:grid; place-items:center; margin-bottom:14px; border:1px solid var(--search-border); border-radius:50%; color:var(--search-accent); font-size:19px; }
         .search-state.error .state-mark { color:#ad3f3f; border-color:#e9caca; }
         .search-state h2 { margin:0 0 7px; color:var(--search-text); font-size:16px; font-weight:650; }
-        .search-state p { margin:0; font-size:13px; line-height:1.6; }
+        .search-state p { margin:0; font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
         .search-state .p-btn { min-height:34px; margin-top:18px; border:1px solid var(--search-border); border-radius:5px; background:var(--search-panel); color:var(--search-accent); font-weight:600; }
         .search-state .p-btn:hover { border-color:var(--search-accent); background:rgba(15,118,110,.06); }
         .search-spinner { width:28px; height:28px; margin-bottom:16px; border:3px solid var(--search-border); border-top-color:var(--search-accent); border-radius:50%; animation:spin .75s linear infinite; }
@@ -427,8 +427,21 @@
     
     <script>
         const API_URL = window.location.origin;
-        let searchHistory = JSON.parse(localStorage.getItem('search_history') || '[]');
+        let searchHistory = [];
+        try {
+            const storedHistory = JSON.parse(localStorage.getItem('search_history') || '[]');
+            if (Array.isArray(storedHistory)) searchHistory = storedHistory.filter(item => typeof item === 'string');
+        } catch (error) { console.warn('Search history unavailable:', error); }
         let currentResults = [];
+
+        // 搜索生命周期控制：每次搜索都拥有独立会话，旧会话的响应不得再改页面。
+        const SEARCH_POLL_INTERVAL_MS = 1000;
+        const SEARCH_POLL_TIMEOUT_MS = 60000;
+        const SEARCH_REQUEST_TIMEOUT_MS = 10000;
+        const SEARCH_MAX_CONSECUTIVE_POLL_ERRORS = 3;
+
+        let searchSequence = 0;
+        let activeSearch = null;
 
         function escapeHtml(str) {
             return String(str)
@@ -438,6 +451,121 @@
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#39;")
                 .replace(/`/g, "&#96;");
+        }
+
+        function beginSearchSession() {
+            const previous = activeSearch;
+            const session = { id: ++searchSequence, controller: new AbortController() };
+            activeSearch = session;
+            if (previous) {
+                // 先登记新会话再取消旧会话，确保旧搜索的收尾逻辑看不到“当前会话”。
+                previous.controller.abort();
+            }
+            return session;
+        }
+
+        function isCurrentSearch(session) {
+            return Boolean(session) && activeSearch === session && session.id === searchSequence;
+        }
+
+        function isAbortError(error) {
+            return Boolean(error) && error.name === 'AbortError';
+        }
+
+        function delayWithSignal(ms, signal) {
+            return new Promise(resolve => {
+                if (!signal || signal.aborted) {
+                    resolve();
+                    return;
+                }
+                const finish = () => {
+                    clearTimeout(timer);
+                    signal.removeEventListener('abort', finish);
+                    resolve();
+                };
+                const timer = setTimeout(finish, ms);
+                signal.addEventListener('abort', finish, { once: true });
+            });
+        }
+
+        // 每次请求都有独立的超时；同时响应搜索会话的取消信号。
+        async function fetchJsonWithTimeout(url, options, timeoutMs, externalSignal) {
+            const controller = new AbortController();
+            let timedOut = false;
+            const timer = setTimeout(() => {
+                timedOut = true;
+                controller.abort();
+            }, timeoutMs);
+            const abortFromSearch = () => controller.abort();
+            if (externalSignal) {
+                if (externalSignal.aborted) controller.abort();
+                else externalSignal.addEventListener('abort', abortFromSearch, { once: true });
+            }
+
+            try {
+                const response = await fetch(url, { ...(options || {}), signal: controller.signal });
+                let payload = null;
+                let parseFailed = false;
+                try {
+                    payload = await response.json();
+                } catch (e) {
+                    parseFailed = true;
+                }
+
+                if (!response.ok) {
+                    const serverMessage = payload && typeof payload === 'object'
+                        ? apiErrorMessage(payload, '')
+                        : '';
+                    throw new Error(serverMessage
+                        ? `请求失败（HTTP ${response.status}）：${serverMessage}`
+                        : `请求失败（HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}）`);
+                }
+                if (parseFailed) {
+                    throw new Error('服务返回的不是有效 JSON，登录状态可能已失效');
+                }
+                return payload;
+            } catch (error) {
+                if (timedOut) {
+                    const timeoutError = new Error(`请求超时（${Math.round(timeoutMs / 1000)} 秒）`);
+                    timeoutError.name = 'TimeoutError';
+                    throw timeoutError;
+                }
+                if (isAbortError(error)) throw error;
+                if (error && error.name === 'TypeError') {
+                    throw new Error(`无法连接搜索服务：${error.message || '网络错误'}`);
+                }
+                throw error;
+            } finally {
+                clearTimeout(timer);
+                if (externalSignal) externalSignal.removeEventListener('abort', abortFromSearch);
+            }
+        }
+
+        function extractResultList(payload) {
+            if (Array.isArray(payload)) return payload;
+            if (payload && typeof payload === 'object') {
+                if (Array.isArray(payload.data)) return payload.data;
+                if (Array.isArray(payload.result)) return payload.result;
+            }
+            return null;
+        }
+
+        function apiErrorMessage(payload, fallback) {
+            if (payload && typeof payload === 'object') {
+                for (const key of ['message', 'error', 'msg']) {
+                    const value = payload[key];
+                    if (typeof value === 'string' && value.trim()) return value.trim();
+                }
+            }
+            return fallback;
+        }
+
+        function formatSearchError(error) {
+            let message = '';
+            if (error && typeof error.message === 'string') message = error.message;
+            else if (error !== undefined && error !== null) message = String(error);
+            message = message.trim() || '未知错误';
+            return message.length > 400 ? `${message.slice(0, 400)}…` : message;
         }
         
         // 初始化
@@ -485,7 +613,8 @@
         function clearHistory() {
             if (confirm('确定清空搜索历史吗？')) {
                 searchHistory = [];
-                localStorage.setItem('search_history', '[]');
+                try { localStorage.setItem('search_history', '[]'); }
+                catch (error) { console.warn('Cannot persist search history:', error); }
                 renderHistory();
             }
         }
@@ -494,24 +623,29 @@
         function saveHistory(keyword) {
             // 去重并前置
             searchHistory = [keyword, ...searchHistory.filter(k => k !== keyword)].slice(0, 20);
-            localStorage.setItem('search_history', JSON.stringify(searchHistory));
+            try { localStorage.setItem('search_history', JSON.stringify(searchHistory)); }
+            catch (error) { console.warn('Cannot persist search history:', error); }
             renderHistory();
         }
 
         function renderSearchState(kind, detail = '') {
             const container = document.getElementById('resultsContainer');
+            const statsBar = document.getElementById('statsBar');
+            if (statsBar) statsBar.style.display = 'none';
             const states = {
                 loading: { mark: '', title: '正在搜索', message: '正在聚合多个书源，请稍候。' },
                 empty: { mark: '⌕', title: '没有找到相关结果', message: '试试简化关键词，或改用作者名搜索。' },
                 timeout: { mark: '!', title: '搜索耗时较长', message: '当前书源响应较慢，可以重新搜索。' },
-                error: { mark: '!', title: '搜索暂时不可用', message: detail || '请检查网络后重试。' },
+                error: { mark: '!', title: '搜索暂时不可用', message: '请检查网络后重试。' },
                 expired: { mark: '!', title: '搜索任务已失效', message: '请重新提交一次搜索。' }
             };
             const state = states[kind] || states.error;
+            // 错误详情可能来自服务端或网络层，先规范化，再转义后写入 HTML。
+            const message = detail ? formatSearchError(detail) : state.message;
             const retry = kind !== 'loading' && kind !== 'empty';
             container.innerHTML = `<div class="search-state ${kind === 'error' ? 'error' : ''}">
-                ${kind === 'loading' ? '<div class="search-spinner"></div>' : `<div class="state-mark">${state.mark}</div>`}
-                <h2>${state.title}</h2><p>${state.message}</p>
+                ${kind === 'loading' ? '<div class="search-spinner"></div>' : `<div class="state-mark">${escapeHtml(state.mark)}</div>`}
+                <h2>${escapeHtml(state.title)}</h2><p>${escapeHtml(message)}</p>
                 ${retry ? '<button type="button" class="p-btn" onclick="doSearch()">重新搜索</button>' : ''}
             </div>`;
         }
@@ -523,37 +657,91 @@
                 alert('请输入书名');
                 return;
             }
-            
+
+            const session = beginSearchSession();
+
             // 保存历史
             saveHistory(keyword);
             
-            const container = document.getElementById('resultsContainer');
             const statsBar = document.getElementById('statsBar');
             
             renderSearchState('loading');
             statsBar.style.display = 'none';
+            PureUI.loading.show('🔍 聚合搜索中...');
             
             try {
-                PureUI.loading.show('🔍 聚合搜索中...');
-                const res = await fetch(`${API_URL}/api/search_novel`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({keyword: keyword})
-                });
-                const json = await res.json();
-                
-                if (json.status === 'pending') {
-                    await pollSearchTask(json.task_id);
-                } else if (json.data) {
-                    handleSearchResults(json.data);
-                } else {
-                    handleSearchResults([]);
+                const json = await fetchJsonWithTimeout(
+                    `${API_URL}/api/search_novel`,
+                    {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({keyword: keyword})
+                    },
+                    SEARCH_REQUEST_TIMEOUT_MS,
+                    session.controller.signal
+                );
+
+                if (!isCurrentSearch(session)) return;
+
+                if (Array.isArray(json)) {
+                    handleSearchResults(json);
+                    return;
                 }
+
+                if (json && json.status === 'pending') {
+                    if (!json.task_id) throw new Error('搜索任务创建失败：缺少任务编号');
+                    const outcome = await pollSearchTask(json.task_id, session);
+                    if (!isCurrentSearch(session) || outcome.kind === 'cancelled') return;
+                    handleSearchOutcome(outcome);
+                    return;
+                }
+
+                if (json && typeof json === 'object' && (json.status === 'error' || json.status === 'failed')) {
+                    throw new Error(apiErrorMessage(json, '搜索服务返回失败状态'));
+                }
+
+                if (json && typeof json === 'object'
+                    && (json.status === 'completed' || json.status === 'success'
+                        || json.data !== undefined || json.result !== undefined)) {
+                    const results = extractResultList(json);
+                    if (results === null) throw new Error('搜索服务返回的结果数据格式异常');
+                    handleSearchResults(results);
+                    return;
+                }
+
+                throw new Error('搜索服务返回了无法识别的响应');
             } catch(e) {
+                // 被新搜索取代的旧请求不渲染任何错误，也不触碰 loading。
+                if (!isCurrentSearch(session) || isAbortError(e)) return;
                 console.error('Search request failed:', e);
-                renderSearchState('error');
+                renderSearchState('error', formatSearchError(e));
             } finally {
-                PureUI.loading.hide();
+                if (isCurrentSearch(session)) {
+                    PureUI.loading.hide();
+                    activeSearch = null;
+                }
+            }
+        }
+
+        function handleSearchOutcome(outcome) {
+            if (!outcome) {
+                renderSearchState('error', '搜索任务返回了空状态');
+                return;
+            }
+            switch (outcome.kind) {
+                case 'completed':
+                    handleSearchResults(outcome.data);
+                    break;
+                case 'timeout':
+                    renderSearchState('timeout', outcome.message);
+                    break;
+                case 'expired':
+                    renderSearchState('expired', outcome.message);
+                    break;
+                case 'error':
+                default:
+                    renderSearchState('error', outcome.message || '搜索任务执行失败');
+                    break;
             }
         }
         
@@ -676,73 +864,99 @@
             }
         }
 
-        async function pollSearchTask(taskId) {
-            let attempts = 0;
-            const maxAttempts = 60; 
-            
-            const poll = async () => {
-                if (attempts >= maxAttempts) {
-                    PureUI.loading.close();
-                    renderSearchState('timeout');
-                    return;
+        // 轮询直到任务进入终态；调用方必须 await 它，loading 由调用方的 finally 统一收尾。
+        async function pollSearchTask(taskId, session) {
+            const deadline = Date.now() + SEARCH_POLL_TIMEOUT_MS;
+            const statusUrl = `${API_URL}/api/task_status/${encodeURIComponent(taskId)}`;
+            let consecutiveErrors = 0;
+
+            while (true) {
+                if (!isCurrentSearch(session)) return { kind: 'cancelled' };
+
+                const remaining = deadline - Date.now();
+                if (remaining <= 0) {
+                    return {
+                        kind: 'timeout',
+                        message: `等待超过 ${Math.round(SEARCH_POLL_TIMEOUT_MS / 1000)} 秒，搜索任务可能仍在后台运行，请重新搜索。`
+                    };
                 }
-                
+
                 try {
-                    const res = await fetch(`${API_URL}/api/task_status/${taskId}`);
-                    const t = await res.json();
-                    
-                    if (t.status === 'completed') {
-                        PureUI.loading.hide();
+                    const requestTimeout = Math.max(1000, Math.min(SEARCH_REQUEST_TIMEOUT_MS, remaining));
+                    const task = await fetchJsonWithTimeout(
+                        statusUrl,
+                        { cache: 'no-store' },
+                        requestTimeout,
+                        session.controller.signal
+                    );
+
+                    if (!isCurrentSearch(session)) return { kind: 'cancelled' };
+
+                    if (!task || typeof task !== 'object' || typeof task.status !== 'string') {
+                        throw new Error('任务状态响应格式异常');
+                    }
+
+                    consecutiveErrors = 0;
+
+                    if (task.status === 'completed') {
+                        let results = extractResultList(task.result);
+                        if (results === null) results = extractResultList(task);
+                        if (results === null) {
+                            return { kind: 'error', message: '搜索已完成，但未返回有效的书源结果' };
+                        }
+                        return { kind: 'completed', data: results };
+                    }
+
+                    if (task.status === 'failed' || task.status === 'error') {
+                        // 后台失败时 message 通常只是 "Task failed"，error 才是真正原因。
+                        const detail = typeof task.error === 'string' && task.error.trim()
+                            ? task.error.trim()
+                            : apiErrorMessage(task, '搜索任务执行失败');
+                        return { kind: 'error', message: detail };
+                    }
+
+                    if (task.status === 'not_found') {
+                        return { kind: 'expired' };
+                    }
+
+                    // 非终态：更新进度与中间结果。
+                    if (typeof task.message === 'string' && task.message) {
+                        PureUI.loading.show(task.message);
+                    }
+                    if (Array.isArray(task.result) && task.result.length > 0) {
                         try {
-                            handleSearchResults(t.result); // Should be full result by now
-                        } catch (err) {
-                            console.error("Render error:", err);
-                             renderSearchState('error');
+                            handleSearchResults(task.result);
+                        } catch (renderError) {
+                            console.error('Intermediate search render failed:', renderError);
                         }
-                        return;
-                    } else if (t.status === 'failed') {
-                        PureUI.loading.hide();
-                        console.error('Search task failed:', t.error);
-                        renderSearchState('error');
-                        return;
-                    } else if (t.status === 'not_found') {
-                        PureUI.loading.hide();
-                         renderSearchState('expired');
-                        return;
-                    } else {
-                        // [New] Update Progress UI
-                        if (t.message) PureUI.loading.show(t.message);
-                        // [New] Render intermediate results if available
-                        if (t.result && t.result.length > 0) {
-                            handleSearchResults(t.result);
-                        }
-                        
-                        attempts++;
-                        setTimeout(poll, 1000);
                     }
                 } catch(e) {
-                    // [Debug] Log exact error that causes retry
-                    console.error("Poll error (will retry):", e);
-                    attempts++;
-                    setTimeout(poll, 1000);
+                    if (!isCurrentSearch(session) || isAbortError(e)) return { kind: 'cancelled' };
+                    console.error('Poll error (will retry):', e);
+                    consecutiveErrors += 1;
+                    if (consecutiveErrors >= SEARCH_MAX_CONSECUTIVE_POLL_ERRORS) {
+                        return { kind: 'error', message: formatSearchError(e) };
+                    }
                 }
-            };
-            poll();
+
+                const waitMs = Math.min(SEARCH_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+                await delayWithSignal(waitMs, session.controller.signal);
+            }
         }
 
         function handleSearchResults(data) {
              console.log("Handling Search Results:", data);
-             if (!data) data = []; // Safety check
+             const results = Array.isArray(data) ? data : [];
              
-             const container = document.getElementById('resultsContainer');
              const statsBar = document.getElementById('statsBar');
              
-             if (data && data.length > 0) {
-                 currentResults = data;
+             if (results.length > 0) {
+                 currentResults = results;
                  renderResults(currentResults);
                  statsBar.style.display = 'flex';
                  document.getElementById('resultCount').innerText = currentResults.length;
              } else {
+                 currentResults = [];
                  statsBar.style.display = 'none'; // Hide stats if no results
                  renderSearchState('empty');
              }

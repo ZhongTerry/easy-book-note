@@ -6,6 +6,7 @@ import importlib.util
 import hashlib
 import uuid
 import zipfile
+from contextvars import ContextVar
 from urllib.parse import urljoin, urlparse, quote
 from difflib import SequenceMatcher
 from urllib.request import getproxies
@@ -27,6 +28,7 @@ from curl_cffi import requests as cffi_requests, CurlHttpVersion
 # Older workers are then ignored by the master, which falls back to local crawl
 # instead of silently returning an incomplete chapter.
 CRAWLER_PROTOCOL_VERSION = 2
+_toc_request_options = ContextVar('toc_request_options', default=None)
 
 # ==========================================
 # 0. 辅助工具 (中文数字转阿拉伯数字 - 增强版)
@@ -274,9 +276,8 @@ class SearchHelper:
         # as dormant migration history and is no longer initialized or called.
         self.searxng = SearxngNovelSearch()
 
-    @lru_cache(maxsize=100)
     def search_bing_cached(self, keyword):
-        """Compatibility entry point backed by the SearXNG TTL cache."""
+        """Compatibility entry point backed only by the SearXNG TTL cache."""
         return self.searxng.search(keyword, verifier=self._verify_candidate)
 
     def search_concurrent(self, keyword, callback=None):
@@ -837,8 +838,12 @@ class SearchHelper:
 
     # === [核心升级] 全网并发聚合搜索 (Aggregated Search) ===
     def search_bing(self, keyword):
-        """Compatibility entry point for source switching and legacy callers."""
-        return self.searxng.search(keyword, verifier=self._verify_candidate)
+        """Forced source-switch entry point; bypasses the SearXNG TTL cache."""
+        return self.searxng.search(
+            keyword,
+            verifier=self._verify_candidate,
+            bypass_cache=True,
+        )
 
 
 class SearchHelperOld:
@@ -2011,10 +2016,11 @@ class NovelCrawler:
         基础请求：支持自定义重试次数和超时时间
         配合 get_toc 的 fast_mode 使用
         """
-        # 1. 参数决断：如果未传入，则使用实例变量或默认值
-        # 这样设计是为了让 get_toc 中临时修改 self.timeout 能生效
-        current_retry = retry if retry is not None else 3
-        current_timeout = timeout if timeout is not None else self.timeout
+        # Request-local defaults preserve adapter compatibility without changing
+        # the shared crawler instance while other requests are in flight.
+        options = _toc_request_options.get()
+        current_retry = retry if retry is not None else (options[1] if options else 3)
+        current_timeout = timeout if timeout is not None else (options[0] if options else self.timeout)
 
         headers = {
             "Referer": url,
@@ -2237,6 +2243,13 @@ class NovelCrawler:
         info("Meta", f"cover={meta['cover']}")
         return meta
     def get_toc(self, url, fast_mode=False, no_cache=False):
+        token = _toc_request_options.set((5, 1) if fast_mode else (15, 3))
+        try:
+            return self._get_toc(url, fast_mode=fast_mode, no_cache=no_cache)
+        finally:
+            _toc_request_options.reset(token)
+
+    def _get_toc(self, url, fast_mode=False, no_cache=False):
         """
         获取目录
         :param no_cache: 如果为 True，强制忽略本地缓存文件
@@ -2277,38 +2290,6 @@ class NovelCrawler:
         # 3. 降级到本地获取
         info("Spider", f"[Crawler] 🌐 远程不可用，本地获取目录 (强制刷新={no_cache}): {url}")
         
-        # 参数设置
-        timeout = 5 if fast_mode else 15
-        retry = 1 if fast_mode else 3
-
-        info("Spider", f"fff: {url}")
-        adapter = plugin_mgr.find_match(url)
-        info("Spider", adapter)
-        if adapter: 
-            # 注意：如果适配器里的 get_toc 调用了 _fetch_page_smart，
-            # 我们需要修改适配器才能生效，或者我们在这里 monkey patch 一下？
-            # 简单起见，我们假设适配器调用的是 self._fetch_page_smart
-            # 我们可以临时把 self.timeout 改了，虽然不优雅但有效
-            
-            old_timeout = self.timeout
-            self.timeout = timeout # 临时修改全局超时
-            info("Spider", "ttt")
-            try:
-                data = adapter.get_toc(self, url)
-            finally:
-                self.timeout = old_timeout # 恢复
-        else: 
-            # 通用逻辑，直接传参
-            # 我们需要修改 _general_toc_logic 接受参数，或者像上面一样改 self.timeout
-             # 这里复用上面的逻辑修改 timeout 属性最稳妥
-             pass
-        
-        # 为了不修改所有适配器代码，我们采用修改实例属性的方式来实现 Fast Mode
-        # 上面的逻辑其实只对 adapter 有效，对通用逻辑需要下面这段：
-        
-        # 重新写一段通用的 get_toc 调用逻辑：
-        old_timeout = self.timeout
-        self.timeout = timeout
         adapter = plugin_mgr.find_match(url)
         data = None
         final_meta = {"cover": "", "author": "", "desc": "", "tags": []}
@@ -2341,6 +2322,7 @@ class NovelCrawler:
                     if not final_meta['cover'] and data.get('cover'): final_meta['cover'] = data['cover']
                     if not final_meta['author'] and data.get('author'): final_meta['author'] = data['author']
                     if not final_meta['desc'] and data.get('desc'): final_meta['desc'] = data.get('desc')
+                    if not final_meta['tags'] and data.get('tags'): final_meta['tags'] = data['tags']
                     info("Meta", f"toc_meta cover={final_meta['cover']}")
             else:
                 # 通用逻辑
@@ -2353,16 +2335,15 @@ class NovelCrawler:
                     info("Meta", f"general_meta cover={final_meta['cover']}")
 
         except Exception as e:
+            warn("TOC", f"目录获取失败: source={url} error={type(e).__name__}: {e}")
             return None
-        finally:
-            self.timeout = old_timeout
 
         if not data or not data.get('chapters'):
             info("TOC", f"empty or no chapters: data={data}")
             return None
         
         if data.get('manual_sort') is True:
-            return self._recognize_toc_payload(data, url)
+            return self._recognize_toc_payload({**data, **final_meta}, url)
         final_chapters = self._standardize_chapters(data['chapters'])
         
         # 返回合并后的结果

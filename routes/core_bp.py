@@ -7,6 +7,7 @@ from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, w
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
 from recognition import get_payload_issue, is_cacheable_payload
+from services.searxng_search import SearxngSearchError
 import re
 import hmac
 import secrets
@@ -1225,7 +1226,14 @@ def api_source_list():
     info("Switch", f"准备搜索新源，关键词: {book_name}")
     # 改为直接返回搜索结果，不做耗时的验证
     from spider_core import searcher
-    sources = searcher.search_bing(book_name) if force else searcher.search_bing_cached(book_name)
+    try:
+        sources = searcher.search_bing(book_name) if force else searcher.search_bing_cached(book_name)
+    except SearxngSearchError as exc:
+        warn('Search', str(exc))
+        return jsonify({
+            'status': 'error', 'code': 'SEARXNG_UNAVAILABLE',
+            'msg': str(exc), 'message': str(exc),
+        }), 502
     
     if not sources:
         return jsonify({"status": "failed", "msg": "全网未找到相关书籍"})

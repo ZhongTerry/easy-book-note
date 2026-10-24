@@ -23,6 +23,24 @@ ProgressCallback = Callable[[int | None, str, list[dict[str, Any]] | None], None
 CandidateVerifier = Callable[[dict[str, Any]], dict[str, Any]]
 
 
+class SearxngSearchError(RuntimeError):
+    """Raised when every SearXNG request failed, so no reliable result exists."""
+
+    def __init__(self, base_url: str, keyword: str,
+                 failures: list[tuple[int, str, str, str]]):
+        self.base_url = base_url
+        self.keyword = keyword
+        self.failures = tuple(failures)
+        details = '; '.join(
+            f'第 {index + 1} 组查询 {query!r} -> {error_type}: {message}'
+            for index, query, error_type, message in failures
+        )
+        super().__init__(
+            f'SearXNG 检索失败（{base_url}，关键词 {keyword!r}）：'
+            f'{len(self.failures)} 组请求全部失败：{details}'
+        )
+
+
 class SearxngNovelSearch:
     """Fetch, clean, merge, and rank novel candidates from SearXNG."""
 
@@ -51,26 +69,44 @@ class SearxngNovelSearch:
         self.cache_ttl = cache_ttl
         self.verify_limit = max(0, verify_limit)
         self.verify_workers = max(1, verify_workers)
-        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._cache: dict[str, tuple[float, list[dict[str, Any]], bool]] = {}
         self._cache_lock = threading.Lock()
 
     def search(self, keyword: str, callback: ProgressCallback | None = None,
-               verifier: CandidateVerifier | None = None) -> list[dict[str, Any]]:
+               verifier: CandidateVerifier | None = None, *,
+               bypass_cache: bool = False) -> list[dict[str, Any]]:
+        """Search SearXNG, optionally verifying and caching the candidates.
+
+        ``bypass_cache=True`` ignores an existing cache entry while still
+        refreshing it after a successful request. If every request fails, a
+        :class:`SearxngSearchError` is raised instead of returning and caching an
+        empty list, because that would be indistinguishable from a genuine
+        no-result and would skip verification on later calls.
+        """
         keyword = self._normalize_keyword(keyword)
         if not keyword:
             return []
 
-        cached = self._read_cache(keyword)
-        if cached is not None:
-            if callback:
-                callback(100, f'已使用 SearXNG 搜索缓存，找到 {len(cached)} 条结果', cached)
-            return cached
+        if not bypass_cache:
+            cached = self._read_cache(keyword)
+            if cached is not None:
+                results, already_verified = cached
+                if verifier and not already_verified:
+                    if callback:
+                        callback(80, f'已命中 SearXNG 缓存，正在验证 {len(results)} 个候选...', None)
+                    results = self._verify_candidates(keyword, results, verifier, callback)
+                    self._write_cache(keyword, results, verified=True)
+                if callback:
+                    callback(100, f'已使用 SearXNG 搜索缓存，找到 {len(results)} 条结果', results)
+                return results
 
         queries = self._build_queries(keyword)
         if callback:
             callback(5, f'正在通过 SearXNG 检索 {len(queries)} 组小说关键词...', None)
 
         raw_results: list[tuple[int, dict[str, Any]]] = []
+        failures: list[tuple[int, str, str, str]] = []
+        successful_queries = 0
         with ThreadPoolExecutor(max_workers=len(queries)) as executor:
             futures = {
                 executor.submit(self._request, query): index
@@ -82,21 +118,33 @@ class SearxngNovelSearch:
                 completed += 1
                 try:
                     entries = future.result()
+                except Exception as exc:
+                    error_type = type(exc).__name__
+                    error_message = re.sub(r'\s+', ' ', str(exc)).strip()[:160]
+                    failures.append((query_index, queries[query_index], error_type, error_message))
+                    if isinstance(exc, (TypeError, ValueError)):
+                        warn('Search', f'SearXNG response rejected: {error_type}: {error_message}')
+                        message = f'SearXNG 第 {completed}/{len(queries)} 组结果格式异常'
+                    else:
+                        warn('Search', f'SearXNG request failed: {error_type}: {error_message}')
+                        message = f'SearXNG 第 {completed}/{len(queries)} 组检索暂不可用'
+                else:
+                    successful_queries += 1
                     raw_results.extend((query_index, entry) for entry in entries)
                     message = f'SearXNG 已完成第 {completed}/{len(queries)} 组检索，获得 {len(entries)} 条候选'
-                except requests.RequestException as exc:
-                    warn('Search', f'SearXNG request failed: {type(exc).__name__}')
-                    message = f'SearXNG 第 {completed}/{len(queries)} 组检索暂不可用'
-                except (TypeError, ValueError) as exc:
-                    warn('Search', f'SearXNG response rejected: {type(exc).__name__}')
-                    message = f'SearXNG 第 {completed}/{len(queries)} 组结果格式异常'
                 if callback:
                     callback(10 + int(completed / len(queries) * 70), message, None)
+
+        if successful_queries == 0:
+            warn('Search', f'SearXNG unavailable for {keyword}: all {len(queries)} queries failed')
+            raise SearxngSearchError(self.base_url, keyword, failures)
 
         results = self._normalize_and_rank(keyword, raw_results)
         if verifier and results:
             results = self._verify_candidates(keyword, results, verifier, callback)
-        self._write_cache(keyword, results)
+        # Only a fully successful empty search is a trustworthy cached no-result.
+        if results or not failures:
+            self._write_cache(keyword, results, verified=verifier is not None or not results)
         if callback:
             callback(100, f'SearXNG 聚合完成，共 {len(results)} 条可读候选', results)
         info('Search', f'SearXNG novel search completed: {keyword}, {len(results)} candidates')
@@ -288,14 +336,19 @@ class SearxngNovelSearch:
             key = clean.lower()
         return key[:15] or 'book'
 
-    def _read_cache(self, keyword: str) -> list[dict[str, Any]] | None:
+    def _read_cache(self, keyword: str) -> tuple[list[dict[str, Any]], bool] | None:
         with self._cache_lock:
             cached = self._cache.get(keyword)
             if not cached or time.monotonic() - cached[0] >= self.cache_ttl:
                 self._cache.pop(keyword, None)
                 return None
-            return [dict(item) for item in cached[1]]
+            return [dict(item) for item in cached[1]], cached[2]
 
-    def _write_cache(self, keyword: str, results: list[dict[str, Any]]) -> None:
+    def _write_cache(self, keyword: str, results: list[dict[str, Any]], *,
+                     verified: bool) -> None:
         with self._cache_lock:
-            self._cache[keyword] = (time.monotonic(), [dict(item) for item in results])
+            self._cache[keyword] = (
+                time.monotonic(),
+                [dict(item) for item in results],
+                verified,
+            )

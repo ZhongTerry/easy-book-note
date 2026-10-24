@@ -191,8 +191,7 @@ def schedule_auto_check():
                                     "book_key": b['book_key'],
                                     "toc_url": u_info['toc_url'],
                                     "last_local_id": u_info.get('last_local_id', 0),
-                                    "username": b['username'],
-                                    "content": c
+                                    "username": b['username']
                                 })
                         except:
                             continue
@@ -204,7 +203,6 @@ def schedule_auto_check():
                         toc_url = task['toc_url']
                         local_id = task['last_local_id']
                         username = task['username']
-                        content = task['content']
                         
                         if not toc_url: continue
                         
@@ -241,19 +239,15 @@ def schedule_auto_check():
                                 # 调试打印
                                 # print(f"   [Check] {key}: Seq={remote_seq} -> Save={id_to_save}")
 
-                                has_u = False
                                 if id_to_save > local_id:
-                                    has_u = True
                                     info("Server", f"   🔥 [UPDATE] {key}: 本地{local_id} -> 远程{id_to_save}")
                                 
-                                # 无论有无更新，都刷新 last_remote_id (V2: 更新 content 字段)
-                                content['update_info']['last_remote_id'] = id_to_save
-                                content['update_info']['has_update'] = has_u
-                                content['update_info']['updated_at'] = time.strftime("%Y-%m-%d %H:%M:%S")
-                                
-                                cursor.execute("UPDATE books_v2 SET content=?, updated_at=CURRENT_TIMESTAMP WHERE username=? AND book_key=?", 
-                                             (json.dumps(content, ensure_ascii=False), username, key))
-                                conn.commit()
+                                # Re-read under a write lock after network I/O;
+                                # never restore the snapshot taken before a user
+                                # changed progress, source, tags or subscription.
+                                managers.save_remote_check(
+                                    conn, username, key, toc_url, id_to_save, baseline=local_id,
+                                )
 
                             
                             # 随机休眠

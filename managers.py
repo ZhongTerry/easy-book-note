@@ -5,6 +5,7 @@ import hashlib
 import time
 import uuid
 import re
+from contextlib import closing
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import session, g, has_request_context
@@ -36,6 +37,56 @@ def get_current_user():
     if not has_request_context():
         return 'default_user'
     return session.get('user', {}).get('username', 'default_user')
+
+
+def mutate_book_content(conn, username, book_key, mutate, create=False):
+    """Merge a narrow change into the latest row under SQLite's write lock.
+
+    The callback must do no network I/O. Returning False cancels the write;
+    missing/deleted books are never recreated by a delayed background task.
+    """
+    with conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute(
+            'SELECT content FROM books_v2 WHERE username=? AND book_key=?',
+            (username, book_key),
+        ).fetchone()
+        if row is None and not create:
+            return False
+        content = json.loads(row[0]) if row else {
+            'key': book_key, 'value': {}, 'meta': {}, 'tags': [],
+            'update_info': {}, 'cache': {},
+        }
+        if mutate(content) is False:
+            return False
+        serialized = json.dumps(content, ensure_ascii=False)
+        if row:
+            conn.execute(
+                'UPDATE books_v2 SET content=?, updated_at=CURRENT_TIMESTAMP '
+                'WHERE username=? AND book_key=?',
+                (serialized, username, book_key),
+            )
+        else:
+            conn.execute(
+                'INSERT INTO books_v2 (id, username, book_key, content) VALUES (?, ?, ?, ?)',
+                (str(uuid.uuid4()), username, book_key, serialized),
+            )
+    return True
+
+
+def save_remote_check(conn, username, book_key, toc_url, remote_id, baseline=0):
+    """Discard results from a source/subscription replaced during the crawl."""
+    def merge(content):
+        update_info = content.get('update_info') or {}
+        if update_info.get('toc_url') != toc_url:
+            return False
+        update_info.update({
+            'last_remote_id': remote_id,
+            'has_update': remote_id > max(baseline, update_info.get('last_local_id', 0)),
+            'updated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+        })
+        content['update_info'] = update_info
+    return mutate_book_content(conn, username, book_key, merge)
 
 # ==========================================
 # 1. 基础类定义 (BaseJsonManager)
@@ -292,7 +343,7 @@ class IsolatedDB:
     def _ensure_table(self):
         """确保 books_v2 表存在"""
         try:
-            with sqlite3.connect(DB_PATH) as conn:
+            with closing(sqlite3.connect(DB_PATH)) as conn:
                 conn.execute('''CREATE TABLE IF NOT EXISTS books_v2 (
                                 id TEXT PRIMARY KEY,
                                 username TEXT NOT NULL,
@@ -323,7 +374,7 @@ class IsolatedDB:
     def get_raw_book(self, username, book_key):
         """获取书籍原始字典（包含 key, value, meta, tags, update_info）"""
         try:
-            with get_db() as conn:
+            with closing(sqlite3.connect(DB_PATH)) as conn:
                 row = conn.execute("SELECT content FROM books_v2 WHERE username=? AND book_key=?", (username, book_key)).fetchone()
                 if row: return json.loads(row[0])
         except: pass
@@ -340,7 +391,7 @@ class IsolatedDB:
             if 'cache' not in content_dict: content_dict['cache'] = {} # [新增] 缓存字段
 
             json_str = json.dumps(content_dict, ensure_ascii=False)
-            with get_db() as conn:
+            with closing(sqlite3.connect(DB_PATH)) as conn:
                 row = conn.execute("SELECT id FROM books_v2 WHERE username=? AND book_key=?", (username, book_key)).fetchone()
                 if row:
                     conn.execute("UPDATE books_v2 SET content=?, updated_at=CURRENT_TIMESTAMP WHERE id=?", (json_str, row[0]))
@@ -366,28 +417,31 @@ class IsolatedDB:
     def save_toc_cache(self, book_key, toc_data, username=None):
         """保存 TOC 缓存和 Meta 到 SQLite"""
         u = username or get_current_user()
-        content = self.get_raw_book(u, book_key)
-        if not content: return False
-        
-        if 'cache' not in content: content['cache'] = {}
-        content['cache']['toc'] = toc_data
-        content['cache']['updated_at'] = int(time.time())
-        
-        # 顺便更新 meta 信息和 value 信息 (如果显示需要)
-        if toc_data and isinstance(toc_data, dict):
-            # 更新 meta 字段 (纯净元数据)
-            if 'author' in toc_data: content['meta']['author'] = toc_data['author']
-            if 'cover' in toc_data: content['meta']['cover'] = toc_data['cover']
-            if 'desc' in toc_data: content['meta']['desc'] = toc_data['desc']
-            if 'latest' in toc_data: content['meta']['latest'] = toc_data['latest']
-            
-            # 同步更新 value 字段 (前端展示用)
-            if 'title' in toc_data: content['value']['title'] = toc_data['title']
-            if 'author' in toc_data: content['value']['author'] = toc_data['author']
-            if 'cover' in toc_data: content['value']['cover'] = toc_data['cover']
-            if 'chapters' in toc_data: content['value']['total_chapters'] = len(toc_data['chapters'])
-            
-        return self.save_raw_book(u, book_key, content)
+        def merge(content):
+            cache = content.setdefault('cache', {})
+            cache.update(toc=toc_data, updated_at=int(time.time()))
+            if isinstance(toc_data, dict):
+                meta = content.setdefault('meta', {})
+                value = content.setdefault('value', {})
+                for field in ('author', 'cover', 'desc', 'latest'):
+                    if field in toc_data:
+                        meta[field] = toc_data[field]
+                for field in ('title', 'author', 'cover'):
+                    if field in toc_data:
+                        value[field] = toc_data[field]
+                if 'chapters' in toc_data:
+                    value['total_chapters'] = len(toc_data['chapters'])
+        return self._mutate_book(u, book_key, merge)
+
+    def _mutate_book(self, username, book_key, mutate, create=False):
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            return mutate_book_content(conn, username, book_key, mutate, create=create)
+        except Exception as exc:
+            error('DB', f'Atomic update failed: {type(exc).__name__}: {exc}')
+            return False
+        finally:
+            conn.close()
 
     def insert(self, key, value, username=None):
         if not key: return {"status": "error", "message": "Key cannot be empty"}
@@ -404,16 +458,18 @@ class IsolatedDB:
         u = username or get_current_user()
         if key.endswith(':meta'):
             real_key = key.replace(':meta', '')
-            content = self.get_raw_book(u, real_key) or {}
-            content['meta'] = json.loads(value) if isinstance(value, str) else value
-            self.save_raw_book(u, real_key, content)
-            return {"status": "success", "message": f"Updated meta: {real_key}"}
+            meta = json.loads(value) if isinstance(value, str) else value
+            def merge_meta(content):
+                content['meta'] = meta
+            saved = self._mutate_book(u, real_key, merge_meta, create=True)
+            return {"status": "success" if saved else "error", "message": f"Updated meta: {real_key}" if saved else "Update failed"}
 
-        content = self.get_raw_book(u, key) or {"value": {}}
-        if isinstance(value, dict): content['value'].update(value)
-        else: content['value']['url'] = value
-        content['value']['updated_at'] = int(time.time())
-        if self.save_raw_book(u, key, content):
+        def merge(content):
+            current = content.setdefault('value', {})
+            if isinstance(value, dict): current.update(value)
+            else: current['url'] = value
+            current['updated_at'] = int(time.time())
+        if self._mutate_book(u, key, merge, create=True):
             return {"status": "success", "message": f"Updated: {key}"}
         return {"status": "error", "message": "Update failed"}
 
