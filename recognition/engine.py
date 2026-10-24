@@ -217,14 +217,21 @@ class RecognitionEngine:
             link_density = link_text_length / max(len(text), 1)
             if link_density > 0.3:
                 continue
-            paragraph_count = len(tag.find_all('p'))
-            score = min(len(text) / 1200, 0.65) + min(paragraph_count / 4, 0.25)
+            # Score readable paragraphs rather than the surrounding navigation
+            # and recommendation text, which otherwise rewards oversized roots.
+            readable_lines = self._normalize_content(self._lines_from_tag(tag))
+            readable_length = len(' '.join(readable_lines))
+            if readable_length < 20:
+                continue
+            score = min(readable_length / 1200, 0.65) + min(len(readable_lines) / 4, 0.25)
             if _CONTENT_HINT.search(' '.join(tag.get('class', [])) + ' ' + (tag.get('id') or '')):
                 score += 0.2
             candidates.append((score, tag))
         if not candidates:
             return [], []
-        score, best = max(candidates, key=lambda item: item[0])
+        # Prefer the tightest container when parent and child contain the same
+        # readable text. Keep all paragraphs, including short dialogue.
+        score, best = max(candidates, key=lambda item: (item[0], -len(item[1].get_text(' ', strip=True))))
         raw_lines = self._lines_from_tag(best)
         lines = self._normalize_content(raw_lines)
         if len(''.join(lines)) < 20:
@@ -251,6 +258,12 @@ class RecognitionEngine:
     def _lines_from_tag(self, tag: Tag) -> list[str]:
         paragraphs = []
         for node in tag.find_all('p'):
+            text = node.get_text(' ', strip=True)
+            anchors = node.find_all('a')
+            if anchors and node.find_parent(['ul', 'ol']):
+                linked_length = sum(len(anchor.get_text(' ', strip=True)) for anchor in anchors)
+                if linked_length / max(len(text), 1) >= 0.8:
+                    continue
             descriptors = []
             for parent in [node, *node.parents]:
                 if not isinstance(parent, Tag):
@@ -260,7 +273,7 @@ class RecognitionEngine:
                     break
             if any(_CONTENT_NOISE_HINT.search(descriptor) for descriptor in descriptors):
                 continue
-            paragraphs.append(node.get_text(' ', strip=True))
+            paragraphs.append(text)
         if len(paragraphs) >= 2:
             return paragraphs
         return tag.get_text('\n', strip=True).splitlines()
