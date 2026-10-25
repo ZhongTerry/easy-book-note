@@ -365,14 +365,21 @@ def reserve_generation(domain, enforce_domain_cooldown):
         conn.execute('BEGIN IMMEDIATE')
         conn.execute('CREATE TABLE IF NOT EXISTS rule_generation_attempts '
                      '(domain TEXT PRIMARY KEY, attempted_at REAL, day TEXT)')
+        conn.execute('CREATE TABLE IF NOT EXISTS rule_generation_daily_usage '
+                     '(day TEXT PRIMARY KEY, count INTEGER NOT NULL)')
+        # Keep the known usage from older versions, then count every request,
+        # including repeated manual requests for the same domain.
+        conn.execute('INSERT OR IGNORE INTO rule_generation_daily_usage '
+                     'SELECT ?, count(*) FROM rule_generation_attempts WHERE day=?', (today, today))
         if enforce_domain_cooldown:
             row = conn.execute('SELECT attempted_at FROM rule_generation_attempts WHERE domain=?', (domain,)).fetchone()
             if row and now - row[0] < _DOMAIN_COOLDOWN_SECONDS:
                 return False
-        count = conn.execute('SELECT count(*) FROM rule_generation_attempts WHERE day=?', (today,)).fetchone()[0]
+        count = conn.execute('SELECT count FROM rule_generation_daily_usage WHERE day=?', (today,)).fetchone()[0]
         if count >= _DAILY_LIMIT:
             return False
         conn.execute('INSERT OR REPLACE INTO rule_generation_attempts VALUES (?, ?, ?)', (domain, now, today))
+        conn.execute('UPDATE rule_generation_daily_usage SET count=count+1 WHERE day=?', (today,))
     return True
 
 

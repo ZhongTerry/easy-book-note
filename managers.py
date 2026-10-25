@@ -857,16 +857,22 @@ class CacheManager:
             error("Cache", f"Index Write Error: {e}")
 
     def _index_set(self, filename, url):
-        with self._index_lock:
-            index = self._load_index()
+        with self._locked_index() as index:
             index[filename] = url
-            self._save_index(index)
 
     def _index_pop(self, filename):
-        with self._index_lock:
+        with self._locked_index() as index:
+            index.pop(filename, None)
+
+    @contextmanager
+    def _locked_index(self):
+        # The Python lock only protects threads in one Gunicorn worker.
+        with self._index_lock, closing(sqlite3.connect(
+                self.index_file + '.lock.sqlite', timeout=30)) as lock, lock:
+            lock.execute('BEGIN IMMEDIATE')
             index = self._load_index()
-            if index.pop(filename, None) is not None:
-                self._save_index(index)
+            yield index
+            self._save_index(index)
 
     def get(self, url):
         fp = self._get_filename(url)
@@ -909,14 +915,15 @@ class CacheManager:
             return 0
         from urllib.parse import urlsplit
         removed = 0
-        with self._index_lock:
-            index = self._load_index()
+        with self._locked_index() as index:
             for name, url in list(index.items()):
                 try:
                     host = (urlsplit(url).hostname or '').lower()
                 except Exception:
                     continue
                 if host != domain.lower():
+                    continue
+                if not re.fullmatch(r'[a-f0-9]{32}\.json', name):
                     continue
                 fp = os.path.join(self.cache_dir, name)
                 try:
@@ -926,8 +933,6 @@ class CacheManager:
                     removed += 1
                 except OSError as exc:
                     error("Cache", f"Purge Error: {exc}")
-            if removed:
-                self._save_index(index)
         if removed:
             info("Cache", f"按域名清理临时缓存: {domain} -> {removed} 条")
         return removed
@@ -935,7 +940,7 @@ class CacheManager:
     def cleanup_expired(self):
         now = time.time(); count = 0; size = 0
         for f in os.listdir(self.cache_dir):
-            if f == 'url_index.json':
+            if f.startswith('url_index'):
                 continue  # 旁路索引不是缓存条目
             fp = os.path.join(self.cache_dir, f)
             if os.path.isfile(fp) and now - os.path.getmtime(fp) > self.ttl:
@@ -2652,6 +2657,7 @@ class TaskManager:
             # 序列化 result
             if 'result' in payload:
                 payload['result'] = json.dumps(payload['result'], ensure_ascii=False) if payload['result'] is not None else ''
+            payload = {key: '' if value is None else value for key, value in payload.items()}
             self.r.hset(self._redis_key(task_id), mapping=payload)
             self.r.expire(self._redis_key(task_id), expire)
         except Exception as e:

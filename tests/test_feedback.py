@@ -23,6 +23,23 @@ class FeedbackTestBase(unittest.TestCase):
 
 
 class TestFeedbackRecord(FeedbackTestBase):
+    def test_pending_task_can_be_read_by_another_worker(self):
+        shared = {}
+        redis = Mock()
+        def store(key, mapping):
+            self.assertNotIn(None, mapping.values())
+            shared[key] = {k: str(v) for k, v in mapping.items()}
+        redis.hset.side_effect = store
+        redis.hgetall.side_effect = lambda key: shared.get(key, {}).copy()
+        writer = managers.TaskManager.__new__(managers.TaskManager)
+        reader = managers.TaskManager.__new__(managers.TaskManager)
+        for worker in (writer, reader):
+            worker.use_redis = True
+            worker.r = redis
+            worker.tasks = {}
+        writer._set_task('feedback-test', {'status': 'pending', 'result': None, 'error': None})
+        self.assertEqual(reader.get_status('feedback-test')['status'], 'pending')
+
     def test_record_and_outcome_roundtrip(self):
         fid = feedback_service.record_feedback(
             'https://www.bqquge.org/671/676855', 'bk', 'ztrztr',

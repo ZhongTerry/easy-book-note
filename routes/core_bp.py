@@ -1413,7 +1413,9 @@ def api_feedback_submit():
     if not url or not is_safe_url(url):
         return jsonify({"status": "error", "msg": "URL 未通过安全校验"}), 403
     from services import feedback as feedback_service
-    from services.rule_generator import feedback_generation_task, reserve_generation
+    from services.rule_generator import feedback_generation_task, reserve_generation, is_configured
+    if not is_configured():
+        return jsonify({"status": "error", "msg": "AI 解析尚未配置模型地址与密钥"}), 503
     domain = urlsplit(url).hostname or ''
     if not reserve_generation(domain.lower(), enforce_domain_cooldown=False):
         return jsonify({"status": "error", "msg": "今日反馈生成次数已达上限"}), 429
@@ -1421,6 +1423,8 @@ def api_feedback_submit():
         url, payload.get('key') or '', managers.get_current_user(), domain=domain.lower(),
         note=payload.get('note') or '',
     )
+    if feedback_id is None:
+        return jsonify({"status": "error", "msg": "反馈保存失败，请稍后重试"}), 503
     task_id = managers.task_manager.submit(
         feedback_generation_task, feedback_id, url, crawler,
         username=managers.get_current_user(),
