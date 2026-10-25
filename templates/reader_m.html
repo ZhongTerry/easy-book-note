@@ -578,6 +578,7 @@
             <input id="sourceTitleInput" placeholder="书名识别错误？可手动输入" style="flex:1; height:34px; border:1px solid var(--border); border-radius:8px; padding:0 10px; font-size:12px; background:var(--menu-bg); color:var(--text);" />
             <button class="p-btn p-btn-sm" onclick="openSourceModal(true)">重新搜索</button>
         </div>
+        <div id="sourceMeta" style="padding:6px 20px 0; font-size:11px; color:#8a9aa5;">正在解析书名与章节…</div>
         <div class="drawer-list" id="sourceList">
             <div style="text-align:center; padding:20px; color:#999;">搜索中...</div>
         </div>
@@ -1293,51 +1294,145 @@
     }
 
     // 换源
-    // === 换源逻辑 (修复版) ===
-    
+    // === 换源逻辑（验证前置：与 PC 端同一套接口与交互） ===
+    let sourceRequestController = null;
+    let sourceApplyBusy = false;
+    let sourceChapterId = null;
+
     function getManualSourceTitle() {
         const input = document.getElementById('sourceTitleInput');
         return input ? input.value.trim() : '';
     }
+    function saveManualSourceTitle(value) {
+        try {
+            const key = `m_manual_source_title_${dbKey || 'unknown'}`;
+            if (!key) return;
+            if (value) localStorage.setItem(key, value);
+            else localStorage.removeItem(key);
+        } catch (e) {}
+    }
+    function loadManualSourceTitle() {
+        try {
+            const input = document.getElementById('sourceTitleInput');
+            const saved = localStorage.getItem(`m_manual_source_title_${dbKey || 'unknown'}`);
+            if (saved && input && !input.value) input.value = saved;
+        } catch (e) {}
+    }
+    function escapeSourceHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML;
+    }
 
     function openSourceModal(force = false) {
-        // 1. 纯 Class 操作：添加 .active
         document.getElementById('sourceOverlay').classList.add('active');
         document.getElementById('sourceModal').classList.add('active');
-        
-        // 2. 发起请求 (保持不变)
-        const manualTitle = getManualSourceTitle();
-        fetch('/api/source/list', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                key: dbKey,
-                url: currentUrl,
-                title: document.getElementById('chapter-title').innerText,
-                manual_book_name: manualTitle,
-                force
-            })
-        }).then(r=>r.json()).then(json => {
-            const list = document.getElementById('sourceList');
-            if(json.status==='success') {
-                list.innerHTML = json.data.map(src => 
-                    `<div class="source-item" onclick="confirmSwitch('${src.url}')">
-                        <div><b>${src.source}</b><br><small>${src.title}</small></div>
-                        <span style="color:var(--accent)">切换</span>
-                    </div>`
-                ).join('');
-            } else { list.innerHTML = `<div style="text-align:center;padding:20px;">${json.msg}</div>`; }
-        });
+        loadManualSourceTitle();
+        loadSourceList(force);
     }
 
     function closeSourceModal() {
-        // 1. 纯 Class 操作：移除 .active
         // 绝对不要去动 style.opacity，那样会留下永久的内联样式！
         document.getElementById('sourceOverlay').classList.remove('active');
         document.getElementById('sourceModal').classList.remove('active');
     }
-    async function confirmSwitch(newUrl) {
-        await fetch('/update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: newUrl }) });
-        location.href = `/read?url=${encodeURIComponent(newUrl)}&key=${encodeURIComponent(dbKey)}`;
+
+    async function loadSourceList(force = false) {
+        sourceRequestController?.abort();
+        const controller = new AbortController();
+        sourceRequestController = controller;
+        const timeout = setTimeout(() => controller.abort(), 90000);
+        const list = document.getElementById('sourceList');
+        const meta = document.getElementById('sourceMeta');
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">🔍 解析书名并搜索候选源…</div>';
+        const manualTitle = getManualSourceTitle();
+        try {
+            const res = await fetch('/api/source/list', {
+                signal: controller.signal,
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    key: dbKey,
+                    url: currentUrl,
+                    title: chapterTitle || document.getElementById('chapter-title').innerText,
+                    manual_book_name: manualTitle,
+                    force
+                })
+            });
+            const json = await res.json();
+            if (controller !== sourceRequestController) return;
+            if (!res.ok || json.status !== 'success') {
+                list.innerHTML = '<div style="text-align:center; padding:16px; color:#8a4b08;">' + escapeSourceHtml(json.msg || json.message || '换源失败') + '</div>' +
+                    '<button class="p-btn p-btn-sm" style="margin:0 auto; display:block;" onclick="openSourceModal()">重试</button>';
+                return;
+            }
+
+            sourceChapterId = json.chapter_id;
+            meta.innerHTML = '《<b>' + escapeSourceHtml(json.book_name) + '</b>》 · 第 ' + json.chapter_id + ' 章 · ' +
+                '验证通过 <b>' + json.data.length + '</b>/' + json.searched + ' 个';
+            if (json.name_source !== 'manual' && json.book_name) {
+                const input = document.getElementById('sourceTitleInput');
+                if (input && input.value.trim() !== json.book_name) {
+                    input.value = json.book_name;
+                    saveManualSourceTitle(json.book_name);
+                }
+            }
+
+            if (!json.data.length) {
+                list.innerHTML = '<div style="text-align:center; padding:16px; color:#8a4b08;">候选源里没有站点包含这一章。可稍后用"重新搜索"再试。</div>';
+                return;
+            }
+            list.innerHTML = json.data.map(src => {
+                const conf = Math.round((src.confidence || 0) * 100);
+                const confColor = conf >= 85 ? '#0f766e' : (conf >= 60 ? '#d97706' : '#b91c1c');
+                return '<div class="source-item" data-url="' + escapeSourceHtml(src.url || '') + '" data-name="' + escapeSourceHtml(src.source || '') + '">' +
+                    '<div><b>' + escapeSourceHtml(src.source || '') + '</b>' +
+                    '<span style="font-size:11px; font-weight:700; padding:1px 7px; border-radius:999px; margin-left:6px; background:' + confColor + '1a; color:' + confColor + ';">' + conf + '%</span><br>' +
+                    '<small>✓ ' + escapeSourceHtml(src.title || '') + '</small></div>' +
+                    '<span style="color:var(--accent)">切换</span></div>';
+            }).join('');
+            list.querySelectorAll('.source-item').forEach(item => {
+                item.addEventListener('click', () => applySource(item.dataset.url, item.dataset.name));
+            });
+        } catch (e) {
+            if (controller !== sourceRequestController) return;
+            list.innerHTML = '<div style="text-align:center; padding:16px; color:#b91c1c;">' +
+                (e.name === 'AbortError' ? '换源搜索超时，请重试。' : '加载失败: ' + escapeSourceHtml(e.message)) + '</div>' +
+                '<button class="p-btn p-btn-sm" style="margin:0 auto; display:block;" onclick="openSourceModal()">重试</button>';
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    async function applySource(newUrl, sourceName) {
+        if (sourceApplyBusy) return;
+        sourceApplyBusy = true;
+        sourceRequestController?.abort();
+        const list = document.getElementById('sourceList');
+        list.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">⏳ 正在前往 ' +
+            escapeSourceHtml(sourceName || '新源') + '…<br><small style="color:#bbb;">加载目标章节验证可用性</small></div>';
+        try {
+            const res = await fetch('/api/source/apply', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ key: dbKey, new_url: newUrl, chapter_id: sourceChapterId }),
+            });
+            const json = await res.json();
+            if (json.status === 'applied') {
+                showToast('✅ 已切换: ' + (json.chapter_title || ''));
+                setTimeout(() => {
+                    location.href = '/read?url=' + encodeURIComponent(json.new_url) + '&key=' + encodeURIComponent(dbKey) + '&force=true';
+                }, 600);
+                return;
+            }
+            showToast(json.message || '切换失败');
+            loadSourceList();
+        } catch (e) {
+            showToast('换源请求异常: ' + e.message);
+            loadSourceList();
+        } finally {
+            sourceApplyBusy = false;
+        }
     }
 
     // TTS

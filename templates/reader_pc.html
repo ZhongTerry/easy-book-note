@@ -1164,6 +1164,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             <input id="sourceTitleInput" class="p-input source-title-input" placeholder="书名识别错误？可手动输入" />
             <button class="source-search-btn" onclick="loadSourceList(true)">重新搜索</button>
         </div>
+        <div id="sourceMeta" style="font-size:12px; color:#8a9aa5; padding:6px 2px 0;">正在解析书名与章节…</div>
         <div id="sourceLoading" style="text-align:center; padding:20px; color:#999;">🔍 正在匹配可用源站...（预计 5~15 秒）</div>
         <div id="sourceList"></div>
     </div>
@@ -2163,8 +2164,10 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         }
     }
 
-    // === 换源逻辑 ===
-    let switchContext = {}; // 上下文
+    // === 换源逻辑（验证前置：列表只显示真实包含当前章节的源，点击即切） ===
+    let sourceRequestController = null;
+    let sourceApplyBusy = false;
+    let sourceChapterId = null;
 
     function getSourceTitleStorageKey() {
         return `pc_manual_source_title_${dbKey || 'unknown'}`;
@@ -2198,10 +2201,14 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         loadManualSourceTitle();
         bindManualSourceTitleInput();
     }
-
     function getManualSourceTitle() {
         const input = document.getElementById('sourceTitleInput');
         return input ? input.value.trim() : '';
+    }
+    function escapeSourceHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML;
     }
 
     function triggerSourceModal() {
@@ -2210,21 +2217,19 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         initManualSourceTitle();
         loadSourceList();
     }
-    let sourceRequestController = null;
-    let sourceSwitchBusy = false;
+
     async function loadSourceList(force = false) {
         sourceRequestController?.abort();
         const controller = new AbortController();
         sourceRequestController = controller;
-        sourceSwitchBusy = false;
-        const timeout = setTimeout(() => controller.abort(), 60000);
+        const timeout = setTimeout(() => controller.abort(), 90000);
         const list = document.getElementById('sourceList');
         const loading = document.getElementById('sourceLoading');
+        const meta = document.getElementById('sourceMeta');
         list.innerHTML = ''; list.style.display = 'block'; loading.style.display = 'block';
-        loading.innerText = '🔍 正在聚合全网搜索结果...';
+        loading.innerText = '🔍 解析书名并搜索候选源…';
         const manualTitle = getManualSourceTitle();
-        saveManualSourceTitle(manualTitle);
-        
+
         try {
             const res = await fetch('/api/source/list', {
                 signal: controller.signal,
@@ -2240,108 +2245,96 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
             });
             const json = await res.json();
             if (controller !== sourceRequestController || controller.signal.aborted) return;
-            if (!res.ok) throw new Error(json.msg || json.message || `HTTP ${res.status}`);
-            loading.style.display = 'none';
-            if (json.status === 'success') {
-                switchContext = json.match_info || {};
-                switchContext.current_title = switchContext.current_title || document.getElementById('chapterTitle').innerText;
-                list.innerHTML = json.data.map((src, index) => {
-                    let domain = '';
-                    try { domain = new URL(src.url).hostname; } catch(e) { domain = src.url; }
-                    
-                    return `
-                    <div role="button" tabindex="0" data-source-index="${index}"
-                         style="padding:15px; border:1px solid #eee; border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; background:#fff;" 
-                         onmouseover="this.style.borderColor='var(--accent)'; this.style.boxShadow='0 4px 12px rgba(0,0,0,0.05)'" 
-                         onmouseout="this.style.borderColor='#eee'; this.style.boxShadow='none'">
-                        
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                            <div style="font-weight:bold; color: #333; font-size:15px;">${escapeHtml(src.source || '')}</div>
-                            <div style="font-size:12px; color:#888;">${escapeHtml(src.description || '')}</div>
-                        </div>
+            if (!res.ok || json.status !== 'success') {
+                loading.style.display = 'none';
+                list.innerHTML = '<div style="text-align:center; padding:20px; color:#8a4b08; background:#fdf6ec; border-radius:8px;">' + escapeSourceHtml(json.msg || json.message || '换源失败') + '</div>' +
+                    '<button class="source-search-btn" style="margin:10px auto; display:block;" onclick="loadSourceList()">重试</button>';
+                return;
+            }
 
-                        <div style="font-size:13px; color:#555; margin-bottom:8px;">${escapeHtml(src.title || '')}</div>
-                        
-                        <div style="font-size:11px; color:#999; background:#f9f9f9; padding:4px 8px; border-radius:4px; font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                            ${escapeHtml(src.url || '')}
-                        </div>
-                    </div>`;
-                }).join('');
-                list.querySelectorAll('[data-source-index]').forEach(item => {
-                    const src = json.data[Number(item.dataset.sourceIndex)];
-                    item.addEventListener('click', () => requestSwitch(src.url || '', src.source || ''));
-                    item.addEventListener('keydown', event => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            item.click();
-                        }
-                    });
+            sourceChapterId = json.chapter_id;
+            meta.innerHTML = '《<b>' + escapeSourceHtml(json.book_name) + '</b>》 · 目标 第 ' + json.chapter_id + ' 章 · ' +
+                '候选 ' + json.searched + ' 个，验证通过 <b>' + json.data.length + '</b> 个' +
+                (json.name_source === 'manual' ? ' · 手动书名' : '');
+            if (json.name_source !== 'manual' && json.book_name) {
+                const input = document.getElementById('sourceTitleInput');
+                if (input && input.value.trim() !== json.book_name) {
+                    input.value = json.book_name;
+                    saveManualSourceTitle(json.book_name);
+                }
+            }
+
+            loading.style.display = 'none';
+            if (!json.data.length) {
+                list.innerHTML = '<div style="text-align:center; padding:20px; color:#8a4b08;">候选源里没有站点包含这一章。可点"重新搜索"换个时机再试，或用书架体检里的批量换源。</div>';
+                return;
+            }
+            list.innerHTML = json.data.map(src => {
+                const conf = Math.round((src.confidence || 0) * 100);
+                const confColor = conf >= 85 ? '#0f766e' : (conf >= 60 ? '#d97706' : '#b91c1c');
+                return '<div role="button" tabindex="0" data-source-url="' + escapeSourceHtml(src.url || '') + '" data-source-name="' + escapeSourceHtml(src.source || '') + '"' +
+                    ' style="padding:14px; border:1px solid #eee; border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all 0.2s; background:#fff;"' +
+                    ' onmouseover="this.style.borderColor=\'var(--accent)\'; this.style.boxShadow=\'0 4px 12px rgba(0,0,0,0.05)\'"' +
+                    ' onmouseout="this.style.borderColor=\'#eee\'; this.style.boxShadow=\'none\'">' +
+                    '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">' +
+                    '<div style="font-weight:bold; color:#333; font-size:15px;">' + escapeSourceHtml(src.source || '') + '</div>' +
+                    '<div style="font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; background:' + confColor + '1a; color:' + confColor + ';">' + conf + '% 匹配</div>' +
+                    '</div>' +
+                    '<div style="font-size:13px; color:#555; margin-bottom:8px;">✓ ' + escapeSourceHtml(src.title || '') + '</div>' +
+                    '<div style="font-size:11px; color:#999; background:#f9f9f9; padding:4px 8px; border-radius:4px; font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">' +
+                    escapeSourceHtml(src.url || '') + '</div></div>';
+            }).join('');
+            list.querySelectorAll('[data-source-url]').forEach(item => {
+                item.addEventListener('click', () => applySource(item.dataset.sourceUrl, item.dataset.sourceName));
+                item.addEventListener('keydown', event => {
+                    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.click(); }
                 });
-            } else { list.innerHTML = `<div style="text-align:center; padding: 20px;">${escapeHtml(json.msg || '')}</div>`; }
-        } catch(e) {
+            });
+        } catch (e) {
             if (controller !== sourceRequestController) return;
             loading.style.display = 'none';
-            list.innerText = e.name === 'AbortError' ? '换源搜索超时，请点击刷新重试。' : `换源列表加载失败：${e.message}。请点击刷新重试。`;
-            showToast("换源服务暂时不可用");
+            list.innerHTML = (e.name === 'AbortError' ? '换源搜索超时，请点击重试。' : '换源列表加载失败：' + escapeSourceHtml(e.message) + '。') +
+                '<button class="source-search-btn" style="margin:10px auto; display:block;" onclick="loadSourceList()">重试</button>';
         } finally {
             clearTimeout(timeout);
         }
     }
-    async function requestSwitch(targetUrl, sourceName) {
-        if (sourceSwitchBusy) return;
-        sourceSwitchBusy = true;
+
+    async function applySource(newUrl, sourceName) {
+        if (sourceApplyBusy) return;
+        sourceApplyBusy = true;
         sourceRequestController?.abort();
-        const controller = new AbortController();
-        sourceRequestController = controller;
-        const timeout = setTimeout(() => controller.abort(), 60000);
         const list = document.getElementById('sourceList');
         const loading = document.getElementById('sourceLoading');
-        
-        list.parentElement.scrollTop = 0; // 滚回顶部
         list.style.display = 'none';
         loading.style.display = 'block';
-        loading.innerHTML = `⏳ 正在前往 ${escapeHtml(sourceName || '')}<br>尝试匹配章节...`;
-
+        loading.innerHTML = '⏳ 正在前往 ' + escapeSourceHtml(sourceName || '新源') + '<br>加载目标章节验证可用性…';
         try {
-            const res = await fetch('/api/source/confirm_switch', {
-                signal: controller.signal,
+            const res = await fetch('/api/source/apply', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    target_url: targetUrl,
-                    current_id: switchContext.current_id,
-                    current_title: switchContext.current_title
-                })
+                body: JSON.stringify({ key: dbKey, new_url: newUrl, chapter_id: sourceChapterId }),
             });
-            
             const json = await res.json();
-            if (controller !== sourceRequestController || controller.signal.aborted) return;
-            if (!res.ok) throw new Error(json.msg || json.message || `HTTP ${res.status}`);
-            
-            if (json.status === 'success') {
-                loading.innerText = '✅ 跳转中...';
-                const saved = await fetch('/update', { signal: controller.signal, method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ key: dbKey, value: json.new_url }) });
-                const savedResult = await saved.json();
-                if (controller !== sourceRequestController || controller.signal.aborted) return;
-                if (!saved.ok || savedResult.status !== 'success') throw new Error(savedResult.msg || savedResult.message || '换源进度保存失败');
-                window.location.href = `/read?url=${encodeURIComponent(json.new_url)}&key=${encodeURIComponent(dbKey)}`;
-            } else {
-                showToast(json.msg || "切换失败");
-                loading.style.display = 'none';
-                list.style.display = 'block';
+            if (json.status === 'applied') {
+                loading.innerText = '✅ 已切换: ' + (json.chapter_title || '') + (json.note ? ' · ' + json.note : '');
+                setTimeout(() => {
+                    window.location.href = '/read?url=' + encodeURIComponent(json.new_url) + '&key=' + encodeURIComponent(dbKey) + '&force=true';
+                }, 700);
+                return;
             }
+            showToast(json.message || '切换失败');
+            loading.style.display = 'none';
+            list.style.display = 'block';
         } catch (e) {
-            if (controller !== sourceRequestController) return;
-            showToast(e.name === 'AbortError' ? '换源请求超时，请重试' : e.message);
+            showToast('换源请求异常: ' + e.message);
             loading.style.display = 'none';
             list.style.display = 'block';
         } finally {
-            clearTimeout(timeout);
-            if (controller === sourceRequestController) sourceSwitchBusy = false;
+            sourceApplyBusy = false;
         }
     }
 
-    // async function confirmSwitch(newUrl) { ... }
     // === 统计与热力图 ===
     async function loadStats() {
         const grid = document.getElementById('heatmapGrid');

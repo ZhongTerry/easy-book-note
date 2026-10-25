@@ -1002,179 +1002,72 @@ def update():
     
     return jsonify(res)
 
-@core_bp.route('/api/switch_source', methods=['POST'])
-@login_required
-def api_switch_source():
-    current_url = request.json.get('url')
-    book_key = request.json.get('key')
-    
-    if not current_url or not book_key:
-        return jsonify({"status": "error", "msg": "Missing params"})
-
-    if not is_safe_url(current_url):
-        return jsonify({"status": "error", "msg": "Illegal URL"}), 403
-
-    try:
-        # 1. 获取当前书名 (从书单或缓存拿，或者重新爬当前页)
-        # 为了准确，我们先尝试从缓存拿当前页信息
-        book_name = ""
-        current_id = -1
-        
-        cached_page = managers.cache.get(current_url)
-        if cached_page:
-            # 尝试从页面标题提取书名 (通常格式: 第xx章 标题 - 书名 - 网站名)
-            # 这步比较难，如果缓存里没存书名，我们只能用 SearchHelper 的 key 反推或者让前端传
-            # 简单起见，我们用 key (拼音) 去书单里反查书名，或者让用户前端传书名
-            pass
-            
-        # 更好的方案：前端传 book_title 过来。
-        # 如果前端没传，我们去书单管理器里查这个 key 对应的书名
-        book_name = request.json.get('title')
-        if not book_name:
-             # 尝试从书单反查
-             all_lists = managers.booklist_manager.load()
-             for lid, ldata in all_lists.items():
-                 for book in ldata.get('books', []):
-                     if book['key'] == book_key:
-                         book_name = book['title']
-                         break
-                 if book_name: break
-        
-        if not book_name:
-            return jsonify({"status": "error", "msg": "无法获取书名，请先将书加入书单"})
-
-        # 2. 获取当前章节 ID
-        if cached_page and cached_page.get('title'):
-             current_id = parse_chapter_id(cached_page['title'])
-        
-        if current_id <= 0:
-            return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
-
-        # 3. 执行换源
-        result = crawler.search_and_switch_source(book_name, current_id)
-        
-        if result:
-            # 找到新源了！
-            new_url = result['new_url']
-            
-            # 4. 更新数据库 (无缝衔接)
-            managers.db.update(book_key, new_url)
-            
-            # 5. 顺便更新下缓存 (预热)
-            # threading.Thread(target=crawler.run, args=(new_url,)).start()
-            
-            return jsonify({
-                "status": "success", 
-                "new_url": new_url,
-                "msg": f"已切换至: {result['source_name']}"
-            })
-        else:
-            return jsonify({"status": "failed", "msg": "全网未找到该章节的其他源"})
-
-    except Exception as e:
-        error("System", f"Switch Error: {e}")
-        return jsonify({"status": "error", "msg": str(e)})
-    
-# @core_bp.route('/api/source/list', methods=['POST'])
-# @login_required
 @core_bp.route('/api/source/list', methods=['POST'])
 @login_required
 def api_source_list():
-    current_url = request.json.get('url')
-    book_key = request.json.get('key')
-    frontend_title = request.json.get('title', '') # 章节标题
-    manual_book_name = (request.json.get('manual_book_name') or '').strip()
-    force = bool(request.json.get('force'))
-    
-    if not current_url: return jsonify({"status": "error", "msg": "参数错误"})
+    """换源候选：搜索后立即做章节级验证，只返回真实包含当前章节的源。"""
+    payload = request.json or {}
+    current_url = (payload.get('url') or '').strip()
+    book_key = (payload.get('key') or '').strip()
+    chapter_title = (payload.get('title') or '').strip()
+    manual_book_name = (payload.get('manual_book_name') or '').strip()
+    force = bool(payload.get('force'))
+
+    if not current_url or not book_key:
+        return jsonify({"status": "error", "msg": "参数错误"})
     if not is_safe_url(current_url):
         return jsonify({"status": "error", "msg": "Illegal URL"}), 403
 
-    # === 核心逻辑：多级探测真实书名 ===
-    book_name = None
-    
-    # 1. 尝试从书单反查 (用户定义的标题最优先)
-    all_lists = managers.booklist_manager.load()
-    for list_data in all_lists.values():
-        for b in list_data.get('books', []):
-            if b['key'] == book_key:
-                book_name = b['title']
-                break
-        if book_name: break
+    from services.source_switch import find_sources
 
-    # 2. 手动书名优先 (避免现场爬取/命中缓存)
-    if manual_book_name:
-        book_name = manual_book_name
+    def progress_cb(progress, msg):
+        info("SourceSwitch", f"[{progress}%] {msg}")
 
-    # 3. 【关键补丁】如果书单没找到，直接“现场爬取”当前阅读页提取书名
-    if not book_name or re.match(r'^[a-zA-Z0-9_]+$', book_name):
-        error("Switch", f"无法从本地获取书名，正在现场爬取源站: {current_url}")
-        try:
-            # 现场爬取当前页面内容
-            # 注意：这里 run 会自动识别是走插件还是走通用逻辑
-            temp_data = crawler.run(current_url)
-            if temp_data and temp_data.get('book_name'):
-                book_name = temp_data['book_name']
-                info("Switch", f"🎯 现场抓取书名成功: {book_name}")
-        except Exception as e:
-            error("Switch", f"现场抓取书名失败: {e}")
-
-    # 3. 最终校验
-    # 如果还是拿不到中文（全是字母数字），说明真的没法搜
-    if not book_name or re.match(r'^[a-zA-Z0-9_]+$', str(book_name)):
-        return jsonify({
-            "status": "error", 
-            "msg": f"无法识别书名(当前:{book_name})。建议手动将本书加入书单并填写中文书名。"
-        })
-
-    # === 获取当前章节 ID ===
-    current_id = parse_chapter_id(frontend_title)
-    
-    # if current_id <= 0:
-    #    return jsonify({"status": "error", "msg": "无法识别当前章节ID"})
-
-    # === 搜索 ===
-    info("Switch", f"准备搜索新源，关键词: {book_name}")
-    # 改为直接返回搜索结果，不做耗时的验证
-    from spider_core import searcher
     try:
-        sources = searcher.search_bing(book_name) if force else searcher.search_bing_cached(book_name)
+        result = find_sources(
+            crawler, current_url, book_key, chapter_title,
+            manual_book_name=manual_book_name, force=force,
+            progress_cb=progress_cb,
+        )
     except SearxngSearchError as exc:
         warn('Search', str(exc))
         return jsonify({
             'status': 'error', 'code': 'SEARXNG_UNAVAILABLE',
             'msg': str(exc), 'message': str(exc),
         }), 502
-    
-    if not sources:
-        return jsonify({"status": "failed", "msg": "全网未找到相关书籍"})
-        
+    except LookupError as exc:
+        return jsonify({"status": "failed", "msg": str(exc)})
+    except Exception as exc:
+        error("SourceSwitch", f"换源搜索异常: {type(exc).__name__}: {exc}")
+        return jsonify({"status": "error", "msg": f"换源搜索异常: {exc}"}), 500
+
     return jsonify({
-        "status": "success", 
-        "data": sources,
-        # 回传上下文，供前端二次确认使用
-        "match_info": {
-            "current_id": current_id,
-            "current_title": frontend_title
-        }
+        "status": "success",
+        "book_name": result['book_name'],
+        "name_source": result['name_source'],
+        "chapter_id": result['chapter_id'],
+        "data": result['sources'],
+        "searched": result['searched'],
     })
 
-@core_bp.route('/api/source/confirm_switch', methods=['POST'])
+@core_bp.route('/api/source/apply', methods=['POST'])
 @login_required
-def api_confirm_switch():
-    data = request.json
-    target_url = data.get('target_url')
-    current_id = data.get('current_id', -1)
-    current_title = data.get('current_title', '')
-    
-    if not target_url: return jsonify({"status": "error", "msg": "Target URL missing"})
+def api_source_apply():
+    """应用换源：验证新章节可用后更新书源，旧缓存清理，进度保留。"""
+    payload = request.json or {}
+    book_key = (payload.get('key') or '').strip()
+    new_url = (payload.get('new_url') or '').strip()
+    expected_id = payload.get('chapter_id')
+    if not book_key or not new_url:
+        return jsonify({"status": "error", "msg": "参数错误"})
 
-    new_url = crawler.find_best_match(target_url, current_id, current_title)
-    
-    if new_url:
-        return jsonify({"status": "success", "new_url": new_url})
-    else:
-        return jsonify({"status": "failed", "msg": "无法解析目标源"})
+    from services.source_switch import apply_switch
+    result = apply_switch(
+        managers.get_current_user(), book_key, new_url, crawler,
+        expected_id=expected_id if isinstance(expected_id, int) else None,
+    )
+    status = 200 if result.get('status') == 'applied' else 422
+    return jsonify(result), status
 
 @core_bp.route('/api/history/versions', methods=['POST'])
 @login_required

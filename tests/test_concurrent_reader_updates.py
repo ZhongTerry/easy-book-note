@@ -134,9 +134,10 @@ class TestSourceSearchFailure(unittest.TestCase):
         ])
         with patch('routes.core_bp.is_safe_url', return_value=True), \
              patch('routes.core_bp.managers.booklist_manager.load', return_value={}), \
-             patch('routes.core_bp.searcher.search_bing_cached', side_effect=exc):
+             patch('spider_core.searcher.search_bing_cached', side_effect=exc):
             response = client.post('/api/source/list', json={
-                'url': 'https://example.test/1', 'manual_book_name': '测试作品',
+                'url': 'https://example.test/1', 'key': 'somebook',
+                'manual_book_name': '测试作品', 'title': '第12章 测试作品',
             })
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json['code'], 'SEARXNG_UNAVAILABLE')
