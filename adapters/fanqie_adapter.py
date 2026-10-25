@@ -83,7 +83,7 @@ class FanqieLocalAdapter:
     def _api_get(self, path, params):
         """带熔断的微服务 GET；熔断期内直接返回 None，不发起网络请求。"""
         if _breaker_open():
-            return None
+            return self._web_catalog(params.get('book_id')) if path == '/get_catalog' else None
         try:
             resp = requests.get(
                 f"{self.API_HOST}{path}",
@@ -91,11 +91,53 @@ class FanqieLocalAdapter:
                 headers=self._get_headers(),
                 timeout=10
             )
-        except Exception as e:
+        except Exception:
             _breaker_record(False)
+            if path == '/get_catalog':
+                return self._web_catalog(params.get('book_id'))
             raise
-        _breaker_record(resp.status_code == 200)
+        ok = False
+        if resp.status_code == 200:
+            try:
+                payload = resp.json()
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                ok = isinstance(payload, dict) and payload.get('code') == 0
+            except (ValueError, TypeError):
+                pass
+        _breaker_record(ok)
+        if not ok and path == '/get_catalog' and resp.status_code not in (401, 403):
+            fallback = self._web_catalog(params.get('book_id'))
+            if fallback is not None:
+                return fallback
         return resp
+
+    def _web_catalog(self, book_id):
+        """Public website directory fallback; never forward the local API token."""
+        if not book_id or not str(book_id).isdigit():
+            return None
+        try:
+            response = requests.get(
+                'https://fanqienovel.com/api/reader/directory/detail',
+                params={'bookId': str(book_id)}, timeout=10,
+                headers={'User-Agent': 'Mozilla/5.0'},
+            )
+            data = response.json()
+            if response.status_code != 200 or data.get('code') != 0:
+                return None
+            chapters = [
+                {'item_id': str(item['itemId']), 'title': item.get('title', '')}
+                for volume in (data.get('data') or {}).get('chapterListWithVolume', [])
+                if isinstance(volume, list)
+                for item in volume if isinstance(item, dict) and item.get('itemId')
+            ]
+            if not chapters:
+                return None
+            response._content = json.dumps({'code': 0, 'data': {'item_data_list': chapters}}, ensure_ascii=False).encode('utf-8')
+            response.encoding = 'utf-8'
+            return response
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            return None
 
     def can_handle(self, url):
         return "fanqienovel.com" in url or "fqnovel.com" in url
@@ -405,7 +447,8 @@ class FanqieLocalAdapter:
                 except Exception as json_err:
                     error("FanqieLocal", f"内容接口 JSON 解析失败: {json_err}")
             else:
-                error("FanqieLocal", f"内容接口返回错误: {resp.status_code}")
+                if resp is not None:
+                    error("FanqieLocal", f"内容接口返回错误: {resp.status_code}")
                 
         except Exception as e:
             error("FanqieLocal", f"正文请求错误: {e}")
