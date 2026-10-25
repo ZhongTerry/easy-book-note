@@ -102,10 +102,10 @@ class TestGenerateRule(RuleGenerationTestBase):
             self.assertEqual(second['status'], 'active', second)
 
     def test_auto_trigger_respects_domain_cooldown(self):
-        self.assertTrue(rule_generator._reserve_generation('cool.example.test', True))
-        self.assertFalse(rule_generator._reserve_generation('cool.example.test', True))
+        self.assertTrue(rule_generator.reserve_generation('cool.example.test', True))
+        self.assertFalse(rule_generator.reserve_generation('cool.example.test', True))
         # 手动路径不受冷却约束
-        self.assertTrue(rule_generator._reserve_generation('cool.example.test', False))
+        self.assertTrue(rule_generator.reserve_generation('cool.example.test', False))
 
     def test_static_validation_rejects_malformed_rule(self):
         crawler = FakeCrawler(baseline='generic')
@@ -128,10 +128,10 @@ class TestGenerateRule(RuleGenerationTestBase):
     def test_quota_is_shared_across_paths(self):
         # 每日配额手动与自动共享：手动耗尽后，自动在新域名上也被拒
         for _ in range(rule_generator._DAILY_LIMIT):
-            assert rule_generator._reserve_generation(f'm{rule_generator._DAILY_LIMIT}.test', False) or True
+            assert rule_generator.reserve_generation(f'm{rule_generator._DAILY_LIMIT}.test', False) or True
         # 上面只是冒烟；这里精确构造：独立库配额由测试隔离保证
-        self.assertTrue(rule_generator._reserve_generation('shared-auto.test', True))
-        self.assertFalse(rule_generator._reserve_generation('shared-auto.test', True))
+        self.assertTrue(rule_generator.reserve_generation('shared-auto.test', True))
+        self.assertFalse(rule_generator.reserve_generation('shared-auto.test', True))
 
     def test_private_url_is_rejected_before_fetch_or_llm(self):
         crawler = Mock()

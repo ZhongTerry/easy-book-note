@@ -546,3 +546,9 @@ def admin_rules_regenerate(rule_id):
         username=managers.get_current_user(),
     )
     return jsonify({"status": "success", "task_id": task_id})
+
+@admin_bp.route('/api/admin/feedback')
+@admin_required
+def admin_feedback_list():
+    from services import feedback as feedback_service
+    return jsonify({"status": "success", "data": feedback_service.list_feedback()})

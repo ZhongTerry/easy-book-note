@@ -8,6 +8,7 @@
     <script src="/purecss/pure2.1.js"></script> -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <script src="/static/js/csrf.js"></script>
+    <script src="/static/js/feedback.js"></script>
     <title>{{ article.title }} - Smart NoteDB</title>
     <style>
         :root {
@@ -915,6 +916,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         </div>
         <div class="header-right">
             <button class="btn-refresh-page" onclick="forceRefresh()">🔄 强制刷新页面</button>
+            <button class="btn-refresh-page" onclick="submitFeedback({url: currentUrl, key: dbKey})" title="质量不达标？AI 重新学习该站点">⚠️ 反馈此页</button>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #666;">
                 <span id="userName">User</span>
                 <img class="user-avatar" id="userAvatar" src="/static/icon-192.png">

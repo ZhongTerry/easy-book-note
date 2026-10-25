@@ -6,6 +6,7 @@ import json
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, warn, error
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
+from urllib.parse import urlsplit
 from recognition import get_payload_issue
 from services.searxng_search import SearxngSearchError
 import re
@@ -1401,6 +1402,30 @@ def api_rules_generate():
         generate_rule, url, crawler, username=managers.get_current_user(),
     )
     return jsonify({"status": "success", "task_id": task_id})
+
+
+@core_bp.route('/api/feedback', methods=['POST'])
+@login_required
+def api_feedback_submit():
+    """阅读页质量反馈：登记 → 触发该站点规则再生成（同步校验每日配额）。"""
+    payload = request.json or {}
+    url = (payload.get('url') or '').strip()
+    if not url or not is_safe_url(url):
+        return jsonify({"status": "error", "msg": "URL 未通过安全校验"}), 403
+    from services import feedback as feedback_service
+    from services.rule_generator import feedback_generation_task, reserve_generation
+    domain = urlsplit(url).hostname or ''
+    if not reserve_generation(domain.lower(), enforce_domain_cooldown=False):
+        return jsonify({"status": "error", "msg": "今日反馈生成次数已达上限"}), 429
+    feedback_id = feedback_service.record_feedback(
+        url, payload.get('key') or '', managers.get_current_user(), domain=domain.lower(),
+        note=payload.get('note') or '',
+    )
+    task_id = managers.task_manager.submit(
+        feedback_generation_task, feedback_id, url, crawler,
+        username=managers.get_current_user(),
+    )
+    return jsonify({"status": "success", "feedback_id": feedback_id, "task_id": task_id})
 
 
 @core_bp.route('/api/rules/task/<task_id>')

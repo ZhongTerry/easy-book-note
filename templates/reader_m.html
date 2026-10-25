@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <script src="/purecss/pure2.1.js"></script>
     <script src="/static/js/csrf.js"></script>
+    <script src="/static/js/feedback.js"></script>
     <!-- 引入 PureCSS -->
     <link rel="stylesheet" href="/purecss/pure2.1.css">
     <!-- 引入 Remix Icon -->
@@ -486,6 +487,7 @@
         
         <div style="display:flex; gap:5px;">
             <i class="ri-refresh-line" style="font-size:22px; padding:10px;" onclick="forceRefresh()"></i>
+            <i class="ri-error-warning-line" style="font-size:22px; padding:10px;" onclick="submitFeedback()" title="反馈此页"></i>
             <i class="ri-share-forward-line" style="font-size:22px; padding:10px;" onclick="nativeShare()"></i>
         </div>
     </div>

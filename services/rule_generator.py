@@ -277,7 +277,7 @@ def generate_rule(sample_url, crawler, username=None, callback=None, auto=False,
         from shared import is_safe_url
         if urlsplit(sample_url).scheme not in ('http', 'https') or not is_safe_url(sample_url):
             raise RuleGenerationError('URL 未通过安全校验')
-        if not auto and not _reserve_generation(domain, enforce_domain_cooldown=False):
+        if not auto and not reserve_generation(domain, enforce_domain_cooldown=False):
             raise RuleGenerationError('今日生成次数已达上限（每域名冷却仅约束自动触发）')
 
         report(5, '抓取样例页')
@@ -319,7 +319,15 @@ def generate_rule(sample_url, crawler, username=None, callback=None, auto=False,
             'paragraphs': len(payload['content']) if payload else 0,
             'title': (payload or {}).get('title', ''),
         }
+        cache_purged = 0
+        if status == 'active':
+            try:
+                import managers as _managers
+                cache_purged = _managers.cache.purge_domain(domain)
+            except Exception as exc:
+                debug("RuleGen", f"清理临时缓存失败: {exc}")
         info("RuleGen", f"规则生成完成: {domain} score={score} status={status}")
+        summary['cache_purged'] = cache_purged
         return summary
     except RuleGenerationError as exc:
         error("RuleGen", f"生成失败: {exc}")
@@ -329,10 +337,22 @@ def generate_rule(sample_url, crawler, username=None, callback=None, auto=False,
         return {'status': 'error', 'message': f'{type(exc).__name__}: {exc}'}
 
 
+# ---------- 页面质量反馈 ----------
+
+def feedback_generation_task(feedback_id, sample_url, crawler, username=None,
+                             callback=None, **_ignored):
+    """反馈触发的再生成任务：跑完整管线后把结果回写到反馈记录。"""
+    from services import feedback as feedback_service
+    result = generate_rule(sample_url, crawler, username=username,
+                           callback=callback, auto=True)
+    feedback_service.update_feedback_outcome(feedback_id, result)
+    return result
+
+
 # ---------- 自动触发（默认关闭） ----------
 
 
-def _reserve_generation(domain, enforce_domain_cooldown):
+def reserve_generation(domain, enforce_domain_cooldown):
     """跨 worker 共享的 SQLite 配额。
 
     全局每日上限对手动与自动一律生效（成本上限）；每域名 24h 冷却只约束
@@ -359,7 +379,7 @@ def _reserve_generation(domain, enforce_domain_cooldown):
 def maybe_autogenerate(source_url, submit_fn):
     """读失败路径的自动生成钩子（RULE_AUTO_TRIGGER 开启时）。
 
-    频控统一由 _reserve_generation 的 SQLite 配额执行：每域名 24h 冷却 +
+    频控统一由 reserve_generation 的 SQLite 配额执行：每域名 24h 冷却 +
     全局每日上限；这里只做"已有 active 规则就跳过"的快速判断。
     """
     if not _AUTO_TRIGGER:
@@ -367,7 +387,7 @@ def maybe_autogenerate(source_url, submit_fn):
     domain = site_rules.domain_of(source_url)
     if not domain or site_rules.get_active_rule(domain):
         return None
-    if not _reserve_generation(domain, enforce_domain_cooldown=True):
+    if not reserve_generation(domain, enforce_domain_cooldown=True):
         debug("RuleGen", f"自动生成被配额拦截: {domain}")
         return None
 

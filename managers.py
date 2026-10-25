@@ -828,12 +828,46 @@ class OfflineBookManager:
 import redis
 import threading
 class CacheManager:
-    def __init__(self, ttl=604800): 
+    def __init__(self, ttl=604800):
         self.cache_dir = CACHE_DIR
-        self.ttl = ttl 
+        self.ttl = ttl
+        # md5 文件名 -> 原始 URL 的旁路索引：支持按域名清理（规则激活后让重读走新规则）
+        self.index_file = os.path.join(self.cache_dir, 'url_index.json')
+        self._index_lock = threading.Lock()
+
     def _get_filename(self, url):
         hash_object = hashlib.md5(url.encode('utf-8'))
         return os.path.join(self.cache_dir, hash_object.hexdigest() + ".json")
+
+    def _load_index(self):
+        try:
+            with open(self.index_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_index(self, index):
+        tmp = self.index_file + '.tmp'
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(index, f, ensure_ascii=False)
+            os.replace(tmp, self.index_file)
+        except Exception as e:
+            error("Cache", f"Index Write Error: {e}")
+
+    def _index_set(self, filename, url):
+        with self._index_lock:
+            index = self._load_index()
+            index[filename] = url
+            self._save_index(index)
+
+    def _index_pop(self, filename):
+        with self._index_lock:
+            index = self._load_index()
+            if index.pop(filename, None) is not None:
+                self._save_index(index)
+
     def get(self, url):
         fp = self._get_filename(url)
         if not os.path.exists(fp): return None
@@ -841,14 +875,16 @@ class CacheManager:
         try:
             with open(fp, 'r', encoding='utf-8') as f: return json.load(f)
         except: return None
+
     def set(self, url, data):
         fp = self._get_filename(url)
-        # [修复] 修正语法错误，拆分为标准写法
         try:
             with open(fp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
         except Exception as e:
             error("Cache", f"Write Error: {e}")
+            return
+        self._index_set(os.path.basename(fp), url)
 
     def delete(self, url):
         """Delete one URL cache entry and report whether a file was removed."""
@@ -858,14 +894,49 @@ class CacheManager:
             fp = self._get_filename(url)
             if os.path.isfile(fp):
                 os.remove(fp)
+                self._index_pop(os.path.basename(fp))
                 return True
         except OSError as exc:
             error("Cache", f"Delete Error: {exc}")
         return False
-            
+
+    def purge_domain(self, domain):
+        """清除某域名的全部临时缓存；返回删除条数。
+
+        规则激活后旧 payload 已过时，不清掉的话重读仍命中旧缓存。
+        """
+        if not isinstance(domain, str) or not domain:
+            return 0
+        from urllib.parse import urlsplit
+        removed = 0
+        with self._index_lock:
+            index = self._load_index()
+            for name, url in list(index.items()):
+                try:
+                    host = (urlsplit(url).hostname or '').lower()
+                except Exception:
+                    continue
+                if host != domain.lower():
+                    continue
+                fp = os.path.join(self.cache_dir, name)
+                try:
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+                    index.pop(name, None)
+                    removed += 1
+                except OSError as exc:
+                    error("Cache", f"Purge Error: {exc}")
+            if removed:
+                self._save_index(index)
+        if removed:
+            info("Cache", f"按域名清理临时缓存: {domain} -> {removed} 条")
+        return removed
+
     def cleanup_expired(self):
         now = time.time(); count = 0; size = 0
         for f in os.listdir(self.cache_dir):
+            if f == 'url_index.json':
+                continue  # 旁路索引不是缓存条目
             fp = os.path.join(self.cache_dir, f)
             if os.path.isfile(fp) and now - os.path.getmtime(fp) > self.ttl:
                 try: size += os.path.getsize(fp); os.remove(fp); count += 1
