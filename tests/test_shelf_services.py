@@ -113,3 +113,63 @@ class TestShelfHealth(BackupTestBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestPlanSwitches(BackupTestBase):
+    def _seed_dead(self):
+        managers.db.save_raw_book('reader', 'deadbook', {
+            'value': {'url': 'http://dead.test/9/8.html', 'title': '死书',
+                      'last_read_index': 8, 'last_read_title': '第八章'},
+        })
+
+    def test_plan_uses_search_and_reports_candidates(self):
+        self._seed_dead()
+        crawler = Mock()
+        crawler.search_alternative_sources.return_value = [
+            {'source': 'new.test', 'url': 'http://new.test/1/8.html',
+             'title': '第八章', 'toc_url': 'http://new.test/1/'},
+        ]
+        result = shelf_health.plan_source_switches('reader', ['deadbook'], crawler)
+        s = result['suggestions'][0]
+        self.assertEqual(s['status'], 'found')
+        self.assertEqual(s['suggested']['source'], 'new.test')
+        self.assertEqual(result['summary']['found'], 1)
+        crawler.search_alternative_sources.assert_called_once_with('死书', 8)
+
+    def test_plan_reports_missing_title(self):
+        managers.db.save_raw_book('reader', 'notitle', {'value': {'url': 'http://x/1.html'}})
+        crawler = Mock()
+        result = shelf_health.plan_source_switches('reader', ['notitle'], crawler)
+        self.assertEqual(result['suggestions'][0]['status'], 'error')
+        self.assertIn('书名', result['suggestions'][0]['reason'])
+
+    def test_plan_survives_search_failure(self):
+        self._seed_dead()
+        crawler = Mock()
+        crawler.search_alternative_sources.side_effect = RuntimeError('searx down')
+        result = shelf_health.plan_source_switches('reader', ['deadbook'], crawler)
+        self.assertEqual(result['suggestions'][0]['status'], 'not_found')
+        self.assertEqual(result['summary']['found'], 0)
+
+    def test_apply_switches_updates_url_and_clears_cache(self):
+        managers.db.save_raw_book('reader', 'sw', {'value': {'url': 'http://old.test/1.html'}})
+        managers.cache.set('http://old.test/1.html', {'stale': True})
+
+        with patch('shared.is_safe_url', return_value=True):
+            result = shelf_health.apply_switches('reader', [
+                {'book_key': 'sw', 'new_url': 'http://new.test/1/8.html'},
+            ])
+
+        self.assertEqual(result['applied'], 1)
+        self.assertIsNone(managers.cache.get('http://old.test/1.html'))
+        self.assertEqual(managers.db.get_full_data('sw', 'reader')['url'],
+                         'http://new.test/1/8.html')
+
+    def test_apply_rejects_unsafe_url(self):
+        managers.db.save_raw_book('reader', 'sw2', {'value': {'url': 'http://old.test/1.html'}})
+        with patch('shared.is_safe_url', return_value=False):
+            result = shelf_health.apply_switches('reader', [
+                {'book_key': 'sw2', 'new_url': 'http://new.test/1/8.html'},
+            ])
+        self.assertEqual(result['applied'], 0)
+        self.assertEqual(result['results'][0]['status'], 'error')

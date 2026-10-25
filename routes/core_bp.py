@@ -1404,6 +1404,57 @@ def api_rules_generate():
     return jsonify({"status": "success", "task_id": task_id})
 
 
+@core_bp.route('/api/shelf/health_check', methods=['POST'])
+@login_required
+def api_shelf_health_check():
+    """书架体检：后台并发探测所有书源可达性。"""
+    from services.shelf_health import run_health_check_task
+    task_id = managers.task_manager.submit(
+        run_health_check_task, managers.get_current_user(), crawler,
+        username=managers.get_current_user(),
+    )
+    return jsonify({"status": "success", "task_id": task_id})
+
+
+@core_bp.route('/api/shelf/health')
+@login_required
+def api_shelf_health_report():
+    from services.shelf_health import load_latest_report
+    report = load_latest_report()
+    if not report:
+        return jsonify({"status": "error", "msg": "尚未体检，请先运行体检"}), 404
+    return jsonify({"status": "success", "report": report})
+
+
+@core_bp.route('/api/shelf/plan_switches', methods=['POST'])
+@login_required
+def api_shelf_plan_switches():
+    """为指定死书批量生成换源建议（章节级验证，应用需二次确认）。"""
+    book_keys = (request.json or {}).get('book_keys') or []
+    if not isinstance(book_keys, list) or not book_keys:
+        return jsonify({"status": "error", "msg": "缺少 book_keys"}), 400
+    if len(book_keys) > 50:
+        return jsonify({"status": "error", "msg": "单批最多 50 本"}), 400
+    from services.shelf_health import plan_source_switches_task
+    task_id = managers.task_manager.submit(
+        plan_source_switches_task, managers.get_current_user(), book_keys, crawler,
+        username=managers.get_current_user(),
+    )
+    return jsonify({"status": "success", "task_id": task_id})
+
+
+@core_bp.route('/api/shelf/apply_switches', methods=['POST'])
+@login_required
+def api_shelf_apply_switches():
+    """应用用户确认过的换源建议（仅更新明确传入的书）。"""
+    from services.shelf_health import apply_switches
+    switches = (request.json or {}).get('switches') or []
+    if not isinstance(switches, list) or not switches:
+        return jsonify({"status": "error", "msg": "缺少 switches"}), 400
+    result = apply_switches(managers.get_current_user(), switches)
+    return jsonify({"status": "success", **result})
+
+
 @core_bp.route('/api/feedback', methods=['POST'])
 @login_required
 def api_feedback_submit():
