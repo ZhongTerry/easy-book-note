@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }} - Smart NoteDB</title>
+    <script src="/static/js/csrf.js"></script>
     <style>
         :root { --bg:#eef2f3; --panel:#ffffff; --text:#26343d; --muted:#6b7b86; --border:#dce4e8; --accent:#0f766e; }
         * { box-sizing:border-box; }
@@ -52,6 +53,7 @@
                 {% if diagnostic.detail %}<dt>异常类型</dt><dd>{{ diagnostic.detail }}</dd>{% endif %}
             </dl>
             <button class="copy-diagnostic" type="button" onclick="copyDiagnostic(this)">复制诊断信息</button>
+            <button class="copy-diagnostic" type="button" id="rule-gen-btn" onclick="generateSiteRule(this)">🤖 生成解析规则</button>
         </section>
         {% endif %}
     </main>
@@ -63,6 +65,48 @@
                 () => { button.textContent = '已复制'; },
                 () => { button.textContent = '复制失败'; },
             );
+        }
+
+        async function generateSiteRule(button) {
+            const sourceUrl = {{ current_url|tojson }};
+            button.disabled = true;
+            button.textContent = '提交中…';
+            try {
+                const resp = await fetch('/api/rules/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: sourceUrl }),
+                });
+                const json = await resp.json();
+                if (json.status !== 'success') {
+                    button.textContent = json.msg || '提交失败';
+                    button.disabled = false;
+                    return;
+                }
+                for (let i = 0; i < 80; i++) {
+                    await new Promise((resolve) => setTimeout(resolve, 3000));
+                    const check = await (await fetch('/api/rules/task/' + json.task_id)).json();
+                    const task = check.task || {};
+                    if (task.message) button.textContent = '生成中: ' + task.message;
+                    if (task.status === 'completed') {
+                        const result = task.result || {};
+                        button.textContent = result.status === 'active'
+                            ? `✅ 规则已生效 (${result.domain}, 得分 ${result.score})`
+                            : `⚠️ ${result.message || ('未激活: score=' + result.score)}`;
+                        return;
+                    }
+                    if (task.status === 'failed') {
+                        button.textContent = '❌ 生成失败: ' + (task.error || '未知原因');
+                        button.disabled = false;
+                        return;
+                    }
+                }
+                button.textContent = '仍在生成，稍后刷新查看';
+                button.disabled = false;
+            } catch (err) {
+                button.textContent = '请求异常: ' + err;
+                button.disabled = false;
+            }
         }
     </script>
 </body>

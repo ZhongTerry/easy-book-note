@@ -412,6 +412,13 @@ def read_mode():
 
     issue = get_payload_issue(data)
     if issue:
+        # 自动生成解析规则（默认关闭；开启后受每域名 24h + 每日上限双频控）
+        if issue['code'] in ('SOURCE_CHALLENGE', 'UNRECOGNIZED_PAGE', 'EMPTY_CHAPTER'):
+            try:
+                from services.rule_generator import maybe_autogenerate
+                maybe_autogenerate(u, managers.task_manager.submit)
+            except Exception as exc:
+                debug("Read", f"自动规则生成钩子异常: {exc}")
         status_code = 503 if issue['code'] == 'SOURCE_CHALLENGE' else 422
         return _reader_error_response(
             '暂时无法阅读', issue['message'], u, u, k,
@@ -1377,6 +1384,30 @@ def api_prefetch():
     if d:
         return jsonify({"status": "success"})
     return jsonify({"status": "failed"})
+
+
+@core_bp.route('/api/rules/generate', methods=['POST'])
+@login_required
+def api_rules_generate():
+    """为指定站点生成解析规则（后台任务，返回 task_id 供轮询）。"""
+    payload = request.json or {}
+    url = (payload.get('url') or '').strip()
+    if not url or (not url.startswith('epub:') and not is_safe_url(url)):
+        return jsonify({"status": "error", "msg": "URL 未通过安全校验"}), 403
+    from services.rule_generator import generate_rule
+    task_id = managers.task_manager.submit(
+        generate_rule, url, crawler, username=managers.get_current_user(),
+    )
+    return jsonify({"status": "success", "task_id": task_id})
+
+
+@core_bp.route('/api/rules/task/<task_id>')
+@login_required
+def api_rules_task(task_id):
+    status = managers.task_manager.get_status(task_id)
+    if not status:
+        return jsonify({"status": "error", "msg": "任务不存在或已过期"}), 404
+    return jsonify({"status": "success", "task": status})
 
 @core_bp.route('/api/resolve_head', methods=['POST'])
 @login_required

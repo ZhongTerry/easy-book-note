@@ -3,7 +3,9 @@ import os
 import psutil # 记得 pip install psutil
 import platform
 from shared import CACHE_DIR, USER_DATA_DIR, admin_required, debug, info, warn, error
+import managers
 from managers import role_manager, db_connection, cluster_manager
+from spider_core import crawler_instance as crawler
 from datetime import datetime, timedelta
 import json
 import managers
@@ -501,3 +503,46 @@ def toggle_node():
 @admin_required
 def admin_page():
     return render_template('admin.html')
+# ==========================================
+# 站点解析规则管理
+# ==========================================
+@admin_bp.route('/api/admin/rules')
+@admin_required
+def admin_rules_list():
+    from services import site_rules
+    return jsonify({"status": "success", "data": site_rules.list_rules()})
+
+@admin_bp.route('/api/admin/rules/<int:rule_id>/status', methods=['POST'])
+@admin_required
+def admin_rules_set_status(rule_id):
+    from services import site_rules
+    status = (request.json or {}).get('status')
+    if status not in ('active', 'disabled'):
+        return jsonify({"status": "error", "msg": "status 仅支持 active/disabled"}), 400
+    site_rules.set_rule_status(rule_id, status)
+    return jsonify({"status": "success"})
+
+@admin_bp.route('/api/admin/rules/<int:rule_id>', methods=['DELETE'])
+@admin_required
+def admin_rules_delete(rule_id):
+    from services import site_rules
+    site_rules.delete_rule(rule_id)
+    return jsonify({"status": "success"})
+
+@admin_bp.route('/api/admin/rules/<int:rule_id>/regenerate', methods=['POST'])
+@admin_required
+def admin_rules_regenerate(rule_id):
+    """用原样本 URL 重新生成规则（站点改版后使用）。"""
+    from services import site_rules, rule_generator
+    sample_url = None
+    for row in site_rules.list_rules():
+        if row['id'] == rule_id:
+            sample_url = row.get('sample_url')
+            break
+    if not sample_url:
+        return jsonify({"status": "error", "msg": "规则不存在或缺少样本 URL"}), 404
+    task_id = managers.task_manager.submit(
+        rule_generator.generate_rule, sample_url, crawler,
+        username=managers.get_current_user(),
+    )
+    return jsonify({"status": "success", "task_id": task_id})
