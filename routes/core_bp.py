@@ -403,7 +403,10 @@ def read_mode():
             if not data:
                 # [关键修复] 当 force=True 时，告知爬虫跳过它内部的缓存
                 data = crawler.run(u, no_cache=force)
-                if is_cacheable_payload(data): managers.cache.set(u, data)
+                # 全文缓存命中本身已持久化，重复写进临时缓存只会制造
+                # 过期副本（曾导致缓存命中的章节拿不到翻章导航）
+                if is_cacheable_payload(data) and not data.get('from_fulltext_cache'):
+                    managers.cache.set(u, data)
 
     except Exception as e:
         return _reader_error_response(

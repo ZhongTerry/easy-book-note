@@ -1128,6 +1128,37 @@ class FullTextCacheManager:
                     'cached_at': ch.get('cached_at', '')
                 }
         return None
+
+    def get_neighbors(self, book_key, chapter_url, username=None):
+        """按缓存章节顺序推导 {prev, next, toc_url}。
+
+        全文缓存命中的 payload 原本不带导航字段，缓存书籍只能靠目录
+        抽屉翻章；这里补齐相邻章节链接，toc_url 取自缓存登记行。
+        """
+        u = username or get_current_user()
+        data = self._load_book_data(u, book_key)
+        if data is None:
+            return {'prev': None, 'next': None, 'toc_url': None}
+
+        chapters = data.get('chapters', [])
+        idx = next((i for i, ch in enumerate(chapters) if ch.get('url') == chapter_url), -1)
+        toc_url = None
+        try:
+            with db_connection() as conn:
+                row = conn.execute(
+                    "SELECT toc_url FROM fulltext_cache WHERE username=? AND book_key=?",
+                    (u, book_key),
+                ).fetchone()
+                if row and row[0]:
+                    toc_url = row[0]
+        except Exception as e:
+            debug("FullTextCache", f"读取缓存 toc_url 失败: {e}")
+
+        return {
+            'prev': chapters[idx - 1].get('url') if idx > 0 else None,
+            'next': chapters[idx + 1].get('url') if 0 <= idx < len(chapters) - 1 else None,
+            'toc_url': toc_url,
+        }
     
     def start_full_download(self, book_key, book_name, toc_url, chapters, crawler_instance, 
                            username=None, interval=0.5, max_workers=8):

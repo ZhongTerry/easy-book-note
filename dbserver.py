@@ -106,7 +106,12 @@ def _same_origin(origin_or_referer):
 
 @app.after_request
 def set_csrf_cookie(response):
-    """为登录会话签发双提交 CSRF 令牌。"""
+    """为登录会话签发双提交 CSRF 令牌。
+
+    令牌 cookie 的生命周期必须与会话 cookie 一致：会话因 permanent 而有
+    30 天有效期，若本 cookie 只在浏览器会话内有效，重开浏览器后登录态
+    还在、令牌却已消失，所有写请求都会被 CSRF 守卫拒绝。
+    """
     if session.get('user'):
         token = session.get('csrf_token')
         if not token:
@@ -115,6 +120,7 @@ def set_csrf_cookie(response):
         response.set_cookie(
             'notedb_csrf',
             token,
+            max_age=SESSION_LIFETIME_DAYS * 86400,
             secure=app.config['SESSION_COOKIE_SECURE'],
             samesite=app.config['SESSION_COOKIE_SAMESITE'],
             httponly=False,

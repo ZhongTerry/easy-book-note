@@ -1239,10 +1239,15 @@ class NovelCrawler:
                         book_key, url, username=username)
                     if cached_chapter:
                         info("Crawler", f"🎯 命中全文缓存: {book_key}")
+                        neighbors = managers.fulltext_cache_manager.get_neighbors(
+                            book_key, url, username=username)
                         return self._recognize_payload({
                             'content': cached_chapter['content'].split('\n'),
                             'title': cached_chapter['title'],
                             'book_name': book_key,
+                            'prev': neighbors.get('prev'),
+                            'next': neighbors.get('next'),
+                            'toc_url': neighbors.get('toc_url'),
                             'from_fulltext_cache': True
                         }, url, PageType.CHAPTER)
             except Exception as e:
