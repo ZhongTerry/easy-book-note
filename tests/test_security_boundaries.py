@@ -14,6 +14,10 @@ from werkzeug.datastructures import FileStorage
 
 
 class TestSafeUrl(unittest.TestCase):
+    def setUp(self):
+        # DNS 结果缓存会让同一主机名吃到上一个用例的 mock 答案
+        shared._dns_cache.clear()
+
     def _address(self, value):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (value, 443))]
 

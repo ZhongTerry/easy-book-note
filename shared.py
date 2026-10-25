@@ -1,8 +1,10 @@
 import os
+import socket
+import threading
+import time
 from flask import session, jsonify, redirect, url_for, request, send_file
 from functools import wraps
 from urllib.parse import urlparse
-import socket
 from ipaddress import ip_address
 from utils import debug, info, warn, error
 
@@ -104,6 +106,26 @@ def _resolve_public_addresses(hostname, port):
     return all(ip_address(address).is_global for address in addresses)
 
 
+# DNS 校验结果的进程内缓存：章节合并循环每页都会校验一次来源，
+# TTL 取 5 分钟——短到 DNS 漂移不会长期误判，长到挡住页内重复解析。
+_DNS_CACHE_TTL_SECONDS = 300
+_dns_cache = {}
+_dns_cache_lock = threading.Lock()
+
+
+def _resolve_public_addresses_cached(hostname, port):
+    key = (hostname, port)
+    now = time.monotonic()
+    with _dns_cache_lock:
+        hit = _dns_cache.get(key)
+        if hit and now < hit[1]:
+            return hit[0]
+    allowed = _resolve_public_addresses(hostname, port)
+    with _dns_cache_lock:
+        _dns_cache[key] = (allowed, now + _DNS_CACHE_TTL_SECONDS)
+    return allowed
+
+
 def verify_domain_online(domain):
     """兼容旧调用方：域名必须仅解析到公网地址。"""
     try:
@@ -129,6 +151,6 @@ def is_safe_url(url):
         port = parsed.port or (443 if parsed.scheme == 'https' else 80)
         if _ssrf_check_disabled():
             return True
-        return _resolve_public_addresses(hostname, port)
+        return _resolve_public_addresses_cached(hostname, port)
     except (OSError, ValueError, UnicodeError):
         return False
