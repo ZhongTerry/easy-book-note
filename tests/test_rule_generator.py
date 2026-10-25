@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import managers
 from recognition.rule_engine import extract_chapter
 from services import rule_generator, site_rules
+_fetch_rule_page = site_rules.fetch_rule_page
 from tests.test_rule_engine import RULE, BASE, bqquge_fetcher, load_fixture
 
 
@@ -51,6 +52,13 @@ class RuleGenerationTestBase(unittest.TestCase):
                                 os.path.join(self.temp.name, 't.sqlite'))
         db_patch.start()
         self.addCleanup(db_patch.stop)
+        fetch_patch = patch.object(site_rules, 'fetch_rule_page',
+                                   side_effect=lambda url, crawler, source: crawler._fetch_page_smart(url))
+        fetch_patch.start()
+        self.addCleanup(fetch_patch.stop)
+        safe_patch = patch('shared.is_safe_url', return_value=True)
+        safe_patch.start()
+        self.addCleanup(safe_patch.stop)
 
 
 class TestGenerateRule(RuleGenerationTestBase):
@@ -96,6 +104,33 @@ class TestGenerateRule(RuleGenerationTestBase):
         result = rule_generator.generate_rule(BASE, crawler)
         self.assertEqual(result['status'], 'error')
         self.assertIn('RULE_LLM_BASE_URL', result['message'])
+
+    def test_br_split_is_supported_by_static_validation(self):
+        rule = {'chapter': {'content_selector': '#content', 'paragraph_selector': 'br-split'}}
+        self.assertEqual(rule_generator._validate_selectors(rule), [])
+
+    def test_quota_is_shared_by_manual_generations(self):
+        self.assertTrue(rule_generator._reserve_generation('same.test'))
+        self.assertFalse(rule_generator._reserve_generation('same.test'))
+
+    def test_private_url_is_rejected_before_fetch_or_llm(self):
+        crawler = Mock()
+        with patch('shared.is_safe_url', return_value=False):
+            result = rule_generator.generate_rule('http://127.0.0.1/private', crawler)
+        self.assertEqual(result['status'], 'error')
+        crawler._fetch_page_smart.assert_not_called()
+
+    def test_redirect_to_private_host_is_not_followed(self):
+        crawler = Mock()
+        response = Mock(status_code=302, is_redirect=True,
+                        headers={'Location': 'http://127.0.0.1/private'})
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        with patch('requests.get', return_value=response) as get:
+            result = _fetch_rule_page('https://public.test/chapter', crawler,
+                                               'https://public.test/chapter')
+        self.assertIsNone(result)
+        self.assertEqual(get.call_count, 1)
 
 
 class TestAutoTrigger(RuleGenerationTestBase):

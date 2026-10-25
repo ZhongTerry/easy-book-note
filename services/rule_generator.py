@@ -7,6 +7,9 @@ import json
 import os
 import re
 import time
+import sqlite3
+from contextlib import closing
+from urllib.parse import urlsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -67,6 +70,10 @@ PROMPT_SYSTEM = '''你是网页结构分析器。给定一个小说章节页面�
 
 class RuleGenerationError(Exception):
     """生成失败（含原因），任务层直接作为错误信息展示。"""
+
+
+def is_configured():
+    return bool(_BASE and _API_KEY)
 
 
 # ---------- DOM 大纲 ----------
@@ -170,7 +177,8 @@ def _validate_selectors(rule):
             problems.append(f'{where} 选择器语法错误: {exc}')
 
     check(chapter.get('content_selector'), 'content_selector')
-    check(chapter.get('paragraph_selector') or 'p', 'paragraph_selector')
+    if chapter.get('paragraph_selector') != 'br-split':
+        check(chapter.get('paragraph_selector') or 'p', 'paragraph_selector')
     check(chapter.get('title_selector') or 'h1', 'title_selector')
     noise = chapter.get('noise_selectors') or []
     if not isinstance(noise, list):
@@ -196,7 +204,8 @@ def _score_with_baseline(crawler, html, rule, sample_url, fetcher):
     baseline_payload = crawler._general_run_logic(sample_url)
     baseline_paras = (baseline_payload or {}).get('content') or []
     baseline_title = (baseline_payload or {}).get('title') or ''
-    if not baseline_paras:
+    from recognition import get_payload_issue
+    if not baseline_paras or get_payload_issue(baseline_payload):
         return None, {'baseline': 'empty'}
     score = validate_rule_chapter(
         html, rule, sample_url, fetcher=fetcher,
@@ -226,7 +235,7 @@ def _score_cross_page(crawler, html, rule, sample_url, fetcher):
 
     consistency = 0.0
     second_url = payload.get('next')
-    if second_url:
+    if second_url and second_url != sample_url and site_rules.domain_of(second_url) == site_rules.domain_of(sample_url):
         try:
             second_html = fetcher(second_url)
         except Exception:
@@ -234,7 +243,9 @@ def _score_cross_page(crawler, html, rule, sample_url, fetcher):
         if second_html:
             second = apply_rule(second_html, rule, second_url)
             first_page_count = trace.get('paragraphs', 0)
-            if second is not None and second['paragraphs']:
+            if (second is not None and second['paragraphs']
+                    and second.get('title') and second['title'] != title
+                    and second['paragraphs'] != payload['content']):
                 consistency += 0.3
                 ratio_ok = (
                     first_page_count
@@ -263,9 +274,15 @@ def generate_rule(sample_url, crawler, username=None, callback=None, **_ignored)
         domain = site_rules.domain_of(sample_url)
         if not domain:
             raise RuleGenerationError('URL 无法解析出域名')
+        from shared import is_safe_url
+        if urlsplit(sample_url).scheme not in ('http', 'https') or not is_safe_url(sample_url):
+            raise RuleGenerationError('URL 未通过安全校验')
+        if not _reserve_generation(domain):
+            raise RuleGenerationError('该站点正在冷却或今日生成次数已达上限')
 
         report(5, '抓取样例页')
-        html = crawler._fetch_page_smart(sample_url)
+        fetcher = lambda url: site_rules.fetch_rule_page(url, crawler, sample_url)
+        html = fetcher(sample_url)
         if not html:
             raise RuleGenerationError('样例页抓取失败（源站无响应或被拦截）')
 
@@ -280,7 +297,6 @@ def generate_rule(sample_url, crawler, username=None, callback=None, **_ignored)
             raise RuleGenerationError('规则静态校验未通过: ' + '; '.join(problems[:3]))
 
         report(65, '自动验收：与通用引擎对比')
-        fetcher = crawler._fetch_page_smart
         score, acceptance = _score_with_baseline(crawler, html, rule, sample_url, fetcher)
         if score is None:
             report(70, '通用引擎无基线，改用跨章节自洽验收')
@@ -318,6 +334,25 @@ def generate_rule(sample_url, crawler, username=None, callback=None, **_ignored)
 _trigger_state = {'domains': {}, 'daily': {'date': '', 'count': 0}}
 
 
+def _reserve_generation(domain):
+    """Shared SQLite quota covers manual and automatic jobs across workers."""
+    import managers
+    now = time.time()
+    today = time.strftime('%Y-%m-%d')
+    with closing(sqlite3.connect(managers.DB_PATH)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('CREATE TABLE IF NOT EXISTS rule_generation_attempts '
+                     '(domain TEXT PRIMARY KEY, attempted_at REAL, day TEXT)')
+        row = conn.execute('SELECT attempted_at FROM rule_generation_attempts WHERE domain=?', (domain,)).fetchone()
+        if row and now - row[0] < _DOMAIN_COOLDOWN_SECONDS:
+            return False
+        count = conn.execute('SELECT count(*) FROM rule_generation_attempts WHERE day=?', (today,)).fetchone()[0]
+        if count >= _DAILY_LIMIT:
+            return False
+        conn.execute('INSERT OR REPLACE INTO rule_generation_attempts VALUES (?, ?, ?)', (domain, now, today))
+    return True
+
+
 def maybe_autogenerate(source_url, submit_fn):
     """读失败路径的自动生成钩子。
 
@@ -346,4 +381,5 @@ def maybe_autogenerate(source_url, submit_fn):
     _trigger_state['domains'][domain] = now
     daily['count'] += 1
     warn("RuleGen", f"自动触发规则生成: {domain}")
-    return submit_fn(generate_rule, source_url)
+    from spider_core import crawler_instance
+    return submit_fn(generate_rule, source_url, crawler_instance)

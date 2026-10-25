@@ -1394,8 +1394,8 @@ class NovelCrawler:
     def _apply_site_rule(self, url):
         """命中 active 站点规则时产出同构 payload，未命中/失败返回 None。"""
         try:
-            from services.site_rules import apply_site_rule_for_url
-            payload, trace = apply_site_rule_for_url(url, self._fetch_page_smart)
+            from services.site_rules import apply_site_rule_for_url, fetch_rule_page
+            payload, trace = apply_site_rule_for_url(url, lambda target: fetch_rule_page(target, self, url))
         except Exception as exc:
             debug("Run", f"站点规则层异常: {type(exc).__name__}: {exc}")
             return None

@@ -34,6 +34,12 @@ def bqquge_fetcher(url):
 
 
 class TestRuleEngineBqquge(unittest.TestCase):
+    def test_missing_later_page_does_not_return_partial_chapter(self):
+        result = extract_chapter(load_fixture('bqquge_page1.html'), RULE, BASE,
+                                 fetcher=lambda url: None)
+        self.assertIsNone(result['payload'])
+        self.assertEqual(result['trace']['reason'], 'incomplete_pagination')
+
     @classmethod
     def setUpClass(cls):
         cls.result = extract_chapter(load_fixture('bqquge_page1.html'), RULE, BASE,

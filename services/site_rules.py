@@ -5,10 +5,32 @@
 """
 import json
 import sqlite3
+from urllib.parse import urljoin, urlsplit
 
 from managers import db_connection, debug, info, warn
 
 _DEMOTE_AFTER_CONSECUTIVE_FAILURES = 5
+
+
+def fetch_rule_page(url, crawler, source_url):
+    """Validate every redirect hop before fetching rule input or pagination."""
+    import requests
+    from shared import is_safe_url
+    origin = urlsplit(source_url).netloc.lower()
+    for _ in range(4):
+        parsed = urlsplit(url)
+        if parsed.scheme not in ('http', 'https') or parsed.netloc.lower() != origin or not is_safe_url(url):
+            return None
+        with requests.get(url, timeout=20, allow_redirects=False,
+                          proxies=getattr(crawler, 'proxies', None) or None,
+                          headers={'User-Agent': 'Mozilla/5.0'}) as response:
+            if response.is_redirect:
+                url = urljoin(url, response.headers.get('Location', ''))
+                continue
+            if response.status_code != 200:
+                return None
+            return crawler._decode_page_response(response)
+    return None
 
 
 def _ensure_table(conn):

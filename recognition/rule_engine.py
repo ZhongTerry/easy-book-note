@@ -5,7 +5,7 @@
 由调用方决定落回通用逻辑。
 """
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -100,7 +100,9 @@ def _extract_page(html, rule, base_url, trace):
         if absolute == base_url:
             continue  # 指向自身的链接对导航没有意义
         text = _clean_text(a.get_text())
-        same_chapter = bool(chapter_token) and chapter_token in href
+        same_chapter = bool(chapter_token) and chapter_token == _chapter_token(absolute)
+        if urlsplit(absolute).netloc != urlsplit(base_url).netloc or urlsplit(absolute).scheme not in ('http', 'https'):
+            continue
         if found['next_page'] is None and hint_match(text, _NEXT_PAGE_HINTS) and same_chapter:
             found['next_page'] = absolute
         elif found['next'] is None and hint_match(text, _NEXT_CHAPTER_HINTS) and not same_chapter:
@@ -123,7 +125,9 @@ def _extract_page(html, rule, base_url, trace):
         if not href or href.startswith(('javascript:', '#')):
             continue
         absolute = urljoin(base_url, href)
-        same_chapter = bool(chapter_token) and chapter_token in href
+        same_chapter = bool(chapter_token) and chapter_token == _chapter_token(absolute)
+        if urlsplit(absolute).netloc != urlsplit(base_url).netloc or urlsplit(absolute).scheme not in ('http', 'https'):
+            continue
         if rule_key == 'next_page' and same_chapter:
             found[found_key] = absolute
         elif rule_key in ('next_chapter', 'prev_chapter') and not same_chapter:
@@ -197,6 +201,12 @@ def extract_chapter(html, rule, base_url, fetcher=None, max_pages=_MAX_PAGES):
         next_page_url = page['next_page_url']
         pages += 1
 
+    # A known remaining page means the chapter is incomplete: fall back rather
+    # than caching a truncated chapter after a timeout, cycle or page limit.
+    if next_page_url:
+        trace['reason'] = 'incomplete_pagination'
+        return {'payload': None, 'trace': trace}
+
     payload = {
         'title': current['title'] or first['title'],
         'content': paragraphs,
@@ -238,7 +248,7 @@ def validate_rule_chapter(html, rule, base_url, fetcher, baseline_paras,
 def _score_against_baseline(payload, baseline_paras, baseline_title,
                             baseline_prev, baseline_next):
     base = [_clean_text(p) for p in (baseline_paras or []) if _clean_text(p)]
-    rule_paras = payload.get('content') or []
+    rule_paras = payload.get('content') or payload.get('paragraphs') or []
     if not base:
         return 0.0
 
@@ -267,8 +277,7 @@ def _score_against_baseline(payload, baseline_paras, baseline_title,
         ]
         score += 0.3 * exact + 0.1 * (sum(sims) / len(sims))
 
-    baseline_nav = bool(baseline_next or baseline_prev)
-    if bool(payload.get('next') or payload.get('prev')) == baseline_nav:
+    if payload.get('next') == baseline_next and payload.get('prev') == baseline_prev:
         score += 0.1
 
     return round(min(1.0, score), 3)

@@ -1392,9 +1392,11 @@ def api_rules_generate():
     """为指定站点生成解析规则（后台任务，返回 task_id 供轮询）。"""
     payload = request.json or {}
     url = (payload.get('url') or '').strip()
-    if not url or (not url.startswith('epub:') and not is_safe_url(url)):
+    if not url or not is_safe_url(url):
         return jsonify({"status": "error", "msg": "URL 未通过安全校验"}), 403
-    from services.rule_generator import generate_rule
+    from services.rule_generator import generate_rule, is_configured
+    if not is_configured():
+        return jsonify({"status": "error", "msg": "AI 解析尚未配置模型地址与密钥"}), 503
     task_id = managers.task_manager.submit(
         generate_rule, url, crawler, username=managers.get_current_user(),
     )
