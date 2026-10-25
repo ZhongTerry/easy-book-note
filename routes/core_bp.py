@@ -520,39 +520,55 @@ def api_history_list():
 def api_history_clear():
     managers.history_manager.clear()
     return jsonify({"status": "success"})
+def _locate_memo(memos, memo_id, memo_index, memo_time, memo_text):
+    """按 id -> 下标 -> 时间+文本 三级定位备忘；找不到返回 None。"""
+    if memo_id is not None:
+        try:
+            wanted = int(memo_id)
+        except (TypeError, ValueError):
+            wanted = None
+        if wanted is not None:
+            for i, memo in enumerate(memos):
+                try:
+                    if int(memo.get('id', -1)) == wanted:
+                        return i
+                except (TypeError, ValueError):
+                    continue
+    if memo_index is not None:
+        try:
+            idx = int(memo_index)
+        except (TypeError, ValueError):
+            idx = None
+        if idx is not None and 0 <= idx < len(memos):
+            return idx
+    if memo_time is not None and memo_text:
+        try:
+            stamp = int(memo_time)
+        except (TypeError, ValueError):
+            stamp = None
+        if stamp is not None:
+            for i, memo in enumerate(memos):
+                if memo.get('time') == stamp and (memo.get('text') or '').strip() == memo_text:
+                    return i
+    return None
+
 @core_bp.route('/api/book/toggle_mark', methods=['POST'])
 @login_required
 def toggle_book_mark():
-    """标记/取消标记 章节"""
+    """标记/取消标记 章节（写锁内原子增删，锁外读改列表会互相覆盖）"""
     k = request.json.get('key')
     url = request.json.get('url')
     title = request.json.get('title')
     cid = request.json.get('cid', -1)
-    
+
     if not k or not url:
         return jsonify({"status": "error", "message": "Missing key or url"})
-    
-    # 获取原始数据
-    book_data = managers.db.get_raw_book(get_current_user(), k)
-    if not book_data:
-        return jsonify({"status": "error", "message": "Book not found"})
-    
-    marked = book_data['value'].get('marked_chapters', [])
-    
-    # 检查是否已存在
-    exists_idx = -1
-    for i, m in enumerate(marked):
-        if m.get('url') == url:
-            exists_idx = i
-            break
-            
-    if exists_idx >= 0:
-        # 取消标记
-        marked.pop(exists_idx)
-        msg = "已取消标记"
-        is_marked = False
-    else:
-        # 添加标记
+
+    def toggle(marked):
+        idx = next((i for i, m in enumerate(marked) if m.get('url') == url), -1)
+        if idx >= 0:
+            marked.pop(idx)
+            return {"message": "已取消标记", "is_marked": False}
         marked.append({
             "title": title,
             "url": url,
@@ -561,16 +577,17 @@ def toggle_book_mark():
         })
         # 按序号排序 (如果有)
         marked.sort(key=lambda x: x.get('id', 0))
-        msg = "已标记当前章节"
-        is_marked = True
-        
-    managers.db.update(k, {"marked_chapters": marked})
-    return jsonify({"status": "success", "message": msg, "is_marked": is_marked})
+        return {"message": "已标记当前章节", "is_marked": True}
+
+    ok, result = managers.db.mutate_value_list(get_current_user(), k, 'marked_chapters', toggle)
+    if not ok:
+        return jsonify({"status": "error", "message": "Book not found"})
+    return jsonify({"status": "success", **result})
 
 @core_bp.route('/api/book/memo', methods=['POST'])
 @login_required
 def add_book_memo():
-    """记录书籍备忘（按书存储在 books_v2 的 value.memos 中）"""
+    """记录书籍备忘（按书存储在 books_v2 的 value.memos 中，写锁内追加）"""
     data = request.json or {}
     k = data.get('key')
     memo_text = (data.get('text') or '').strip()
@@ -591,31 +608,30 @@ def add_book_memo():
     if not k or not memo_text:
         return jsonify({"status": "error", "message": "Missing key or text"}), 400
 
-    book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-    if not book_data or 'value' not in book_data:
-        return jsonify({"status": "error", "message": "Book not found"}), 404
-
-    memos = book_data['value'].get('memos', [])
-    memo_id = int(time.time() * 1000)
-    tags = normalize_memo_tags(data.get('tags'))
-    memos.append({
-        "id": memo_id,
+    memo = {
+        "id": int(time.time() * 1000),
         "chapter_id": int(chapter_id) if chapter_id is not None else -1,
         "chapter_title": chapter_title or '',
         "text": memo_text,
         "url": url,
-        "tags": tags,
+        "tags": normalize_memo_tags(data.get('tags')),
         "comment": (data.get('comment') or '').strip(),
         "time": int(time.time())
-    })
+    }
 
-    managers.db.update(k, {"memos": memos})
-    return jsonify({"status": "success", "count": len(memos), "memo_id": memo_id, "tags": tags})
+    def append(memos):
+        memos.append(memo)
+        return len(memos)
+
+    ok, count = managers.db.mutate_value_list(managers.get_current_user(), k, 'memos', append)
+    if not ok:
+        return jsonify({"status": "error", "message": "Book not found"}), 404
+    return jsonify({"status": "success", "count": count, "memo_id": memo["id"], "tags": memo["tags"]})
 
 @core_bp.route('/api/book/memo/tags', methods=['POST'])
 @login_required
 def update_book_memo_tags():
-    """更新书籍备忘标签"""
+    """更新书籍备忘标签（写锁内原子更新）"""
     data = request.json or {}
     k = data.get('key')
     memo_id = data.get('memo_id')
@@ -636,63 +652,30 @@ def update_book_memo_tags():
     if not k:
         return jsonify({"status": "error", "message": "Missing key"}), 400
 
-    book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-    if not book_data or 'value' not in book_data:
-        return jsonify({"status": "error", "message": "Book not found"}), 404
-
-    memos = book_data['value'].get('memos', [])
-    target_idx = None
-
-    if memo_id is not None:
-        try:
-            memo_id = int(memo_id)
-        except (TypeError, ValueError):
-            memo_id = None
-        if memo_id is not None:
-            for i, memo in enumerate(memos):
-                try:
-                    if int(memo.get('id', -1)) == memo_id:
-                        target_idx = i
-                        break
-                except (TypeError, ValueError):
-                    continue
-
-    if target_idx is None and memo_index is not None:
-        try:
-            memo_index = int(memo_index)
-        except (TypeError, ValueError):
-            memo_index = None
-        if memo_index is not None and 0 <= memo_index < len(memos):
-            target_idx = memo_index
-
-    if target_idx is None and memo_time is not None and memo_text:
-        try:
-            memo_time = int(memo_time)
-        except (TypeError, ValueError):
-            memo_time = None
-        if memo_time is not None:
-            for i, memo in enumerate(memos):
-                if memo.get('time') == memo_time and (memo.get('text') or '').strip() == memo_text:
-                    target_idx = i
-                    break
-
-    if target_idx is None:
-        return jsonify({"status": "error", "message": "Memo not found"}), 404
-
     tags = normalize_memo_tags(data.get('tags'))
     comment = (data.get('comment') or '').strip()
-    if not memos[target_idx].get('id'):
-        memos[target_idx]['id'] = int(time.time() * 1000)
-    memos[target_idx]['tags'] = tags
-    memos[target_idx]['comment'] = comment
 
-    managers.db.update(k, {"memos": memos})
-    return jsonify({"status": "success", "memo_id": memos[target_idx]['id'], "tags": tags})
+    def apply(memos):
+        idx = _locate_memo(memos, memo_id, memo_index, memo_time, memo_text)
+        if idx is None:
+            return False
+        if not memos[idx].get('id'):
+            memos[idx]['id'] = int(time.time() * 1000)
+        memos[idx]['tags'] = tags
+        memos[idx]['comment'] = comment
+        return {"memo_id": memos[idx]['id'], "tags": tags}
+
+    ok, result = managers.db.mutate_value_list(managers.get_current_user(), k, 'memos', apply)
+    if not ok:
+        return jsonify({"status": "error", "message": "Book not found"}), 404
+    if result is False:
+        return jsonify({"status": "error", "message": "Memo not found"}), 404
+    return jsonify({"status": "success", "memo_id": result["memo_id"], "tags": result["tags"]})
 
 @core_bp.route('/api/book/memo/delete', methods=['POST'])
 @login_required
 def delete_book_memo():
-    """删除书籍备忘"""
+    """删除书籍备忘（写锁内原子删除）"""
     data = request.json or {}
     k = data.get('key')
     memo_id = data.get('memo_id')
@@ -703,51 +686,17 @@ def delete_book_memo():
     if not k:
         return jsonify({"status": "error", "message": "Missing key"}), 400
 
-    book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-    if not book_data or 'value' not in book_data:
+    def remove(memos):
+        idx = _locate_memo(memos, memo_id, memo_index, memo_time, memo_text)
+        if idx is None:
+            return False
+        return memos.pop(idx)
+
+    ok, removed = managers.db.mutate_value_list(managers.get_current_user(), k, 'memos', remove)
+    if not ok:
         return jsonify({"status": "error", "message": "Book not found"}), 404
-
-    memos = book_data['value'].get('memos', [])
-    target_idx = None
-
-    if memo_id is not None:
-        try:
-            memo_id = int(memo_id)
-        except (TypeError, ValueError):
-            memo_id = None
-        if memo_id is not None:
-            for i, memo in enumerate(memos):
-                try:
-                    if int(memo.get('id', -1)) == memo_id:
-                        target_idx = i
-                        break
-                except (TypeError, ValueError):
-                    continue
-
-    if target_idx is None and memo_index is not None:
-        try:
-            memo_index = int(memo_index)
-        except (TypeError, ValueError):
-            memo_index = None
-        if memo_index is not None and 0 <= memo_index < len(memos):
-            target_idx = memo_index
-
-    if target_idx is None and memo_time is not None and memo_text:
-        try:
-            memo_time = int(memo_time)
-        except (TypeError, ValueError):
-            memo_time = None
-        if memo_time is not None:
-            for i, memo in enumerate(memos):
-                if memo.get('time') == memo_time and (memo.get('text') or '').strip() == memo_text:
-                    target_idx = i
-                    break
-
-    if target_idx is None:
+    if removed is False:
         return jsonify({"status": "error", "message": "Memo not found"}), 404
-
-    removed = memos.pop(target_idx)
-    managers.db.update(k, {"memos": memos})
     return jsonify({"status": "success", "memo_id": removed.get('id')})
 
 @core_bp.route('/api/book/find', methods=['GET'])
@@ -935,8 +884,8 @@ def force_refresh_book():
         return jsonify({"status": "error", "message": "书籍不存在或无权操作"}), 404
 
     # Gather known source URLs before discarding the extracted TOC and metadata.
-    # URL caches contain only regenerable crawl results; user-owned data remains
-    # isolated in the book record and is handled separately below.
+    # URL caches contain only regenerable crawl results; user-owned data is
+    # preserved inside the write lock below, from the latest row state.
     cache_urls = set()
 
     def collect_urls(value):
@@ -959,24 +908,20 @@ def force_refresh_book():
         'url', 'last_read_index', 'last_read_url', 'last_read_title',
         'last_read_time', 'marked_chapters', 'memos',
     }
-    old_value = book.get('value', {})
-    persistent_value = {
-        field: old_value[field]
-        for field in persistent_value_keys
-        if field in old_value
-    }
-    if source_url and 'url' not in persistent_value:
-        persistent_value['url'] = source_url
 
-    refreshed_book = {
-        'key': key,
-        'value': persistent_value,
-        'tags': book.get('tags', []),
-        'meta': {},
-        'cache': {},
-        'update_info': {},
-    }
-    if not managers.db.save_raw_book(username, key, refreshed_book):
+    def reset_derived(content):
+        # 写锁内取最新状态裁剪 value，读快照与写库之间并发的进度/标记不会丢
+        value = content.get('value', {})
+        new_value = {f: value[f] for f in persistent_value_keys if f in value}
+        if 'url' not in new_value and source_url:
+            new_value['url'] = source_url
+        content['value'] = new_value
+        content['meta'] = {}
+        content['cache'] = {}
+        content['update_info'] = {}
+        return True
+
+    if not managers.db._mutate_book(username, key, reset_derived):
         return jsonify({"status": "error", "message": "重置书籍数据失败"}), 500
 
     removed_cache_entries = sum(
@@ -992,6 +937,7 @@ def force_refresh_book():
         "url": source_url,
         "removed_cache_entries": removed_cache_entries,
     })
+
 @core_bp.route('/update', methods=['POST'])
 @login_required
 def update():

@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import sqlite3
 import socket
@@ -192,10 +193,10 @@ class TestForceRefreshBook(unittest.TestCase):
 
     @patch('routes.core_bp.managers.fulltext_cache_manager.delete_cache')
     @patch('routes.core_bp.managers.cache.delete')
-    @patch('routes.core_bp.managers.db.save_raw_book')
+    @patch('routes.core_bp.managers.db._mutate_book')
     @patch('routes.core_bp.managers.db.get_raw_book')
-    def test_force_refresh_preserves_reader_data_only(self, get_book, save_book, delete_cache, delete_fulltext):
-        get_book.return_value = {
+    def test_force_refresh_preserves_reader_data_only(self, get_book, mutate_book, delete_cache, delete_fulltext):
+        book = {
             'key': 'book',
             'value': {
                 'url': 'https://example.test/toc',
@@ -211,13 +212,24 @@ class TestForceRefreshBook(unittest.TestCase):
             'cache': {'toc': {'chapters': [{'url': 'https://example.test/1.html'}]}},
             'update_info': {'latest': '旧章节'},
         }
-        save_book.return_value = True
+        get_book.return_value = book
         delete_fulltext.return_value = {'status': 'success'}
+
+        saved = {}
+
+        def run_merge(username, key, merge):
+            # Run the actual merge callback against a copy of the latest row,
+            # mirroring what mutate_book_content does under the write lock.
+            content = json.loads(json.dumps(book))
+            self.assertTrue(merge(content))
+            saved.update(content)
+            return True
+
+        mutate_book.side_effect = run_merge
 
         response = self.client.post('/api/book/force_refresh', json={'key': 'book'})
 
         self.assertEqual(response.status_code, 200)
-        saved = save_book.call_args.args[2]
         self.assertEqual(saved['value']['url'], 'https://example.test/toc')
         self.assertEqual(saved['value']['last_read_index'], 3)
         self.assertEqual(saved['value']['marked_chapters'], [{'url': 'https://example.test/2.html'}])

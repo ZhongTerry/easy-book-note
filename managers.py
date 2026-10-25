@@ -114,6 +114,45 @@ def save_remote_check(conn, username, book_key, toc_url, remote_id, baseline=0):
         content['update_info'] = update_info
     return mutate_book_content(conn, username, book_key, merge)
 
+
+def mutate_user_module(module_type, username, mutate, create=True):
+    """Read-modify-write a user_modules JSON blob under SQLite's write lock.
+
+    The callback mutates the loaded dict in place and returns False to
+    cancel the write. This is the user_modules counterpart of
+    mutate_book_content for per-user JSON modules (booklists etc.).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('''CREATE TABLE IF NOT EXISTS user_modules (
+                                username TEXT NOT NULL,
+                                module_type TEXT NOT NULL,
+                                json_content TEXT,
+                                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                PRIMARY KEY (username, module_type)
+                            )''')
+            row = conn.execute(
+                'SELECT json_content FROM user_modules WHERE username=? AND module_type=?',
+                (username, module_type),
+            ).fetchone()
+            data = json.loads(row[0]) if row and row[0] else {}
+            if mutate(data) is False:
+                return False
+            if not data and not create:
+                return True  # 模块不存在且无需创建，视为成功
+            conn.execute(
+                'REPLACE INTO user_modules (username, module_type, json_content) VALUES (?, ?, ?)',
+                (username, module_type, json.dumps(data, ensure_ascii=False)),
+            )
+        return True
+    except Exception as exc:
+        error('DB', f'Module update failed: {type(exc).__name__}: {exc}')
+        return False
+    finally:
+        conn.close()
+
 # ==========================================
 # 1. 基础类定义 (BaseJsonManager)
 # ==========================================
@@ -202,30 +241,49 @@ class HistoryManager(BaseJsonManager):
 class IsolatedBooklistManager(BaseJsonManager):
     def __init__(self): super().__init__('booklists')
 
-    def add_list(self, name):
-        data = self.load()
-        list_id = str(int(time.time()))
-        data[list_id] = {"name": name, "books": []}
-        self.save(data)
-        return list_id
+    def add_list(self, name, username=None):
+        u = username or get_current_user()
+        result = {}
 
-    def add_to_list(self, list_id, book_data):
-        data = self.load()
-        if list_id in data:
-            if not any(b['key'] == book_data['key'] for b in data[list_id]['books']):
-                data[list_id]['books'].append(book_data)
-                self.save(data)
+        def merge(data):
+            list_id = str(int(time.time()))
+            data[list_id] = {"name": name, "books": []}
+            result['id'] = list_id
+            return True
 
-    def update_status(self, list_id, book_key, status, action):
-        data = self.load()
-        if list_id in data:
-            books = data[list_id]['books']
+        if not mutate_user_module(self.module_type, u, merge):
+            return None
+        return result['id']
+
+    def add_to_list(self, list_id, book_data, username=None):
+        u = username or get_current_user()
+
+        def merge(data):
+            entry = data.get(list_id)
+            if not entry:
+                return False
+            if not any(b['key'] == book_data['key'] for b in entry['books']):
+                entry['books'].append(book_data)
+            return True
+
+        return mutate_user_module(self.module_type, u, merge, create=False)
+
+    def update_status(self, list_id, book_key, status, action, username=None):
+        u = username or get_current_user()
+
+        def merge(data):
+            entry = data.get(list_id)
+            if not entry:
+                return False
+            books = entry['books']
             if action == 'remove':
-                data[list_id]['books'] = [b for b in books if b['key'] != book_key]
+                entry['books'] = [b for b in books if b['key'] != book_key]
             else:
                 for b in books:
                     if b['key'] == book_key: b['status'] = status
-            self.save(data)
+            return True
+
+        return mutate_user_module(self.module_type, u, merge, create=False)
     
     # 兼容旧代码调用 load 方法直接返回字典
     def load(self, username=None):
@@ -235,13 +293,13 @@ class IsolatedTagManager:
     """标签管理 (V2：存储在书籍的 content.tags 中)"""
     def update_tags(self, key, tags, username=None):
         u = username or get_current_user()
-        content = db.get_raw_book(u, key)
-        if not content: return []
-        
         new_tags = [t.strip() for t in tags if t.strip()] if tags else []
-        content['tags'] = new_tags
-        db.save_raw_book(u, key, content)
-        return new_tags
+
+        def merge(content):
+            content['tags'] = new_tags
+            return True
+
+        return new_tags if db._mutate_book(u, key, merge) else []
     
     def get_all(self, username=None):
         u = username or get_current_user()
@@ -256,7 +314,8 @@ class IsolatedTagManager:
                         if c.get('key') and c.get('tags'):
                             result[c['key']] = c['tags']
                 return result
-        except: pass
+        except Exception as e:
+            debug("DB", f"标签聚合读取失败: {e}")
         return {}
 
     def load(self, username=None): return self.get_all(username)
@@ -264,10 +323,7 @@ class IsolatedTagManager:
         # 兼容旧代码批量保存标签的逻辑
         u = username or get_current_user()
         for k, tags in data.items():
-            content = db.get_raw_book(u, k)
-            if content:
-                content['tags'] = tags
-                db.save_raw_book(u, k, content)
+            self.update_tags(k, tags, username=u)
 
 class UpdateManager(BaseJsonManager):
     def __init__(self): super().__init__('updates')
@@ -402,7 +458,8 @@ class IsolatedDB:
             with closing(sqlite3.connect(DB_PATH)) as conn:
                 row = conn.execute("SELECT content FROM books_v2 WHERE username=? AND book_key=?", (username, book_key)).fetchone()
                 if row: return json.loads(row[0])
-        except: pass
+        except Exception as e:
+            debug("DB", f"读取书籍失败 {username}/{book_key}: {e}")
         return None
 
     def save_raw_book(self, username, book_key, content_dict):
@@ -472,10 +529,13 @@ class IsolatedDB:
         if not key: return {"status": "error", "message": "Key cannot be empty"}
         u = username or get_current_user()
         final_val = value if isinstance(value, dict) else {"url": value, "updated_at": int(time.time())}
-        
-        content = self.get_raw_book(u, key) or {}
-        content['value'] = final_val
-        if self.save_raw_book(u, key, content):
+
+        def merge(content):
+            # 只替换 value；并发写入的 tags/update_info/cache 等保持不变
+            content['value'] = final_val
+            return True
+
+        if self._mutate_book(u, key, merge, create=True):
             return {"status": "success", "message": f"Saved: {key}", "data": {key: final_val}}
         return {"status": "error", "message": "Save failed"}
 
@@ -543,6 +603,28 @@ class IsolatedDB:
             return True
         return self._mutate_book(username, key, merge)
 
+    def mutate_value_list(self, username, key, field, mutate):
+        """Apply mutate(value[field]) atomically under the write lock.
+
+        The book row must already exist. mutate returning exactly False
+        cancels the write; any other result is passed back, so callers can
+        distinguish "book missing" (False, None) from "cancelled" (True,
+        False) from "applied" (True, result).
+        """
+        outcome = {'ran': False, 'result': None}
+
+        def merge(content):
+            outcome['ran'] = True
+            items = content.setdefault('value', {}).setdefault(field, [])
+            result = mutate(items)
+            outcome['result'] = result
+            return result is not False
+
+        self._mutate_book(username, key, merge)
+        if not outcome['ran']:
+            return False, None
+        return True, outcome['result']
+
     def list_all(self):
         u = get_current_user()
         try:
@@ -589,17 +671,18 @@ class IsolatedDB:
                     conn.execute("UPDATE book_history SET book_key=? WHERE username=? AND book_key=?", (new_key, u, old_key))
                     conn.commit()
             
-            # 更新书单 (仍然存在于 user_modules)
-            try:
-                bl_data = booklist_manager.load(u)
+            # 更新书单 (仍然存在于 user_modules)，写锁内原子重命名
+            def sync_booklists(data):
                 changed = False
-                for lid in bl_data:
-                    for b in bl_data[lid].get('books', []):
-                        if b['key'] == old_key:
+                for entry in data.values():
+                    for b in entry.get('books', []):
+                        if b.get('key') == old_key:
                             b['key'] = new_key
                             changed = True
-                if changed: booklist_manager.save(bl_data, u)
-            except: pass
+                return True if changed else None  # 无引用则不写入
+
+            if not mutate_user_module('booklists', u, sync_booklists, create=False):
+                warn("DB", f"书单同步失败: {old_key} -> {new_key}")
 
             return {"status": "success", "message": f"Renamed [{old_key}] to [{new_key}]"}
         except Exception as e: return {"status": "error", "message": str(e)}
@@ -623,7 +706,9 @@ class IsolatedDB:
                 ''', (u, key))
                 conn.commit()
             return True
-        except Exception as e: return False
+        except Exception as e:
+            debug("DB", f"写入版本历史失败: {e}")
+            return False
 
     def get_versions(self, key):
         self._ensure_history_table()
@@ -632,28 +717,35 @@ class IsolatedDB:
             with db_connection() as conn:
                 cursor = conn.execute("SELECT value, recorded_at FROM book_history WHERE username=? AND book_key=? ORDER BY recorded_at DESC", (u, key))
                 return [{"value": row[0], "time": row[1]} for row in cursor.fetchall()]
-        except: return []
+        except Exception as e:
+            debug("DB", f"读取历史版本失败: {e}")
+            return []
 
 class UpdateRecordManager:
     """管理自动追更 (V2：存储在书籍的 content.update_info 中)"""
     def subscribe(self, username, book_key, toc_url, current_id):
-        content = db.get_raw_book(username, book_key)
-        if not content: return
-        content['update_info'] = {
-            "toc_url": toc_url,
-            "last_local_id": current_id,
-            "last_remote_id": current_id,
-            "has_update": False,
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        db.save_raw_book(username, book_key, content)
+        def merge(content):
+            content['update_info'] = {
+                "toc_url": toc_url,
+                "last_local_id": current_id,
+                "last_remote_id": current_id,
+                "has_update": False,
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            return True
+        # 书必须已存在（create=False），与旧的 get_raw_book 判空行为一致
+        db._mutate_book(username, book_key, merge)
 
     def unsubscribe(self, book_key, username=None):
         u = username or get_current_user()
-        content = db.get_raw_book(u, book_key)
-        if content and 'update_info' in content:
+
+        def merge(content):
+            if 'update_info' not in content:
+                return False
             content['update_info'] = {}
-            db.save_raw_book(u, book_key, content)
+            return True
+
+        db._mutate_book(u, book_key, merge)
 
     def is_subscribed(self, book_key, username=None):
         u = username or get_current_user()
@@ -670,12 +762,17 @@ class UpdateRecordManager:
     
     def update_status(self, book_key, remote_id, has_u, username=None):
         u = username or get_current_user()
-        content = db.get_raw_book(u, book_key)
-        if content and content.get('update_info'):
-            content['update_info']['last_remote_id'] = remote_id
-            content['update_info']['has_update'] = has_u
-            content['update_info']['updated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            db.save_raw_book(u, book_key, content)
+
+        def merge(content):
+            update_info = content.get('update_info')
+            if not update_info:
+                return False
+            update_info['last_remote_id'] = remote_id
+            update_info['has_update'] = has_u
+            update_info['updated_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return True
+
+        db._mutate_book(u, book_key, merge)
 
     def get_all_updates(self, username):
         res = []
@@ -686,7 +783,8 @@ class UpdateRecordManager:
                     c = json.loads(row[0])
                     if c.get('update_info') and c['update_info'].get('has_update'):
                         res.append(c['key'])
-        except: pass
+        except Exception as e:
+            warn("Update", f"扫描更新状态失败: {e}")
         return res
 
     def get_all_subscribed(self, username):
@@ -698,7 +796,8 @@ class UpdateRecordManager:
                     c = json.loads(row[0])
                     if c.get('update_info') and c['update_info'].get('toc_url'):
                         res.append(c['key'])
-        except: pass
+        except Exception as e:
+            warn("Update", f"扫描订阅状态失败: {e}")
         return res
 
 # ==========================================
