@@ -173,3 +173,49 @@ class TestPlanSwitches(BackupTestBase):
             ])
         self.assertEqual(result['applied'], 0)
         self.assertEqual(result['results'][0]['status'], 'error')
+
+
+class TestShelfEndpoints(BackupTestBase):
+    def _client(self):
+        from flask import Flask
+        from routes.core_bp import core_bp
+
+        app = Flask(__name__)
+        app.config.update(TESTING=True, SECRET_KEY='t')
+        app.register_blueprint(core_bp)
+        client = app.test_client()
+        with client.session_transaction() as s:
+            s['user'] = {'username': 'reader', 'csrf_token': 'tok'}
+        return client
+
+    @staticmethod
+    def _assert_bindable(captured):
+        """模拟 TaskManager 注入 callback 后的实参绑定，杜绝重复传参。"""
+        import inspect
+        sig = inspect.signature(captured['fn'])
+        kwargs = dict(captured['kwargs'])
+        kwargs.setdefault('callback', None)
+        sig.bind(*captured['args'], **kwargs)
+
+    def test_health_check_task_receives_username_once(self):
+        """回归：submit 不得把 username 同时当位置参数和关键字参数。"""
+        client = self._client()
+        captured = {}
+        with patch.object(managers.task_manager, 'submit',
+                          side_effect=lambda fn, *a, **kw: captured.update(fn=fn, args=a, kwargs=kw) or 'tid'):
+            resp = client.post('/api/shelf/health_check')
+        self.assertEqual(resp.get_json()['status'], 'success')
+        self.assertNotIn('username', captured['args'])
+        self.assertEqual(captured['kwargs'].get('username'), 'reader')
+        self._assert_bindable(captured)
+
+    def test_plan_switches_task_receives_username_once(self):
+        client = self._client()
+        captured = {}
+        with patch.object(managers.task_manager, 'submit',
+                          side_effect=lambda fn, *a, **kw: captured.update(fn=fn, args=a, kwargs=kw) or 'tid'):
+            resp = client.post('/api/shelf/plan_switches', json={'book_keys': ['bk']})
+        self.assertEqual(resp.get_json()['status'], 'success')
+        self.assertNotIn('username', captured['args'])
+        self.assertEqual(captured['kwargs'].get('username'), 'reader')
+        self._assert_bindable(captured)

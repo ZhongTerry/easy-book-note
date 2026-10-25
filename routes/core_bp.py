@@ -1410,7 +1410,7 @@ def api_shelf_health_check():
     """书架体检：后台并发探测所有书源可达性。"""
     from services.shelf_health import run_health_check_task
     task_id = managers.task_manager.submit(
-        run_health_check_task, managers.get_current_user(), crawler,
+        run_health_check_task, crawler=crawler,
         username=managers.get_current_user(),
     )
     return jsonify({"status": "success", "task_id": task_id})
@@ -1437,7 +1437,7 @@ def api_shelf_plan_switches():
         return jsonify({"status": "error", "msg": "单批最多 50 本"}), 400
     from services.shelf_health import plan_source_switches_task
     task_id = managers.task_manager.submit(
-        plan_source_switches_task, managers.get_current_user(), book_keys, crawler,
+        plan_source_switches_task, book_keys=book_keys, crawler=crawler,
         username=managers.get_current_user(),
     )
     return jsonify({"status": "success", "task_id": task_id})
