@@ -845,6 +845,35 @@ class NovelCrawler:
         except Exception:
             return None
 
+    def _fetch_page_no_redirect(self, url, timeout=None):
+        """单次指纹请求，不跟随重定向；供规则层的逐跳同源校验使用。"""
+        options = _toc_request_options.get()
+        current_timeout = timeout if timeout is not None else (options[0] if options else self.timeout)
+        headers = {
+            "Referer": url,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+        }
+        try:
+            return cffi_requests.get(
+                url,
+                impersonate=self.impersonate,
+                timeout=current_timeout,
+                headers=headers,
+                allow_redirects=False,
+                proxies=self.proxies,
+            )
+        except Exception:
+            try:
+                return requests.get(
+                    url,
+                    headers=headers,
+                    timeout=current_timeout,
+                    allow_redirects=False,
+                    proxies=self.proxies or None,
+                )
+            except Exception:
+                return None
+
     @staticmethod
     def _decode_page_response(resp):
         """Decode a crawler response consistently across HTTP clients."""

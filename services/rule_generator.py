@@ -260,7 +260,7 @@ def _score_cross_page(crawler, html, rule, sample_url, fetcher):
 
 # ---------- 生成入口 ----------
 
-def generate_rule(sample_url, crawler, username=None, callback=None, **_ignored):
+def generate_rule(sample_url, crawler, username=None, callback=None, auto=False, **_ignored):
     """task_manager 任务入口：全程捕获异常，返回结果摘要。"""
 
     def report(progress, msg):
@@ -277,8 +277,8 @@ def generate_rule(sample_url, crawler, username=None, callback=None, **_ignored)
         from shared import is_safe_url
         if urlsplit(sample_url).scheme not in ('http', 'https') or not is_safe_url(sample_url):
             raise RuleGenerationError('URL 未通过安全校验')
-        if not _reserve_generation(domain):
-            raise RuleGenerationError('该站点正在冷却或今日生成次数已达上限')
+        if not auto and not _reserve_generation(domain, enforce_domain_cooldown=False):
+            raise RuleGenerationError('今日生成次数已达上限（每域名冷却仅约束自动触发）')
 
         report(5, '抓取样例页')
         fetcher = lambda url: site_rules.fetch_rule_page(url, crawler, sample_url)
@@ -331,11 +331,13 @@ def generate_rule(sample_url, crawler, username=None, callback=None, **_ignored)
 
 # ---------- 自动触发（默认关闭） ----------
 
-_trigger_state = {'domains': {}, 'daily': {'date': '', 'count': 0}}
 
+def _reserve_generation(domain, enforce_domain_cooldown):
+    """跨 worker 共享的 SQLite 配额。
 
-def _reserve_generation(domain):
-    """Shared SQLite quota covers manual and automatic jobs across workers."""
+    全局每日上限对手动与自动一律生效（成本上限）；每域名 24h 冷却只约束
+    自动触发——手动点击是明确意图（站点改版修复后立即重新生成），不受冷却。
+    """
     import managers
     now = time.time()
     today = time.strftime('%Y-%m-%d')
@@ -343,9 +345,10 @@ def _reserve_generation(domain):
         conn.execute('BEGIN IMMEDIATE')
         conn.execute('CREATE TABLE IF NOT EXISTS rule_generation_attempts '
                      '(domain TEXT PRIMARY KEY, attempted_at REAL, day TEXT)')
-        row = conn.execute('SELECT attempted_at FROM rule_generation_attempts WHERE domain=?', (domain,)).fetchone()
-        if row and now - row[0] < _DOMAIN_COOLDOWN_SECONDS:
-            return False
+        if enforce_domain_cooldown:
+            row = conn.execute('SELECT attempted_at FROM rule_generation_attempts WHERE domain=?', (domain,)).fetchone()
+            if row and now - row[0] < _DOMAIN_COOLDOWN_SECONDS:
+                return False
         count = conn.execute('SELECT count(*) FROM rule_generation_attempts WHERE day=?', (today,)).fetchone()[0]
         if count >= _DAILY_LIMIT:
             return False
@@ -354,32 +357,20 @@ def _reserve_generation(domain):
 
 
 def maybe_autogenerate(source_url, submit_fn):
-    """读失败路径的自动生成钩子。
+    """读失败路径的自动生成钩子（RULE_AUTO_TRIGGER 开启时）。
 
-    频控代替"连续 N 次"判定：每域名 24 小时至多一次 + 全局每日上限，
-    成本上限确定且实现简单。返回 task_id 或 None。
+    频控统一由 _reserve_generation 的 SQLite 配额执行：每域名 24h 冷却 +
+    全局每日上限；这里只做"已有 active 规则就跳过"的快速判断。
     """
     if not _AUTO_TRIGGER:
         return None
     domain = site_rules.domain_of(source_url)
     if not domain or site_rules.get_active_rule(domain):
         return None
-
-    now = time.time()
-    last = _trigger_state['domains'].get(domain, 0)
-    if now - last < _DOMAIN_COOLDOWN_SECONDS:
+    if not _reserve_generation(domain, enforce_domain_cooldown=True):
+        debug("RuleGen", f"自动生成被配额拦截: {domain}")
         return None
 
-    today = time.strftime('%Y-%m-%d')
-    daily = _trigger_state['daily']
-    if daily['date'] != today:
-        daily.update(date=today, count=0)
-    if daily['count'] >= _DAILY_LIMIT:
-        debug("RuleGen", f"今日自动生成已达上限（{_DAILY_LIMIT}），跳过 {domain}")
-        return None
-
-    _trigger_state['domains'][domain] = now
-    daily['count'] += 1
     warn("RuleGen", f"自动触发规则生成: {domain}")
     from spider_core import crawler_instance
-    return submit_fn(generate_rule, source_url, crawler_instance)
+    return submit_fn(generate_rule, source_url, crawler_instance, auto=True)

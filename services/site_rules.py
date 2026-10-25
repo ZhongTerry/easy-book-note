@@ -13,23 +13,38 @@ _DEMOTE_AFTER_CONSECUTIVE_FAILURES = 5
 
 
 def fetch_rule_page(url, crawler, source_url):
-    """Validate every redirect hop before fetching rule input or pagination."""
-    import requests
+    """规则层取页：指纹请求（curl_cffi），每一跳重定向都做同源与 SSRF 校验。
+
+    指纹客户端失败时退回普通客户端再试一次；任何一跳离开源站域名或
+    未通过安全校验即返回 None，由调用方回退通用引擎。
+    """
+    import requests as plain_requests
     from shared import is_safe_url
     origin = urlsplit(source_url).netloc.lower()
+    current = url
     for _ in range(4):
-        parsed = urlsplit(url)
-        if parsed.scheme not in ('http', 'https') or parsed.netloc.lower() != origin or not is_safe_url(url):
+        parsed = urlsplit(current)
+        if (parsed.scheme not in ('http', 'https')
+                or parsed.netloc.lower() != origin
+                or not is_safe_url(current)):
             return None
-        with requests.get(url, timeout=20, allow_redirects=False,
-                          proxies=getattr(crawler, 'proxies', None) or None,
-                          headers={'User-Agent': 'Mozilla/5.0'}) as response:
-            if response.is_redirect:
-                url = urljoin(url, response.headers.get('Location', ''))
-                continue
-            if response.status_code != 200:
+        response = crawler._fetch_page_no_redirect(current)
+        if response is None:
+            try:
+                response = plain_requests.get(
+                    current, timeout=20, allow_redirects=False,
+                    proxies=getattr(crawler, 'proxies', None) or None,
+                    headers={'User-Agent': 'Mozilla/5.0'},
+                )
+            except Exception:
                 return None
-            return crawler._decode_page_response(response)
+        location = response.headers.get('Location') or ''
+        if response.status_code in (301, 302, 303, 307, 308) and location:
+            current = urljoin(current, location)
+            continue
+        if response.status_code != 200:
+            return None
+        return crawler._decode_page_response(response)
     return None
 
 
