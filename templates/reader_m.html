@@ -1382,6 +1382,7 @@
                 list.innerHTML = '<div style="text-align:center; padding:16px; color:#8a4b08;">候选源里没有站点包含这一章。可稍后用"重新搜索"再试。</div>';
                 return;
             }
+            window.sourceCandidates = json.data;
             list.innerHTML = json.data.map(src => {
                 const conf = Math.round((src.confidence || 0) * 100);
                 const confColor = conf >= 85 ? '#0f766e' : (conf >= 60 ? '#d97706' : '#b91c1c');
@@ -1412,10 +1413,14 @@
         list.innerHTML = '<div style="text-align:center; padding:20px; color:#999;">⏳ 正在前往 ' +
             escapeSourceHtml(sourceName || '新源') + '…<br><small style="color:#bbb;">加载目标章节验证可用性</small></div>';
         try {
+            const body = { key: dbKey, chapter_id: sourceChapterId };
+            const picked = (window.sourceCandidates || []).find(c => c.url === newUrl);
+            const rest = (window.sourceCandidates || []).filter(c => c.url !== newUrl);
+            body.candidates = picked ? [picked].concat(rest) : [{ url: newUrl, source: sourceName }];
             const res = await fetch('/api/source/apply', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ key: dbKey, new_url: newUrl, chapter_id: sourceChapterId }),
+                body: JSON.stringify(body),
             });
             const json = await res.json();
             if (json.status === 'applied') {

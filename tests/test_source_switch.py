@@ -193,3 +193,44 @@ class TestApplySwitch(SourceSwitchBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestApplyBestSwitch(SourceSwitchBase):
+    def _crawler(self, payloads):
+        crawler = Mock()
+        crawler.run.side_effect = payloads
+        return crawler
+
+    def test_falls_through_to_first_readable_source(self):
+        managers.db.save_raw_book('reader', 'bk', {'value': {'url': 'http://old.test/1/7.html'}})
+        # 第一个源正文抓不出（JS 渲染），第二个正常
+        crawler = self._crawler([
+            {'page_type': 'unknown', 'content': []},
+            {'page_type': 'chapter', 'title': '第8章 风起', 'content': ['段落']},
+        ])
+        result = source_switch.apply_best_switch('reader', 'bk', [
+            {'url': 'http://bad.test/1/8.html', 'source': 'bad.test'},
+            {'url': 'http://good.test/1/8.html', 'source': 'good.test'},
+        ], crawler, expected_id=8)
+
+        self.assertEqual(result['status'], 'applied')
+        self.assertEqual(result['source'], 'good.test')
+        self.assertEqual(result['attempt_index'], 1)
+        self.assertEqual(len(result['tried']), 1)
+        self.assertIn('bad.test', result['tried'][0]['source'])
+        self.assertEqual(managers.db.get_full_data('bk', 'reader')['url'], 'http://good.test/1/8.html')
+
+    def test_all_failed_reports_every_reason_without_modification(self):
+        managers.db.save_raw_book('reader', 'bk', {'value': {'url': 'http://old.test/1/7.html'}})
+        crawler = self._crawler([
+            {'page_type': 'unknown', 'content': []},
+            {'page_type': 'unknown', 'content': []},
+        ])
+        result = source_switch.apply_best_switch('reader', 'bk', [
+            {'url': 'http://a.test/1/8.html', 'source': 'a.test'},
+            {'url': 'http://b.test/1/8.html', 'source': 'b.test'},
+        ], crawler, expected_id=8)
+
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual([t['source'] for t in result['tried']], ['a.test', 'b.test'])
+        self.assertEqual(managers.db.get_full_data('bk', 'reader')['url'], 'http://old.test/1/7.html')

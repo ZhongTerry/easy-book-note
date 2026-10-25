@@ -207,3 +207,26 @@ def apply_switch(username, book_key, new_url, crawler, expected_id=None):
     info("SourceSwitch", f"换源完成: {book_key} -> {new_url} ({title})")
     return {'status': 'applied', 'new_url': new_url, 'chapter_title': title,
             'source': urlparse(new_url).hostname or '', 'note': note}
+
+
+def apply_best_switch(username, book_key, candidates, crawler, expected_id=None):
+    """依次尝试候选源，第一个真实可读的生效。
+
+    换源列表的候选都通过了目录级章节验证，但个别站的正文页仍可能
+    抓取失败（JS 渲染等）。逐个试，全败时返回每个源的具体原因，
+    一个成功即返回——失败的那些未对书架做任何修改。
+    """
+    attempts = []
+    for index, candidate in enumerate(candidates or []):
+        new_url = (candidate or {}).get('url') or ''
+        source_name = (candidate or {}).get('source') or (urlparse(new_url).hostname if new_url else '')
+        result = apply_switch(username, book_key, new_url, crawler,
+                              expected_id=expected_id)
+        if result.get('status') == 'applied':
+            result['tried'] = attempts
+            result['attempt_index'] = index
+            return result
+        attempts.append({'source': source_name, 'reason': result.get('message') or result.get('msg') or '未知原因'})
+    return {'status': 'error',
+            'message': '所有候选源的正文页均不可用（书架未做任何修改）',
+            'tried': attempts}

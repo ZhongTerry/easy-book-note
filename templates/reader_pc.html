@@ -2269,6 +2269,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 list.innerHTML = '<div style="text-align:center; padding:20px; color:#8a4b08;">候选源里没有站点包含这一章。可点"重新搜索"换个时机再试，或用书架体检里的批量换源。</div>';
                 return;
             }
+            window.sourceCandidates = json.data;
             list.innerHTML = json.data.map(src => {
                 const conf = Math.round((src.confidence || 0) * 100);
                 const confColor = conf >= 85 ? '#0f766e' : (conf >= 60 ? '#d97706' : '#b91c1c');
@@ -2308,12 +2309,17 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
         const loading = document.getElementById('sourceLoading');
         list.style.display = 'none';
         loading.style.display = 'block';
-        loading.innerHTML = '⏳ 正在前往 ' + escapeSourceHtml(sourceName || '新源') + '<br>加载目标章节验证可用性…';
+        loading.innerHTML = '⏳ 正在验证目标章节可读性…<br><small style="color:#bbb;">失败的源会自动尝试下一个</small>';
         try {
+            const body = { key: dbKey, chapter_id: sourceChapterId };
+            // 用户点的是具体某个源：优先它，其余候选作为自动回退
+            const picked = (window.sourceCandidates || []).find(c => c.url === newUrl);
+            const rest = (window.sourceCandidates || []).filter(c => c.url !== newUrl);
+            body.candidates = picked ? [picked].concat(rest) : [{ url: newUrl, source: sourceName }];
             const res = await fetch('/api/source/apply', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ key: dbKey, new_url: newUrl, chapter_id: sourceChapterId }),
+                body: JSON.stringify(body),
             });
             const json = await res.json();
             if (json.status === 'applied') {
@@ -2323,9 +2329,11 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
                 }, 700);
                 return;
             }
+            const tried = (json.tried || []).map(t => escapeSourceHtml(t.source) + ': ' + escapeSourceHtml((t.reason || '').slice(0, 30))).join('<br>');
             showToast(json.message || '切换失败');
-            loading.style.display = 'none';
-            list.style.display = 'block';
+            if (tried) loading.innerHTML = '<div style="font-size:12px; color:#999;">' + tried + '</div>';
+            else loading.style.display = 'none';
+            if (!tried) list.style.display = 'block';
         } catch (e) {
             showToast('换源请求异常: ' + e.message);
             loading.style.display = 'none';

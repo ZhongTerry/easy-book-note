@@ -1053,19 +1053,32 @@ def api_source_list():
 @core_bp.route('/api/source/apply', methods=['POST'])
 @login_required
 def api_source_apply():
-    """应用换源：验证新章节可用后更新书源，旧缓存清理，进度保留。"""
+    """应用换源：验证新章节可用后更新书源，旧缓存清理，进度保留。
+
+    传 candidates 数组时逐个尝试（第一个真实可读的生效）；传单个
+    new_url 则只试一个。
+    """
     payload = request.json or {}
     book_key = (payload.get('key') or '').strip()
-    new_url = (payload.get('new_url') or '').strip()
     expected_id = payload.get('chapter_id')
-    if not book_key or not new_url:
+    candidates = payload.get('candidates')
+    if not book_key:
         return jsonify({"status": "error", "msg": "参数错误"})
 
-    from services.source_switch import apply_switch
-    result = apply_switch(
-        managers.get_current_user(), book_key, new_url, crawler,
-        expected_id=expected_id if isinstance(expected_id, int) else None,
-    )
+    from services.source_switch import apply_switch, apply_best_switch
+    if isinstance(candidates, list) and candidates:
+        result = apply_best_switch(
+            managers.get_current_user(), book_key, candidates, crawler,
+            expected_id=expected_id if isinstance(expected_id, int) else None,
+        )
+    else:
+        new_url = (payload.get('new_url') or '').strip()
+        if not new_url:
+            return jsonify({"status": "error", "msg": "参数错误"})
+        result = apply_switch(
+            managers.get_current_user(), book_key, new_url, crawler,
+            expected_id=expected_id if isinstance(expected_id, int) else None,
+        )
     status = 200 if result.get('status') == 'applied' else 422
     return jsonify(result), status
 
