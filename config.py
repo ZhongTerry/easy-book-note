@@ -95,6 +95,9 @@ REQUEST_TIMEOUT = 10  # HTTP 请求超时(秒)
 # ==========================================
 # 搜书统一经由 SearXNG，不再由应用直接请求各搜索引擎或小说站。
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://100.71.136.3:8888").rstrip('/')
+# 实例默认引擎组合可能混入无关结果（实测换源查询返回 minecraft/字典站），
+# 显式锁定可用的聚合引擎；多引擎用逗号分隔
+SEARXNG_ENGINES = os.environ.get("SEARXNG_ENGINES", "bing")
 SEARXNG_TIMEOUT = float(os.environ.get("SEARXNG_TIMEOUT", "8"))
 SEARXNG_CACHE_TTL = int(os.environ.get("SEARXNG_CACHE_TTL", "600"))
 SEARXNG_VERIFY_LIMIT = int(os.environ.get("SEARXNG_VERIFY_LIMIT", "4"))

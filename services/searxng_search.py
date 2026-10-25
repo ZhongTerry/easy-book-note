@@ -1,6 +1,7 @@
 """Novel-oriented search adapter backed exclusively by a SearXNG instance."""
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
@@ -69,6 +70,8 @@ class SearxngNovelSearch:
         self.cache_ttl = cache_ttl
         self.verify_limit = max(0, verify_limit)
         self.verify_workers = max(1, verify_workers)
+        # 实例默认引擎组合可能返回无关结果，显式锁定（见 config.SEARXNG_ENGINES）
+        self.engines = os.environ.get('SEARXNG_ENGINES', 'bing')
         self._cache: dict[str, tuple[float, list[dict[str, Any]], bool]] = {}
         self._cache_lock = threading.Lock()
 
@@ -209,14 +212,39 @@ class SearxngNovelSearch:
                 'categories': 'general',
                 'language': 'zh-CN',
                 'safesearch': 0,
+                'engines': getattr(self, 'engines', '') or None,
             },
             headers={'Accept': 'application/json', 'User-Agent': 'NoteDB/1.0'},
             timeout=self.timeout,
+            proxies=self._proxies(),
         )
         response.raise_for_status()
         payload = response.json()
         results = payload.get('results', []) if isinstance(payload, dict) else []
         return results if isinstance(results, list) else []
+
+    def _proxies(self):
+        """自建实例（内网 / Tailscale / localhost）不走系统代理。
+
+        本机常驻 Clash 之类代理时，100.64/10 的 Tailscale 地址会被代理
+        转发后超时，导致换源搜索整体失败；这类地址永远只能直连。
+        """
+        from urllib.parse import urlsplit
+        host = (urlsplit(self.base_url).hostname or '').lower()
+        direct = host in ('localhost',) or host.endswith('.local')
+        if not direct:
+            try:
+                import ipaddress
+                ip = ipaddress.ip_address(host)
+                direct = (
+                    ip.is_loopback
+                    or ip.is_link_local
+                    or ip in ipaddress.ip_network('100.64.0.0/10')
+                    or ip.is_private
+                )
+            except ValueError:
+                direct = False  # 公网域名交给系统代理
+        return {'http': None, 'https': None} if direct else None
 
     @staticmethod
     def _normalize_keyword(keyword: str) -> str:
