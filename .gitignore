@@ -2,12 +2,14 @@
 .env
 auth_key.json
 user_token.json
-*.log
+fanqie_session.json
 config.env
 
 # === 2. 用户数据与数据库 (核心保护) ===
-user_data/
+user_data*
 backups/
+*.db
+*.sqlite
 # 忽略 SQLite 的临时日志文件 (写前日志/共享内存)
 *.sqlite-wal
 *.sqlite-shm
@@ -15,13 +17,15 @@ backups/
 
 # === 3. 缓存与运行临时文件 ===
 /cache/
+/library/
+/downloads/
+/debug/
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
 .buffer
-/library/*.epub
-/downloads/*.txt
+stats.json
 
 # === 4. Python 虚拟环境 ===
 venv/
@@ -39,13 +43,11 @@ yarn-error.log*
 .eslintcache
 
 # === 6. 打包产物 (PyInstaller & Electron Builder) ===
-# 忽略打包生成的中间文件夹
 dist/
 build/
-# 忽略 PyInstaller 生成的描述文件
 *.spec
 
-# === 7. 系统与 IDE 临时文件 ===
+# === 7. 系统与 IDE / 工具脚本 ===
 .vscode/
 .idea/
 .DS_Store
@@ -53,9 +55,4 @@ Thumbs.db
 desktop.ini
 /tools
 debug.*
-user_data*
-/downloads
-# === 8. 图标脚本生成的临时备份 (可选) ===
-# 如果你不希望把原始的大图或转换过程中的 png 传上去，可以取消注释
-# static/icons/*.png
-# !static/icons/icon-512x512.png  # 排除：保留一张最大的原图
+*.log
