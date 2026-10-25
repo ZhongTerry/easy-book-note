@@ -1375,7 +1375,7 @@ def export_library_backup():
     username = get_current_user()
     books = []
     try:
-        with managers.get_db() as conn:
+        with managers.db_connection() as conn:
             rows = conn.execute(
                 "SELECT content FROM books_v2 WHERE username=? ORDER BY book_key",
                 (username,),

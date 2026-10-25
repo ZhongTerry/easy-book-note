@@ -1,4 +1,3 @@
-import contextlib
 import io
 import os
 import sqlite3
@@ -53,16 +52,14 @@ class TestMemoIsolation(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, 'test.sqlite')
 
-        @contextlib.contextmanager
         def temporary_db():
+            # db_connection() closes the connection outside a request context,
+            # so each call may hand out a fresh connection to the same file.
             connection = sqlite3.connect(self.db_path)
             connection.row_factory = sqlite3.Row
-            try:
-                yield connection
-            finally:
-                connection.close()
+            return connection
 
-        self.db_patcher = patch('managers.get_db', temporary_db)
+        self.db_patcher = patch('managers._connect', temporary_db)
         self.db_patcher.start()
         self.manager = managers.MemoManager()
 

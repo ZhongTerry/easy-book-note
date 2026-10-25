@@ -3,7 +3,7 @@ import os
 import psutil # 记得 pip install psutil
 import platform
 from shared import CACHE_DIR, USER_DATA_DIR, admin_required, debug, info, warn, error
-from managers import role_manager, get_db, cluster_manager
+from managers import role_manager, db_connection, cluster_manager
 from datetime import datetime, timedelta
 import json
 import managers
@@ -321,7 +321,7 @@ def get_cluster_status():
 @admin_required
 def api_admin_system_summary():
     try:
-        with get_db() as conn:
+        with db_connection() as conn:
             # 1. 统计总用户数
             user_count = conn.execute("SELECT COUNT(DISTINCT username) FROM books_v2").fetchone()[0]
             
@@ -351,7 +351,7 @@ def api_admin_system_summary():
 @admin_required
 def api_admin_activity_stats():
     try:
-        with get_db() as conn:
+        with db_connection() as conn:
             # 获取所有用户的 stats 模块
             rows = conn.execute("SELECT json_content FROM user_modules WHERE module_type='stats'").fetchall()
             
@@ -381,7 +381,7 @@ def api_admin_activity_stats():
 @admin_required
 def api_admin_user_detail(username):
     try:
-        with get_db() as conn:
+        with db_connection() as conn:
             # A. 获取统计信息
             stats_row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type='stats'", (username,)).fetchone()
             stats = json.loads(stats_row[0]) if stats_row else {"daily_stats": {}}
@@ -452,8 +452,7 @@ def api_admin_users():
     
     # 2. 【重要修复】从 SQL 数据库中获取所有注册过的用户名，而不是扫描磁盘
     try:
-        from managers import get_db
-        with get_db() as conn:
+        with db_connection() as conn:
             # 从 books_v2 表中获取所有不重复的用户名
             cursor = conn.execute("SELECT DISTINCT username FROM books_v2")
             usernames = [row[0] for row in cursor.fetchall()]

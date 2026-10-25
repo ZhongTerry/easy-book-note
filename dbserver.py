@@ -50,6 +50,9 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(pro_bp)
 app.register_blueprint(cache_bp)
 
+# 请求结束时关闭挂在 g 上的 SQLite 连接（managers.get_db 的请求上下文缓存）
+app.teardown_appcontext(managers.close_db)
+
 
 @app.route('/healthz')
 def healthz():

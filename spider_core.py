@@ -120,49 +120,6 @@ def _remote_request(endpoint, payload):
 def parse_chapter_id(text):
     return parse_chapter_number(text) or -1
 
-def _smart_convert_int(s):
-    """
-    将中文数字转换为阿拉伯数字 (支持: 十一 -> 11, 一百零五 -> 105)
-    """
-    # 尝试直接转数字 (防止传入的是 "123")
-    try: return int(s)
-    except: pass
-
-    # 映射表
-    cn_nums = {'零': 0, '〇': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, 
-               '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
-    cn_units = {'十': 10, '百': 100, '千': 1000, '万': 10000}
-
-    # 兼容口语/非规范写法：无单位时按逐位数字拼接
-    # 例如: 一一一 -> 111, 二零四 -> 204
-    if s and all(ch in cn_nums for ch in s):
-        return int(''.join(str(cn_nums[ch]) for ch in s))
-
-    # [核心修复] 特殊处理以"十"开头的数字 (如: 十一 => 一十一, 十五 => 一十五)
-    if s.startswith('十'):
-        s = '一' + s
-
-    result = 0
-    temp_val = 0 # 暂存当前读取的数字
-    
-    for char in s:
-        if char in cn_nums:
-            temp_val = cn_nums[char]
-        elif char in cn_units:
-            unit = cn_units[char]
-            if unit >= 10000:
-                # 处理"万"这种大单位，先结算前面的
-                result = (result + temp_val) * unit
-                temp_val = 0
-            else:
-                # 处理"十/百/千"
-                result += temp_val * unit
-                temp_val = 0
-    
-    # 加上最后剩下的个位数
-    result += temp_val
-    return result
-    
 
 # ==========================================
 # 1. 插件管理器

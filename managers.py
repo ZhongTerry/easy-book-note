@@ -5,11 +5,12 @@ import hashlib
 import time
 import uuid
 import re
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import session, g, has_request_context
 from shared import USER_DATA_DIR, CACHE_DIR, DL_DIR, debug, info, warn, error
+from recognition.chapter_numbers import parse_chapter_number
 import shared
 
 # ==========================================
@@ -17,17 +18,40 @@ import shared
 # ==========================================
 DB_PATH = os.path.join(USER_DATA_DIR, "data.sqlite")
 
+def _connect():
+    """Open a raw connection; the single seam for tests to redirect storage."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def get_db():
     """获取数据库连接"""
     if has_request_context():
         if 'db' not in g:
-            g.db = sqlite3.connect(DB_PATH)
-            g.db.row_factory = sqlite3.Row
+            g.db = _connect()
         return g.db
     else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _connect()
+
+@contextmanager
+def db_connection():
+    """Yield a SQLite connection with commit-on-success semantics.
+
+    Inside a request the connection is the shared one cached on `g` and is
+    closed by the Flask teardown handler; anywhere else (background threads,
+    CLI tools) the connection is owned here and must be closed on exit, or
+    every call leaks a file handle.
+    """
+    conn = get_db()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if not has_request_context():
+            conn.close()
 
 def close_db(e=None):
     db = g.pop('db', None)
@@ -98,21 +122,20 @@ class BaseJsonManager:
     def load(self, username=None):
         u = username or get_current_user()
         try:
-            conn = get_db()
-            row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type=?", (u, self.module_type)).fetchone()
-            if row and row[0]: return json.loads(row[0])
+            with db_connection() as conn:
+                row = conn.execute("SELECT json_content FROM user_modules WHERE username=? AND module_type=?", (u, self.module_type)).fetchone()
+                if row and row[0]: return json.loads(row[0])
         except Exception as e:
-            pass
+            # 全新库还没有 user_modules 表，首次读取失败属预期情况
+            debug("DB", f"Load Error ({self.module_type}): {e}")
         return {}
 
     def save(self, data, username=None):
         u = username or get_current_user()
         try:
             json_str = json.dumps(data, ensure_ascii=False)
-            conn = get_db()
-            conn.execute("REPLACE INTO user_modules (username, module_type, json_content) VALUES (?, ?, ?)", (u, self.module_type, json_str))
-            conn.commit()
-            if not has_request_context(): conn.close()
+            with db_connection() as conn:
+                conn.execute("REPLACE INTO user_modules (username, module_type, json_content) VALUES (?, ?, ?)", (u, self.module_type, json_str))
         except Exception as e:
             error("DB", f"Save Error ({self.module_type}): {e}")
 
@@ -124,13 +147,13 @@ class RoleManager:
         return self._load_config()
     def _load_config(self):
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 row = conn.execute("SELECT value FROM sys_config WHERE key='roles'").fetchone()
                 return json.loads(row[0]) if row else {"admins": [], "pros": []}
         except: return {"admins": [], "pros": []}
 
     def _save_config(self, data):
-        with get_db() as conn:
+        with db_connection() as conn:
             conn.execute("REPLACE INTO sys_config (key, value) VALUES (?, ?)", ('roles', json.dumps(data)))
             conn.commit()
 
@@ -224,7 +247,7 @@ class IsolatedTagManager:
             all_info = db.list_all()
             if all_info['status'] == 'success':
                 result = {}
-                with get_db() as conn:
+                with db_connection() as conn:
                     cursor = conn.execute("SELECT content FROM books_v2 WHERE username=?", (u,))
                     for row in cursor.fetchall():
                         c = json.loads(row[0])
@@ -488,7 +511,7 @@ class IsolatedDB:
     def list_all(self):
         u = get_current_user()
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 cursor = conn.execute("SELECT content FROM books_v2 WHERE username=? ORDER BY updated_at DESC", (u,))
                 return {"status": "success", "data": {json.loads(r[0])['key']: json.loads(r[0])['value'] for r in cursor.fetchall() if 'key' in json.loads(r[0])}}
         except Exception as e: return {"status": "error", "message": str(e)}
@@ -497,7 +520,7 @@ class IsolatedDB:
         u = get_current_user()
         try:
             t = f'%{term}%'
-            with get_db() as conn:
+            with db_connection() as conn:
                 cursor = conn.execute("SELECT content FROM books_v2 WHERE username=? AND (book_key LIKE ? OR content LIKE ?)", (u, t, t))
                 return {"status": "success", "data": {json.loads(r[0])['key']: json.loads(r[0])['value'] for r in cursor.fetchall()}}
         except Exception as e: return {"status": "error", "message": str(e)}
@@ -505,7 +528,7 @@ class IsolatedDB:
     def remove(self, key):
         u = get_current_user()
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 conn.execute("DELETE FROM books_v2 WHERE username=? AND (book_key=? OR id=?)", (u, key, key))
                 conn.commit()
             return {"status": "success", "message": f"Removed: {key}"}
@@ -515,7 +538,7 @@ class IsolatedDB:
         if not old_key or not new_key: return {"status": "error", "message": "Key cannot be empty"}
         u = get_current_user()
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 exists = conn.execute("SELECT 1 FROM books_v2 WHERE username=? AND book_key=?", (u, new_key)).fetchone()
                 if exists: return {"status": "error", "message": f"Target Key [{new_key}] exists"}
                 content = self.get_raw_book(u, old_key)
@@ -546,7 +569,7 @@ class IsolatedDB:
         self._ensure_history_table()
         u = get_current_user()
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 conn.execute("INSERT INTO book_history (username, book_key, value) VALUES (?, ?, ?)", (u, key, value))
                 conn.execute(f'''
                     DELETE FROM book_history 
@@ -565,7 +588,7 @@ class IsolatedDB:
         self._ensure_history_table()
         u = get_current_user()
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 cursor = conn.execute("SELECT value, recorded_at FROM book_history WHERE username=? AND book_key=? ORDER BY recorded_at DESC", (u, key))
                 return [{"value": row[0], "time": row[1]} for row in cursor.fetchall()]
         except: return []
@@ -616,7 +639,7 @@ class UpdateRecordManager:
     def get_all_updates(self, username):
         res = []
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 cursor = conn.execute("SELECT content FROM books_v2 WHERE username=?", (username,))
                 for row in cursor.fetchall():
                     c = json.loads(row[0])
@@ -628,7 +651,7 @@ class UpdateRecordManager:
     def get_all_subscribed(self, username):
         res = []
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 cursor = conn.execute("SELECT content FROM books_v2 WHERE username=?", (username,))
                 for row in cursor.fetchall():
                     c = json.loads(row[0])
@@ -795,7 +818,7 @@ class FullTextCacheManager:
     def _ensure_table(self):
         """确保全文缓存表存在"""
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 conn.execute('''CREATE TABLE IF NOT EXISTS fulltext_cache (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL,
@@ -818,44 +841,19 @@ class FullTextCacheManager:
     
     @staticmethod
     def extract_chapter_index(title):
-        """智能提取章节序号"""
-        if not title:
-            return None
-        
-        patterns = [
-            r'第[零一二三四五六七八九十百千万\d]+章',  # 中文章节
-            r'第(\d+)章',
-            r'chapter[\s_-]*(\d+)',
-            r'ch[\s._-]*(\d+)',
-            r'卷(\d+)',
-            r'^(\d+)[、.\s]',
-            r'\[(\d+)\]',
-            r'（(\d+)）',
-        ]
-        
-        # 中文数字转阿拉伯数字
-        cn_num_map = {
-            '零': 0, '一': 1, '二': 2, '三': 3, '四': 4,
-            '五': 5, '六': 6, '七': 7, '八': 8, '九': 9,
-            '十': 10, '百': 100, '千': 1000, '万': 10000
-        }
-        
-        for pattern in patterns:
-            match = re.search(pattern, title, re.IGNORECASE)
-            if match:
-                try:
-                    num_str = match.group(1) if len(match.groups()) > 0 else match.group(0)
-                    # 尝试直接转换为数字
-                    if num_str.isdigit():
-                        return int(num_str)
-                    # 处理中文数字
-                    # 这里简化处理，只处理"第X章"的情况
-                    for cn, num in cn_num_map.items():
-                        if cn in num_str:
-                            return num
-                except:
-                    pass
-        
+        """从标题提取章节序号，无法识别时返回 None。
+
+        委托给 recognition 的统一解析器，保证全文缓存的序号与目录/追更
+        一致（含"第十二章"这类多字中文数字）；括号形式 "[1024]" 是全文
+        缓存历史上额外接受的写法，这里保留为回退。
+        """
+        number = parse_chapter_number(title)
+        if number is not None:
+            return number
+        if title:
+            bracketed = re.search(r'[\[【（(]\s*(\d{1,7})\s*[\]】）)]', title)
+            if bracketed:
+                return int(bracketed.group(1))
         return None
     
     def _get_cache_path(self, username, book_key):
@@ -869,29 +867,29 @@ class FullTextCacheManager:
         """获取缓存状态"""
         u = username or get_current_user()
         try:
-            conn = get_db()
-            row = conn.execute(
-                "SELECT * FROM fulltext_cache WHERE username=? AND book_key=?",
-                (u, book_key)
-            ).fetchone()
-            
-            if row:
-                return {
-                    'exists': True,
-                    'book_name': row[3],
-                    'toc_url': row[4],
-                    'cached_chapters': row[7],
-                    'total_chapters': row[8],
-                    'last_chapter_index': row[9],
-                    'total_size': row[6],
-                    'created_at': row[11],
-                    'updated_at': row[12],
-                    'progress': round(row[7] / row[8] * 100, 1) if row[8] > 0 else 0
-                }
-            return {'exists': False}
+            with db_connection() as conn:
+                row = conn.execute(
+                    "SELECT * FROM fulltext_cache WHERE username=? AND book_key=?",
+                    (u, book_key)
+                ).fetchone()
         except Exception as e:
             error("FullTextCache", f"获取状态失败: {e}")
             return {'exists': False, 'error': str(e)}
+
+        if row:
+            return {
+                'exists': True,
+                'book_name': row[3],
+                'toc_url': row[4],
+                'cached_chapters': row[7],
+                'total_chapters': row[8],
+                'last_chapter_index': row[9],
+                'total_size': row[6],
+                'created_at': row[11],
+                'updated_at': row[12],
+                'progress': round(row[7] / row[8] * 100, 1) if row[8] > 0 else 0
+            }
+        return {'exists': False}
     
     def get_chapter_from_cache(self, book_key, chapter_url, username=None):
         """从缓存中获取章节内容"""
@@ -1158,7 +1156,7 @@ class FullTextCacheManager:
             json.dump(cache_data, f, ensure_ascii=False, indent=2)
         
         # 更新数据库
-        with get_db() as conn:
+        with db_connection() as conn:
             conn.execute('''INSERT OR REPLACE INTO fulltext_cache 
                 (username, book_key, book_name, toc_url, cache_data, total_size, 
                  cached_chapters, total_chapters, last_chapter_index, updated_at)
@@ -1237,7 +1235,7 @@ class FullTextCacheManager:
                 json.dump(cache_data, f, ensure_ascii=False, indent=2)
             
             # 更新数据库
-            with get_db() as conn:
+            with db_connection() as conn:
                 conn.execute('''UPDATE fulltext_cache 
                     SET cached_chapters=?, total_chapters=?, last_chapter_index=?, 
                         total_size=?, updated_at=CURRENT_TIMESTAMP
@@ -1267,7 +1265,7 @@ class FullTextCacheManager:
                 os.remove(cache_path)
             
             # 删除数据库记录
-            with get_db() as conn:
+            with db_connection() as conn:
                 conn.execute(
                     "DELETE FROM fulltext_cache WHERE username=? AND book_key=?",
                     (u, book_key)
@@ -1282,27 +1280,27 @@ class FullTextCacheManager:
         """列出所有缓存"""
         u = username or get_current_user()
         try:
-            conn = get_db()
-            rows = conn.execute(
-                '''SELECT book_key, book_name, cached_chapters, total_chapters, 
-                   total_size, created_at, updated_at 
-                   FROM fulltext_cache WHERE username=? ORDER BY updated_at DESC''',
-                (u,)
-            ).fetchall()
-            
-            result = []
-            for row in rows:
-                result.append({
-                    'book_key': row[0],
-                    'book_name': row[1],
-                    'cached_chapters': row[2],
-                    'total_chapters': row[3],
-                    'total_size': row[4],
-                    'created_at': row[5],
-                    'updated_at': row[6],
-                    'progress': round(row[2] / row[3] * 100, 1) if row[3] > 0 else 0
-                })
-            
+            with db_connection() as conn:
+                rows = conn.execute(
+                    '''SELECT book_key, book_name, cached_chapters, total_chapters,
+                       total_size, created_at, updated_at
+                       FROM fulltext_cache WHERE username=? ORDER BY updated_at DESC''',
+                    (u,)
+                ).fetchall()
+
+                result = []
+                for row in rows:
+                    result.append({
+                        'book_key': row[0],
+                        'book_name': row[1],
+                        'cached_chapters': row[2],
+                        'total_chapters': row[3],
+                        'total_size': row[4],
+                        'created_at': row[5],
+                        'updated_at': row[6],
+                        'progress': round(row[2] / row[3] * 100, 1) if row[3] > 0 else 0
+                    })
+
             return {'status': 'success', 'data': result}
         except Exception as e:
             return {'status': 'error', 'message': str(e)}
@@ -2518,7 +2516,7 @@ class MemoManager:
     def _ensure_table(self):
         """确保备忘录表存在"""
         try:
-            with get_db() as conn:
+            with db_connection() as conn:
                 conn.execute('''CREATE TABLE IF NOT EXISTS user_memos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL,
@@ -2544,7 +2542,7 @@ class MemoManager:
     
     def get_all_memos(self, username):
         """获取用户所有备忘录"""
-        with get_db() as conn:
+        with db_connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM user_memos WHERE username=? ORDER BY is_pinned DESC, updated_at DESC",
                 (username,)
@@ -2553,7 +2551,7 @@ class MemoManager:
     
     def get_memo(self, username, memo_id):
         """获取单条备忘录"""
-        with get_db() as conn:
+        with db_connection() as conn:
             row = conn.execute(
                 "SELECT * FROM user_memos WHERE id=? AND username=?",
                 (memo_id, username)
@@ -2562,7 +2560,7 @@ class MemoManager:
     
     def save_memo(self, username, memo_id=None, title=None, content=None, tags=None):
         """保存备忘录（新建或更新）"""
-        with get_db() as conn:
+        with db_connection() as conn:
             if memo_id:
                 # 更新现有备忘录
                 cursor = conn.execute("""
@@ -2595,7 +2593,7 @@ class MemoManager:
     
     def delete_memo(self, username, memo_id):
         """删除备忘录"""
-        with get_db() as conn:
+        with db_connection() as conn:
             cursor = conn.execute(
                 "DELETE FROM user_memos WHERE id=? AND username=?",
                 (memo_id, username)
@@ -2608,7 +2606,7 @@ class MemoManager:
     
     def toggle_pin(self, username, memo_id):
         """置顶/取消置顶"""
-        with get_db() as conn:
+        with db_connection() as conn:
             cursor = conn.execute("""
                 UPDATE user_memos 
                 SET is_pinned = NOT is_pinned 
@@ -2619,7 +2617,7 @@ class MemoManager:
     
     def search_memos(self, username, keyword):
         """搜索备忘录"""
-        with get_db() as conn:
+        with db_connection() as conn:
             rows = conn.execute("""
                 SELECT * FROM user_memos 
                 WHERE username=? AND (title LIKE ? OR content LIKE ?)
