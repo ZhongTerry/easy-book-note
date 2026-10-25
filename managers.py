@@ -5,6 +5,8 @@ import hashlib
 import time
 import uuid
 import re
+import threading
+from collections import OrderedDict
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -508,12 +510,51 @@ class IsolatedDB:
         c = self.get_raw_book(username or get_current_user(), key)
         return c.get('value') if c else None
 
+    def record_reading(self, username, key, url, title, chapter_id, update_source=True):
+        """Atomically merge the reading URL, meta ordinal and progress.
+
+        Replaces the reader's previous three independent read-modify-write
+        passes (value.url, meta.chapter_id, locked progress) with one write
+        lock. The progress lock is evaluated inside the merge, so a delayed
+        request can never push last_read_index backwards. Local EPUB reading
+        passes update_source=False: progress is tracked, but the book's
+        source URL must stay on the web chapter it came from.
+        """
+        now = int(time.time())
+        def merge(content):
+            value = content.setdefault('value', {})
+            if update_source:
+                value['url'] = url
+                value['updated_at'] = now
+                meta = content.setdefault('meta', {})
+                meta['chapter_id'] = chapter_id
+                meta['updated_at'] = now
+            old_index = value.get('last_read_index', 0)
+            if chapter_id >= old_index:
+                value.update({
+                    'last_read_index': chapter_id,
+                    'last_read_url': url,
+                    'last_read_title': title,
+                    'last_read_time': now,
+                })
+                info("DB", f"已同步阅读进度: {key} -> 第 {chapter_id} 章")
+            else:
+                info("DB", f"跳过进度同步 (当前 {chapter_id} < 已读 {old_index}): {key}")
+            return True
+        return self._mutate_book(username, key, merge)
+
     def list_all(self):
         u = get_current_user()
         try:
             with db_connection() as conn:
                 cursor = conn.execute("SELECT content FROM books_v2 WHERE username=? ORDER BY updated_at DESC", (u,))
-                return {"status": "success", "data": {json.loads(r[0])['key']: json.loads(r[0])['value'] for r in cursor.fetchall() if 'key' in json.loads(r[0])}}
+                data = {}
+                for (content_json,) in cursor.fetchall():
+                    content = json.loads(content_json)
+                    key = content.get('key')
+                    if key:
+                        data[key] = content.get('value', {})
+            return {"status": "success", "data": data}
         except Exception as e: return {"status": "error", "message": str(e)}
 
     def find(self, term):
@@ -741,6 +782,13 @@ class FullTextCacheManager:
         # 任务存储（内存模式回退）
         self.active_tasks = {}  # {task_id: {status, progress, control_event, ...}}
         self.task_lock = threading.Lock()  # 任务操作锁
+
+        # 全文缓存内存索引与 LRU：避免每次读章都遍历书架、整本解析 JSON。
+        # 由 _save_cache / update_book_cache / delete_cache 维护失效。
+        self._url_index = {}            # {username: {chapter_url: book_key}}
+        self._book_lru = OrderedDict()  # {(username, book_key): cache_data}
+        self._book_lru_cap = 8
+        self._cache_lock = threading.RLock()
         
         # 从 Redis 恢复任务（如果启用）
         if self.use_redis:
@@ -891,30 +939,96 @@ class FullTextCacheManager:
             }
         return {'exists': False}
     
-    def get_chapter_from_cache(self, book_key, chapter_url, username=None):
-        """从缓存中获取章节内容"""
-        u = username or get_current_user()
-        cache_path = self._get_cache_path(u, book_key)
-        
+    def _load_book_data(self, username, book_key):
+        """解析后的全书缓存，经小容量 LRU 复用，未命中才读文件。"""
+        cache_key = (username, book_key)
+        with self._cache_lock:
+            data = self._book_lru.get(cache_key)
+            if data is not None:
+                self._book_lru.move_to_end(cache_key)
+                return data
+
+        cache_path = self._get_cache_path(username, book_key)
         if not os.path.exists(cache_path):
             return None
-        
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
-                cache_data = json.load(f)
-            
-            # 在章节列表中查找
-            for ch in cache_data.get('chapters', []):
-                if ch.get('url') == chapter_url and ch.get('content'):
-                    return {
-                        'content': ch['content'],
-                        'title': ch.get('title', ''),
-                        'cached_at': ch.get('cached_at', '')
-                    }
-            return None
+                data = json.load(f)
         except Exception as e:
             error("FullTextCache", f"读取缓存失败: {e}")
             return None
+
+        with self._cache_lock:
+            self._book_lru[cache_key] = data
+            self._book_lru.move_to_end(cache_key)
+            while len(self._book_lru) > self._book_lru_cap:
+                self._book_lru.popitem(last=False)
+        return data
+
+    def _invalidate_book(self, username, book_key, cache_data=None):
+        """写后刷新索引与 LRU；cache_data=None 表示整本已删除。"""
+        with self._cache_lock:
+            cache_key = (username, book_key)
+            if cache_data is None:
+                self._book_lru.pop(cache_key, None)
+                index = self._url_index.get(username)
+                if index is not None:
+                    self._url_index[username] = {
+                        url: key for url, key in index.items() if key != book_key
+                    }
+                return
+            self._book_lru[cache_key] = cache_data
+            self._book_lru.move_to_end(cache_key)
+            while len(self._book_lru) > self._book_lru_cap:
+                self._book_lru.popitem(last=False)
+            index = self._url_index.get(username)
+            if index is not None:
+                for ch in cache_data.get('chapters', []):
+                    if ch.get('url'):
+                        index[ch['url']] = book_key
+
+    def find_book_for_url(self, url, username):
+        """返回全文缓存中包含该章节 URL 的 book_key，没有则 None。"""
+        with self._cache_lock:
+            index = self._url_index.get(username)
+        if index is not None:
+            return index.get(url)
+
+        # 首次访问：扫描该用户所有缓存文件建立 url -> book_key 索引。
+        # 每进程只建一次，之后由写入钩子增量维护。
+        index = {}
+        user_dir = os.path.join(self.cache_dir, username)
+        if os.path.isdir(user_dir):
+            for name in os.listdir(user_dir):
+                if not name.endswith('.json'):
+                    continue
+                book_key = name[:-len('.json')]
+                data = self._load_book_data(username, book_key)
+                if data:
+                    for ch in data.get('chapters', []):
+                        if ch.get('url'):
+                            index[ch['url']] = book_key
+        with self._cache_lock:
+            # 并发下可能重复构建，后写的覆盖前者，内容等价
+            self._url_index[username] = index
+            return index.get(url)
+
+    def get_chapter_from_cache(self, book_key, chapter_url, username=None):
+        """从缓存中获取章节内容"""
+        u = username or get_current_user()
+        cache_data = self._load_book_data(u, book_key)
+        if cache_data is None:
+            return None
+
+        # 在章节列表中查找
+        for ch in cache_data.get('chapters', []):
+            if ch.get('url') == chapter_url and ch.get('content'):
+                return {
+                    'content': ch['content'],
+                    'title': ch.get('title', ''),
+                    'cached_at': ch.get('cached_at', '')
+                }
+        return None
     
     def start_full_download(self, book_key, book_name, toc_url, chapters, crawler_instance, 
                            username=None, interval=0.5, max_workers=8):
@@ -1157,15 +1271,16 @@ class FullTextCacheManager:
         
         # 更新数据库
         with db_connection() as conn:
-            conn.execute('''INSERT OR REPLACE INTO fulltext_cache 
-                (username, book_key, book_name, toc_url, cache_data, total_size, 
+            conn.execute('''INSERT OR REPLACE INTO fulltext_cache
+                (username, book_key, book_name, toc_url, cache_data, total_size,
                  cached_chapters, total_chapters, last_chapter_index, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''',
                 (username, book_key, book_name, toc_url, 'stored_in_file',
                  total_size, len(cache_data['chapters']), total_chapters, max_index)
             )
             conn.commit()
-    
+        self._invalidate_book(username, book_key, cache_data)
+
     def _fetch_chapter(self, url, crawler):
         """获取单个章节内容"""
         try:
@@ -1236,15 +1351,16 @@ class FullTextCacheManager:
             
             # 更新数据库
             with db_connection() as conn:
-                conn.execute('''UPDATE fulltext_cache 
-                    SET cached_chapters=?, total_chapters=?, last_chapter_index=?, 
+                conn.execute('''UPDATE fulltext_cache
+                    SET cached_chapters=?, total_chapters=?, last_chapter_index=?,
                         total_size=?, updated_at=CURRENT_TIMESTAMP
                     WHERE username=? AND book_key=?''',
-                    (len(cache_data['chapters']), len(toc_data['chapters']), 
+                    (len(cache_data['chapters']), len(toc_data['chapters']),
                      max_index, total_size, u, book_key)
                 )
                 conn.commit()
-            
+            self._invalidate_book(u, book_key, cache_data)
+
             return {
                 'status': 'success',
                 'message': f'更新成功，新增 {len(new_chapters)} 章',
@@ -1271,7 +1387,8 @@ class FullTextCacheManager:
                     (u, book_key)
                 )
                 conn.commit()
-            
+            self._invalidate_book(u, book_key)
+
             return {'status': 'success', 'message': '缓存已删除'}
         except Exception as e:
             return {'status': 'error', 'message': f'删除失败: {str(e)}'}

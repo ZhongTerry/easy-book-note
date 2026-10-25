@@ -2398,47 +2398,37 @@ class NovelCrawler:
         except:
             is_user_reading = False
 
-        # 0. 最优先：检查全文缓存（仅对正常 Web 阅读请求生效）
+        # 0. 最优先：检查全文缓存（仅对正常 Web 阅读请求生效）。
+        # managers 反向依赖 spider_core（导出/集群任务），因此保持惰性导入。
         if is_user_reading and not no_cache and not url.startswith('epub:'):
             try:
-                import sys
-                if 'managers' in sys.modules:
-                    managers = sys.modules['managers']
-                else:
-                    import managers
-                ftcm = getattr(managers, 'fulltext_cache_manager', None)
-                idb = getattr(managers, 'db', None)
-                if ftcm and idb:
-                    all_books = idb.list_all()
-                    if all_books.get('status') == 'success':
-                        for book_key, book_data in all_books.get('data', {}).items():
-                            cached_chapter = ftcm.get_chapter_from_cache(book_key, url)
-                            if cached_chapter:
-                                info("Crawler", f"🎯 命中全文缓存: {book_key}")
-                                return self._recognize_payload({
-                                    'content': cached_chapter['content'].split('\n'),
-                                    'title': cached_chapter['title'],
-                                    'book_name': book_key,
-                                    'from_fulltext_cache': True
-                                }, url, PageType.CHAPTER)
-            except: pass
+                import managers
+                username = managers.get_current_user()
+                book_key = managers.fulltext_cache_manager.find_book_for_url(url, username)
+                if book_key:
+                    cached_chapter = managers.fulltext_cache_manager.get_chapter_from_cache(
+                        book_key, url, username=username)
+                    if cached_chapter:
+                        info("Crawler", f"🎯 命中全文缓存: {book_key}")
+                        return self._recognize_payload({
+                            'content': cached_chapter['content'].split('\n'),
+                            'title': cached_chapter['title'],
+                            'book_name': book_key,
+                            'from_fulltext_cache': True
+                        }, url, PageType.CHAPTER)
+            except Exception as e:
+                warn("Crawler", f"全文缓存查询失败: {e}")
 
         # 1. 其次：检查临时本地缓存
         if not no_cache and not url.startswith('epub:'):
             try:
-                # 动态获取 cache 实例，避免循环导入
-                import sys
-                if 'managers' in sys.modules:
-                    managers = sys.modules['managers']
-                else:
-                    import managers
-                cache_inst = getattr(managers, 'cache', None)
-                if cache_inst:
-                    cached_data = cache_inst.get(url)
-                    if cached_data:
-                        info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
-                        return self._recognize_payload(cached_data, url)
-            except: pass
+                import managers
+                cached_data = managers.cache.get(url)
+                if cached_data:
+                    info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
+                    return self._recognize_payload(cached_data, url)
+            except Exception as e:
+                warn("Crawler", f"临时缓存查询失败: {e}")
         
         # 1. [核心去重] 检查是否有正在进行的任务
         import threading

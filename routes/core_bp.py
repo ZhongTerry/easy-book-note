@@ -440,73 +440,41 @@ def read_mode():
     # 5. 后续处理 (此时 data 一定不为 None，可以安全调用 .get)
     try:
         page_type = detect_page_type(data) if data else 'unknown'
+        read_title = data.get('title', '')
+
+        # 整个请求只读一次书籍行：历史记录与章节标记共用；
+        # 进度同步合并为 record_reading 的一次写锁事务
+        book_row = managers.db.get_raw_book(managers.get_current_user(), k) if k else None
 
         # [优化] 记录历史前先检测页面类型，目录页不记录
-        if k and data.get('title'):
+        if k and read_title:
             if page_type != 'toc':  # 只记录章节页，不记录目录页
-                # [关键修复] 检查 key 是否存在于数据库，避免记录不存在的 key
-                if managers.db.get_raw_book(managers.get_current_user(), k):
-                    # key 存在，记录历史
-                    managers.history_manager.add_record(k, data['title'], u, data.get('book_name'))
+                if book_row:  # key 存在才记录历史
+                    managers.history_manager.add_record(k, read_title, u, data.get('book_name'))
                 else:
                     warn("History", f"跳过不存在的 key: {k}")
             else:
-                warn("History", f"跳过目录页历史记录: {data.get('title')}")
+                warn("History", f"跳过目录页历史记录: {read_title}")
 
-        # [新增] 阅读时也同步更新 get_value 的 value (URL) 和 meta.chapter_id
-        if k and page_type != 'toc':
-            read_title = data.get('title', '')
-            real_id = calculate_real_chapter_id(k, u, read_title)
-            if real_id > 0:
-                managers.db.update(k, u)
-                try:
-                    import json
-                    meta_key = f"{k}:meta"
-                    old_meta_str = managers.db.get_val(meta_key)
-                    meta = json.loads(old_meta_str) if old_meta_str else {}
-                    meta['chapter_id'] = real_id
-                    meta['updated_at'] = int(time.time())
-                    managers.db.update(meta_key, json.dumps(meta))
-                except Exception as e:
-                    error("Read Sync", f"Meta save error: {e}")
-            else:
-                info("Read Sync", f"未识别章节号，跳过更新: {k}")
+        # 计算 ID（标题即真实序号，策略见 calculate_real_chapter_id）
+        current_chapter_id = parse_chapter_id(read_title) if read_title else -1
+        if k and page_type != 'toc' and current_chapter_id > 0:
+            # EPUB 只记进度，书源 URL 保持指向来源章节
+            managers.db.record_reading(
+                managers.get_current_user(), k, u, read_title, current_chapter_id,
+                update_source=not u.startswith('epub:'),
+            )
+        elif k and page_type != 'toc':
+            info("Read Sync", f"未识别章节号，跳过更新: {k}")
 
-        # 计算 ID
-        current_chapter_id = -1
-        if data.get('title'):
-            current_chapter_id = parse_chapter_id(data['title'])
-        
-        # [V2 增强] 自动保存阅读进度与序号到 SQLite
-        if k and current_chapter_id > 0:
-            # [核心修复] 实现进度锁定：仅在阅读到更后的章节时才更新主进度
-            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-            old_index = 0
-            if book_data and 'value' in book_data:
-                old_index = book_data['value'].get('last_read_index', 0)
-            
-            if current_chapter_id >= old_index:
-                # 更新书籍的主记录，方便后续排序和进度追踪
-                managers.db.update(k, {
-                    "last_read_index": current_chapter_id,
-                    "last_read_url": u,
-                    "last_read_title": data.get('title', ''),
-                    "last_read_time": int(time.time())
-                })
-                info("DB", f"已同步阅读进度: {k} -> 第 {current_chapter_id} 章")
-            else:
-                info("DB", f"跳过进度同步 (当前 {current_chapter_id} < 已读 {old_index}): {k}")
+        # 章节标记状态（AJAX 与页面渲染共用）
+        marked_chapters = []
+        if book_row:
+            marked_chapters = (book_row.get('value') or {}).get('marked_chapters') or []
+        is_marked = any(m.get('url') == u for m in marked_chapters)
 
         # [新增] AJAX 模式支持 (用于前端骨架屏无刷新加载)
         if request.args.get('mode') == 'ajax':
-            # 检查当前章节是否已标记
-            is_marked_ajax = False
-            if k:
-                book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-                if book_data and 'value' in book_data:
-                    marks = book_data['value'].get('marked_chapters', [])
-                    is_marked_ajax = any(m.get('url') == u for m in marks)
-
             return jsonify({
                 'code': 0,
                 'data': {
@@ -520,20 +488,12 @@ def read_mode():
                 },
                 'current_url': u,
                 'chapter_id': current_chapter_id,
-                'is_marked': is_marked_ajax
+                'is_marked': is_marked
             })
 
         # 6. 渲染页面
         ua = request.headers.get('User-Agent', '').lower()
         is_mobile = any(x in ua for x in ['iphone', 'android', 'phone', 'mobile'])
-        
-        # 检查当前章节是否已标记
-        is_marked = False
-        if k:
-            book_data = managers.db.get_raw_book(managers.get_current_user(), k)
-            if book_data and 'value' in book_data:
-                marks = book_data['value'].get('marked_chapters', [])
-                is_marked = any(m.get('url') == u for m in marks)
 
         context = {
             'article': data,
