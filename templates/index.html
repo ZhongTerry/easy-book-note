@@ -872,22 +872,22 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
             <input type="text" id="value" class="p-input" placeholder="https://... 或将 .epub 拖入此处" onkeydown="handleEnter(event)">
         </div>
 
-        <!-- 按钮行：使用 PureUI p-btn -->
+        <!-- 按钮行：保存是唯一主操作，其余保持中性描边 -->
         <div class="btn-row">
             <button class="p-btn p-btn-primary" onclick="doAction('insert')">💾 保存</button>
-            <button class="p-btn p-btn-primary" style="background:#0ea5e9; border-color:#0ea5e9;" onclick="doAction('find')">🔍 查库</button>
-            
+            <button class="p-btn p-btn-outline" onclick="doAction('find')">🔍 查库</button>
+
             <button class="p-btn p-btn-outline" onclick="window.open('/search', '_blank')">🌐 搜书</button>
-            
+
             <!-- <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button> -->
             <button class="p-btn p-btn-outline" onclick="openHistory()">⏳ 历史</button>
             <button class="p-btn p-btn-outline" onclick="openExportHistory()">📦 导出</button>
-            <button class="p-btn p-btn-outline" style="color: #10b981; border-color: #10b981;" onclick="openDownloadsManager()">💾 下载</button>
+            <button class="p-btn p-btn-outline" onclick="openDownloadsManager()">💾 下载</button>
             <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn p-btn-outline" onclick="openLibraryBackup()">↻ 备份</button>
-            <button class="p-btn" style="background: linear-gradient(45deg, #11998e, #38ef7d); color: white; border:none;" onclick="openInsight()">📊 洞察</button>
-            
+            <button class="p-btn p-btn-outline" onclick="openInsight()">📊 洞察</button>
+
             <!-- <button class="p-btn p-btn-danger" onclick="confirmDelete()">🗑️ 删除</button> -->
         </div>
 
