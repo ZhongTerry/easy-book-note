@@ -170,9 +170,9 @@ def schedule_auto_check():
                     conn.row_factory = sqlite3.Row
                     cursor = conn.cursor()
                     
-                    # 检查表是否存在
+                    # 检查表是否存在（追更数据实际存于 books_v2.content.update_info）
                     try:
-                        cursor.execute("SELECT * FROM book_updates LIMIT 1")
+                        cursor.execute("SELECT * FROM books_v2 LIMIT 1")
                     except:
                         conn.close()
                         continue

@@ -2459,7 +2459,7 @@ class NovelCrawler:
                             if cached_chapter:
                                 info("Crawler", f"🎯 命中全文缓存: {book_key}")
                                 return self._recognize_payload({
-                                    'content': cached_chapter['content'].split('\\n'),
+                                    'content': cached_chapter['content'].split('\n'),
                                     'title': cached_chapter['title'],
                                     'book_name': book_key,
                                     'from_fulltext_cache': True
