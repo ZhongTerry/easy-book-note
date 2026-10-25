@@ -887,6 +887,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn p-btn-outline" onclick="openLibraryBackup()">↻ 备份</button>
             <button class="p-btn p-btn-outline" onclick="openInsight()">📊 洞察</button>
+            <button class="p-btn p-btn-outline" onclick="openShelfHealth()">🩺 体检</button>
 
             <!-- <button class="p-btn p-btn-danger" onclick="confirmDelete()">🗑️ 删除</button> -->
         </div>
@@ -1249,6 +1250,30 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     </div>
 </div>
 
+<!-- 书架体检与批量换源 Modal -->
+<div id="shelfHealthModal" class="p-modal">
+    <div class="p-modal-box" style="width:min(860px,94vw); max-height:88vh; overflow:auto; background:#fff; border-radius:10px; padding:22px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+            <h3 style="margin:0">🩺 书架体检</h3>
+            <div style="display:flex; gap:8px;">
+                <button class="p-btn p-btn-sm p-btn-primary" id="shelfHealthRunBtn" onclick="runShelfHealthCheck()">开始体检</button>
+                <button class="p-btn p-btn-sm p-btn-outline" onclick="PureUI.modal.close('shelfHealthModal')">关闭</button>
+            </div>
+        </div>
+        <div id="shelfHealthSummary" style="font-size:13px; color:#666; margin:8px 0;">尚未体检。点击"开始体检"探测所有书源可达性。</div>
+        <div id="shelfHealthDomains"></div>
+        <h4 style="margin:14px 0 6px; font-size:13px;">异常书籍</h4>
+        <div id="shelfHealthBooks" style="font-size:13px;"></div>
+        <div id="shelfSwitchArea" style="display:none; margin-top:14px;">
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+                <h4 style="margin:0 0 6px; font-size:13px;">换源建议（已通过章节级验证）</h4>
+                <button class="p-btn p-btn-sm p-btn-primary" onclick="applyShelfSwitches()">应用选中的换源</button>
+            </div>
+            <div id="shelfSwitchList" style="font-size:13px;"></div>
+        </div>
+    </div>
+</div>
+
 <!-- 下载管理 Modal (Pro 专属) -->
 <div id="libraryBackupModal" class="p-modal">
     <div class="p-modal-content" style="max-width:440px;">
@@ -1305,6 +1330,154 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     function openLibraryBackup() {
         document.getElementById('libraryBackupFile').value = '';
         PureUI.modal.open('libraryBackupModal');
+    }
+
+    // ===== 书架体检与批量换源 =====
+    let shelfHealthReport = null;
+
+    function openShelfHealth() {
+        PureUI.modal.open('shelfHealthModal');
+        if (shelfHealthReport) renderShelfHealth(shelfHealthReport);
+        else runShelfHealthCheck();
+    }
+
+    async function runShelfHealthCheck() {
+        const btn = document.getElementById('shelfHealthRunBtn');
+        const summary = document.getElementById('shelfHealthSummary');
+        btn.disabled = true;
+        summary.textContent = '体检中…（每本书探测一次源站，约 15-40 秒）';
+        try {
+            const r = await fetch('/api/shelf/health_check', { method: 'POST' });
+            const j = await r.json();
+            if (j.status !== 'success') { summary.textContent = '提交失败: ' + (j.msg || r.status); return; }
+            for (let i = 0; i < 100; i++) {
+                await new Promise(res => setTimeout(res, 2000));
+                const t = (await (await fetch('/api/rules/task/' + j.task_id)).json()).task || {};
+                summary.textContent = '体检中… ' + (t.message || '');
+                if (t.status === 'completed') {
+                    shelfHealthReport = t.result;
+                    renderShelfHealth(t.result);
+                    break;
+                }
+                if (t.status === 'failed') { summary.textContent = '体检失败: ' + (t.error || ''); break; }
+            }
+        } catch (e) { summary.textContent = '请求异常: ' + e; }
+        finally { btn.disabled = false; }
+    }
+
+    function escapeShelfHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML;
+    }
+
+    function renderShelfHealth(report) {
+        const s = report.summary || {};
+        document.getElementById('shelfHealthSummary').innerHTML =
+            '共 <b>' + (s.total || 0) + '</b> 本 · ' +
+            '<span style="color:#0f766e">可达 ' + (s.reachable || 0) + '</span> · ' +
+            '<span style="color:#b91c1c">死亡 ' + (s.dead || 0) + '</span> · ' +
+            '<span style="color:#d97706">存疑 ' + (s.suspect || 0) + '</span> · ' +
+            '<span style="color:#6b7b86">不可达 ' + (s.unreachable || 0) + '</span>' +
+            ' <span style="color:#999">(' + new Date((report.checked_at || 0) * 1000).toLocaleString() + ')</span>';
+
+        const domains = report.domains || [];
+        document.getElementById('shelfHealthDomains').innerHTML = domains.length
+            ? '<table style="width:100%; font-size:12px; border-collapse:collapse;">' +
+              '<tr style="color:#999; text-align:left;"><th style="padding:4px;">站点</th><th>可达</th><th>死亡</th><th>存疑</th><th>不可达</th></tr>' +
+              domains.map(d => '<tr style="border-top:1px solid #eee;"><td style="padding:4px;">' + escapeShelfHtml(d.domain) + '</td>' +
+                  '<td>' + d.reachable + '</td><td style="color:' + (d.dead ? '#b91c1c' : 'inherit') + '">' + d.dead + '</td>' +
+                  '<td style="color:' + (d.suspect ? '#d97706' : 'inherit') + '">' + d.suspect + '</td><td>' + d.unreachable + '</td></tr>').join('') +
+              '</table>'
+            : '';
+
+        const bad = (report.results || []).filter(r => r.status !== 'reachable' && r.status !== 'no_url');
+        const box = document.getElementById('shelfHealthBooks');
+        if (!bad.length) {
+            box.innerHTML = '<div style="color:#0f766e; padding:8px 0;">全部书籍源站可达 ✅</div>';
+            document.getElementById('shelfSwitchArea').style.display = 'none';
+            return;
+        }
+        box.innerHTML = bad.map(r =>
+            '<div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid #f0f0f0;">' +
+            '<span style="min-width:70px; font-size:11px; padding:2px 6px; border-radius:4px; ' +
+            'background:' + (r.status === 'dead' ? '#fee2e2' : '#fef3c7') + '; color:' +
+            (r.status === 'dead' ? '#b91c1c' : '#92400e') + ';">' + r.status + '</span>' +
+            '<span style="font-weight:600;">' + escapeShelfHtml(r.title) + '</span>' +
+            '<span style="color:#999; overflow-wrap:anywhere;">' + escapeShelfHtml(r.probe_url) + '</span></div>').join('');
+
+        const deadKeys = bad.filter(r => r.status === 'dead').map(r => r.book_key);
+        const switchArea = document.getElementById('shelfSwitchArea');
+        if (deadKeys.length) {
+            switchArea.style.display = 'block';
+            switchArea.dataset.deadKeys = JSON.stringify(deadKeys);
+            document.getElementById('shelfSwitchList').innerHTML =
+                '<div style="color:#666;">对 ' + deadKeys.length + ' 本死亡书籍寻找新源' +
+                '（全网搜索 + 章节级验证），完成后在此确认应用。</div>' +
+                '<button class="p-btn p-btn-sm p-btn-outline" onclick="planShelfSwitches()">为死书寻找新源</button>';
+        } else {
+            switchArea.style.display = 'none';
+        }
+    }
+
+    async function planShelfSwitches() {
+        const area = document.getElementById('shelfSwitchArea');
+        const deadKeys = JSON.parse(area.dataset.deadKeys || '[]');
+        if (!deadKeys.length) { alert('没有需要换源的死亡书籍'); return; }
+        const list = document.getElementById('shelfSwitchList');
+        list.innerHTML = '<div style="color:#666;">搜索新源中…（每本一次全网搜索 + 章节验证，请耐心等待）</div>';
+        try {
+            const r = await fetch('/api/shelf/plan_switches', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ book_keys: deadKeys }),
+            });
+            const j = await r.json();
+            if (j.status !== 'success') { list.innerHTML = '提交失败: ' + (j.msg || r.status); return; }
+            for (let i = 0; i < 150; i++) {
+                await new Promise(res => setTimeout(res, 2000));
+                const t = (await (await fetch('/api/rules/task/' + j.task_id)).json()).task || {};
+                list.innerHTML = '搜索新源中… ' + (t.message || '');
+                if (t.status === 'completed') { renderShelfSwitchSuggestions(t.result); return; }
+                if (t.status === 'failed') { list.innerHTML = '失败: ' + (t.error || ''); return; }
+            }
+            list.innerHTML = '仍在生成，稍后重试';
+        } catch (e) { list.innerHTML = '请求异常: ' + e; }
+    }
+
+    function renderShelfSwitchSuggestions(result) {
+        const list = document.getElementById('shelfSwitchList');
+        const suggestions = (result.suggestions || []).filter(s => s.status === 'found' && s.suggested);
+        const others = (result.suggestions || []).filter(s => s.status !== 'found');
+        if (!suggestions.length) {
+            list.innerHTML = '<div style="color:#b91c1c;">未找到任何可用新源。</div>' +
+                others.map(s => '<div style="color:#999; font-size:12px;">' + escapeShelfHtml(s.title || s.book_key) +
+                    ': ' + escapeShelfHtml(s.reason || s.status) + '</div>').join('');
+            return;
+        }
+        list.innerHTML = suggestions.map(s =>
+            '<label style="display:flex; gap:8px; padding:6px 0; border-top:1px solid #f0f0f0; align-items:center;">' +
+            '<input type="checkbox" class="shelf-switch-check" data-book="' + escapeShelfHtml(s.book_key) + '" ' +
+            'data-url="' + escapeShelfHtml(s.suggested.url) + '" checked>' +
+            '<span style="font-weight:600;">' + escapeShelfHtml(s.title) + '</span>' +
+            '<span style="color:#0f766e;">→ ' + escapeShelfHtml(s.suggested.source) + '</span>' +
+            '<span style="color:#999; overflow-wrap:anywhere;">' + escapeShelfHtml(s.suggested.title || '') + '</span></label>').join('') +
+            (others.length ? '<div style="color:#999; font-size:12px; margin-top:6px;">' +
+                others.map(s => escapeShelfHtml(s.title || s.book_key) + ': ' + escapeShelfHtml(s.reason || '未找到')).join('；') + '</div>' : '');
+    }
+
+    async function applyShelfSwitches() {
+        const checks = Array.from(document.querySelectorAll('.shelf-switch-check:checked'));
+        if (!checks.length) { alert('请先勾选要换源的书籍'); return; }
+        if (!confirm('将为 ' + checks.length + ' 本书切换到新源（进度章节在新源中已对齐）。继续？')) return;
+        const switches = checks.map(c => ({ book_key: c.dataset.book, new_url: c.dataset.url }));
+        const r = await fetch('/api/shelf/apply_switches', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ switches }),
+        });
+        const j = await r.json();
+        if (j.status !== 'success') { alert('应用失败: ' + (j.msg || r.status)); return; }
+        alert('已应用 ' + j.applied + '/' + switches.length + ' 本。稍后自动重新体检确认。');
+        runShelfHealthCheck();
     }
 
     async function restoreLibraryBackup() {
