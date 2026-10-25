@@ -254,9 +254,9 @@ class SearxngNovelSearch:
 
     def _build_queries(self, keyword: str) -> list[str]:
         exact = keyword.strip('"“”')
-        queries = [f'"{exact}" 小说 目录', f'{exact} 小说 在线阅读']
-        if '作者' in exact or re.search(r'\s+[-/\u4f5c\u8005]\s+', exact):
-            queries.append(exact)
+        # 实测（自建 SearXNG + bing）：裸书名+小说命中率最高；引号与
+        # "目录"字样会把结果带偏（笔顺/字典站）。裸书名兜底别名场景。
+        queries = [f'{exact} 小说', f'{exact} 小说 在线阅读', exact]
         return list(dict.fromkeys(queries))
 
     def _normalize_and_rank(self, keyword: str,

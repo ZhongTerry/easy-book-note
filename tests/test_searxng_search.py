@@ -66,9 +66,10 @@ class TestSearxngNovelSearch(unittest.TestCase):
         first = self.service.search('测试作品')
         second = self.service.search('测试作品')
 
-        self.assertEqual(len(requests_seen), 2)
-        self.assertIn('"测试作品" 小说 目录', requests_seen)
+        self.assertEqual(len(requests_seen), 3)
+        self.assertIn('测试作品 小说', requests_seen)
         self.assertIn('测试作品 小说 在线阅读', requests_seen)
+        self.assertIn('测试作品', requests_seen)
         self.assertEqual(first, second)
 
     def test_filters_site_search_and_redirect_urls_before_verification(self):
@@ -152,8 +153,8 @@ class TestSearxngNovelSearch(unittest.TestCase):
                 callback=lambda _progress, message, _results: messages.append(message),
             )
 
-        self.assertEqual(len(requests_seen), 2)
-        self.assertEqual(len(raised.exception.failures), 2)
+        self.assertEqual(len(requests_seen), 3)
+        self.assertEqual(len(raised.exception.failures), 3)
         self.assertIn('ConnectionError', str(raised.exception))
         self.assertIn('searx.test', str(raised.exception))
         self.assertFalse(any('聚合完成' in message for message in messages))
@@ -172,7 +173,7 @@ class TestSearxngNovelSearch(unittest.TestCase):
         results = self.service.search('测试作品')
 
         self.assertTrue(results)
-        self.assertEqual(len(requests_seen), 4)
+        self.assertEqual(len(requests_seen), 6)
 
     def test_successful_empty_search_is_cached(self):
         requests_seen = []
@@ -181,7 +182,7 @@ class TestSearxngNovelSearch(unittest.TestCase):
         self.assertEqual(self.service.search('测试作品'), [])
         self.assertEqual(self.service.search('测试作品'), [])
 
-        self.assertEqual(len(requests_seen), 2)
+        self.assertEqual(len(requests_seen), 3)
 
     def test_bypass_cache_forces_fresh_results_and_refreshes_cache(self):
         requests_seen = []
@@ -202,7 +203,7 @@ class TestSearxngNovelSearch(unittest.TestCase):
         forced = self.service.search('测试作品', bypass_cache=True)
         refreshed = self.service.search('测试作品')
 
-        self.assertEqual(len(requests_seen), 4)
+        self.assertEqual(len(requests_seen), 6)
         self.assertEqual(second, first)
         self.assertEqual(forced[0]['url'], 'https://fresh.example.org/book/1')
         self.assertEqual(refreshed, forced)
