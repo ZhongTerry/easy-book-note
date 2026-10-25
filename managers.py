@@ -629,8 +629,8 @@ class IsolatedDB:
             outcome['result'] = result
             return result is not False
 
-        self._mutate_book(username, key, merge)
-        if not outcome['ran']:
+        saved = self._mutate_book(username, key, merge)
+        if not outcome['ran'] or (not saved and outcome['result'] is not False):
             return False, None
         return True, outcome['result']
 
@@ -894,6 +894,7 @@ class FullTextCacheManager:
         # 全文缓存内存索引与 LRU：避免每次读章都遍历书架、整本解析 JSON。
         # 由 _save_cache / update_book_cache / delete_cache 维护失效。
         self._url_index = {}            # {username: {chapter_url: book_key}}
+        self._url_index_versions = {}
         self._book_lru = OrderedDict()  # {(username, book_key): cache_data}
         self._book_lru_cap = 8
         self._cache_lock = threading.RLock()
@@ -1050,15 +1051,19 @@ class FullTextCacheManager:
     def _load_book_data(self, username, book_key):
         """解析后的全书缓存，经小容量 LRU 复用，未命中才读文件。"""
         cache_key = (username, book_key)
-        with self._cache_lock:
-            data = self._book_lru.get(cache_key)
-            if data is not None:
-                self._book_lru.move_to_end(cache_key)
-                return data
-
         cache_path = self._get_cache_path(username, book_key)
-        if not os.path.exists(cache_path):
+        try:
+            stat = os.stat(cache_path)
+            version = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        except FileNotFoundError:
+            self._invalidate_book(username, book_key)
             return None
+        with self._cache_lock:
+            cached = self._book_lru.get(cache_key)
+            if cached is not None and cached[0] == version:
+                self._book_lru.move_to_end(cache_key)
+                return cached[1]
+
         try:
             with open(cache_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -1067,45 +1072,42 @@ class FullTextCacheManager:
             return None
 
         with self._cache_lock:
-            self._book_lru[cache_key] = data
+            self._book_lru[cache_key] = (version, data)
             self._book_lru.move_to_end(cache_key)
             while len(self._book_lru) > self._book_lru_cap:
                 self._book_lru.popitem(last=False)
         return data
 
     def _invalidate_book(self, username, book_key, cache_data=None):
-        """写后刷新索引与 LRU；cache_data=None 表示整本已删除。"""
+        """写后失效索引与 LRU，兼容其他 worker 的文件修改。"""
         with self._cache_lock:
             cache_key = (username, book_key)
-            if cache_data is None:
-                self._book_lru.pop(cache_key, None)
-                index = self._url_index.get(username)
-                if index is not None:
-                    self._url_index[username] = {
-                        url: key for url, key in index.items() if key != book_key
-                    }
-                return
-            self._book_lru[cache_key] = cache_data
-            self._book_lru.move_to_end(cache_key)
-            while len(self._book_lru) > self._book_lru_cap:
-                self._book_lru.popitem(last=False)
-            index = self._url_index.get(username)
-            if index is not None:
-                for ch in cache_data.get('chapters', []):
-                    if ch.get('url'):
-                        index[ch['url']] = book_key
+            # 文件可能由另一个 Gunicorn worker 修改；下次读取重新 stat。
+            self._book_lru.pop(cache_key, None)
+            self._url_index.pop(username, None)
+            self._url_index_versions.pop(username, None)
 
     def find_book_for_url(self, url, username):
         """返回全文缓存中包含该章节 URL 的 book_key，没有则 None。"""
+        user_dir = os.path.join(self.cache_dir, username)
+        try:
+            with os.scandir(user_dir) as entries:
+                version = tuple(sorted(
+                    (entry.name, stat.st_mtime_ns, stat.st_size, stat.st_ino)
+                    for entry in entries if entry.name.endswith('.json')
+                    for stat in (entry.stat(),)
+                ))
+        except FileNotFoundError:
+            version = ()
         with self._cache_lock:
             index = self._url_index.get(username)
-        if index is not None:
+            index_version = self._url_index_versions.get(username)
+        if index is not None and index_version == version:
             return index.get(url)
 
         # 首次访问：扫描该用户所有缓存文件建立 url -> book_key 索引。
-        # 每进程只建一次，之后由写入钩子增量维护。
+        # 文件元数据变化时重建，兼容其他 worker 的新增、修改与删除。
         index = {}
-        user_dir = os.path.join(self.cache_dir, username)
         if os.path.isdir(user_dir):
             for name in os.listdir(user_dir):
                 if not name.endswith('.json'):
@@ -1119,6 +1121,7 @@ class FullTextCacheManager:
         with self._cache_lock:
             # 并发下可能重复构建，后写的覆盖前者，内容等价
             self._url_index[username] = index
+            self._url_index_versions[username] = version
             return index.get(url)
 
     def get_chapter_from_cache(self, book_key, chapter_url, username=None):
