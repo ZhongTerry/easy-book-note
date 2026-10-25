@@ -33,6 +33,12 @@ def fetch_task():
     if auth_header != f"Bearer {system_token}":
         return jsonify({"status": "error"}), 403
 
+    # 1.5 禁用节点不发单（老协议 worker 抢任务会返回过期结果）
+    req_uuid = (request.json or {}).get('uuid') or ''
+    if req_uuid and managers.cluster_manager.is_node_disabled(req_uuid):
+        # 非 success 状态：worker 会静默休眠重试，不给老进程制造崩溃噪音
+        return jsonify({"status": "empty", "reason": "node_disabled"})
+
     # 2. 尝试从 Redis 队列弹出一个任务
     # 使用 Redis 的 RPOP (右出)
     try:
