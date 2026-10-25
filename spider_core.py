@@ -25,8 +25,8 @@ from shared import BASE_DIR, LIB_DIR, CACHE_DIR, debug, info, warn, error, is_sa
 
 # Bump this whenever a worker result depends on a changed recognition contract.
 # Older workers are then ignored by the master, which falls back to local crawl
-# instead of silently returning an incomplete chapter.
-CRAWLER_PROTOCOL_VERSION = 2
+# instead of silently returning an incomplete chapter. v3: site-rule layer.
+CRAWLER_PROTOCOL_VERSION = 3
 _toc_request_options = ContextVar('toc_request_options', default=None)
 
 # ==========================================
@@ -1375,12 +1375,36 @@ class NovelCrawler:
             return result
 
         info("Run", f"🌐 未找到插件，使用通用逻辑...")
+        # 3.5 站点规则层：已验收的声明式规则优先于通用启发式，失败即回退
+        rule_payload = self._apply_site_rule(url)
+        if rule_payload is not None:
+            result = self._recognize_payload(rule_payload, url)
+            self._record_source_result(url, result)
+            if self._cacheable_result(result):
+                cache.set(url, result)
+            return result
+
         # 4. 如果没插件，执行通用逻辑
         result = self._general_run_logic(url)
         self._record_source_result(url, result)
         if self._cacheable_result(result):
             cache.set(url, result)
         return result
+
+    def _apply_site_rule(self, url):
+        """命中 active 站点规则时产出同构 payload，未命中/失败返回 None。"""
+        try:
+            from services.site_rules import apply_site_rule_for_url
+            payload, trace = apply_site_rule_for_url(url, self._fetch_page_smart)
+        except Exception as exc:
+            debug("Run", f"站点规则层异常: {type(exc).__name__}: {exc}")
+            return None
+        if payload is not None:
+            info("Run", f"📏 站点规则命中: {trace.get('domain')} "
+                        f"(pages={trace.get('pages')}, paras={trace.get('paragraphs')})")
+        else:
+            debug("Run", f"站点规则未命中: {trace.get('reason') or trace.get('detail')}")
+        return payload
 
     @staticmethod
     def _cacheable_result(result):

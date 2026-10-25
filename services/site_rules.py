@@ -166,3 +166,46 @@ def domain_of(url):
         return host.rstrip('.').lower()
     except Exception:
         return ''
+
+
+def apply_site_rule_for_url(url, fetcher):
+    """爬虫主链路的规则层入口：返回 (payload|None, trace)。
+
+    payload 已带 rule_applied 盖章，与通用引擎同构（未打识别契约）；
+    任何失败都返回 None，由调用方落回通用逻辑。
+    """
+    from recognition.rule_engine import extract_chapter
+
+    domain = domain_of(url)
+    trace = {'domain': domain}
+    if not domain:
+        trace['reason'] = 'no_domain'
+        return None, trace
+
+    found = get_active_rule(domain)
+    if not found:
+        trace['reason'] = 'no_rule'
+        return None, trace
+    rule, row = found
+
+    try:
+        first_html = fetcher(url)
+    except Exception as exc:
+        trace['reason'] = f'fetch_failed:{type(exc).__name__}'
+        record_rule_usage(row['id'], False, domain=domain)
+        return None, trace
+    if not first_html:
+        trace['reason'] = 'empty_fetch'
+        record_rule_usage(row['id'], False, domain=domain)
+        return None, trace
+
+    result = extract_chapter(first_html, rule, url, fetcher=fetcher)
+    trace.update(result['trace'])
+    payload = result['payload']
+    ok = bool(payload and payload.get('content'))
+    record_rule_usage(row['id'], ok, domain=domain)
+    if ok:
+        payload['rule_applied'] = {'domain': domain, 'pages': trace.get('pages', 1)}
+    else:
+        payload = None
+    return payload, trace
