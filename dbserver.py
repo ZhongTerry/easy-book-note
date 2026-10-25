@@ -162,6 +162,22 @@ def schedule_cache_cleanup():
         managers.cache.cleanup_expired()
 
 
+def schedule_backup():
+    """后台线程：定期给书架做快照，保留最近 BACKUP_KEEP 份。"""
+    from config import BACKUP_INTERVAL_HOURS, BACKUP_KEEP
+    from services.backup import snapshot_all_users
+    backup_dir = os.path.join(managers.USER_DATA_DIR, 'backups')
+    time.sleep(300)  # 启动后等主业务就绪
+    while True:
+        try:
+            results = snapshot_all_users(backup_dir, keep=BACKUP_KEEP)
+            for r in results:
+                info("Backup", f"自动备份完成: {r['username']} ({r['books']} 本)")
+        except Exception as e:
+            info("Backup", f"自动备份线程出错: {e}")
+        time.sleep(max(1, BACKUP_INTERVAL_HOURS) * 3600)
+
+
 def schedule_auto_check():
     """后台线程：定期检查书籍更新"""
     from config import AUTO_CHECK_INTERVAL, AUTO_CHECK_RANDOM_SLEEP_MIN, AUTO_CHECK_RANDOM_SLEEP_MAX
@@ -278,6 +294,7 @@ def schedule_auto_check():
 
 # 在 main 中启动
 threading.Thread(target=schedule_auto_check, daemon=True).start()
+threading.Thread(target=schedule_backup, daemon=True).start()
 
 if __name__ == '__main__':
     # 🔥 从环境变量读取开发模式配置

@@ -57,6 +57,8 @@ CACHE_CLEANUP_INTERVAL = 86400  # 缓存清理间隔(秒): 1天
 AUTO_CHECK_INTERVAL = 18000  # 自动追更检查间隔(秒): 5小时
 AUTO_CHECK_RANDOM_SLEEP_MIN = 3  # 自动追更随机休眠最小值(秒)
 AUTO_CHECK_RANDOM_SLEEP_MAX = 8  # 自动追更随机休眠最大值(秒)
+BACKUP_INTERVAL_HOURS = int(os.environ.get("BACKUP_INTERVAL_HOURS", "24"))  # 书架自动备份间隔
+BACKUP_KEEP = int(os.environ.get("BACKUP_KEEP", "14"))  # 备份保留份数
 
 # ==========================================
 # Redis 配置
