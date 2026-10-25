@@ -205,7 +205,6 @@ def callback():
 
 @core_bp.route('/logout')
 def logout(): session.clear(); return redirect('/')
-from spider_core import parse_chapter_id
 # [新增] 解析页码的辅助函数
 def get_page_index(url):
     """从 URL 解析页码 (例如 123_2.html -> 2, 123.html -> 1)"""
@@ -1643,7 +1642,6 @@ def api_check_update():
 
 
 # 2. 获取所有更新状态 (用于前端渲染小红点)
-from spider_core import searcher, epub_handler, parse_chapter_id 
 
 # =========================================================
 # 核心接口：获取所有书的实时状态
