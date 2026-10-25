@@ -913,19 +913,10 @@ class FullTextCacheManager:
             return
 
         try:
-            # 解析 URL 获取 host/port/db
-            from urllib.parse import urlparse
-            url = urlparse(redis_url)
-            host = url.hostname or '127.0.0.1'
-            port = url.port or 6379
-            
-            # 使用 127.0.0.1 避免 Windows localhost 解析延迟
-            if host == "localhost": host = "127.0.0.1"
-
-            test_client = redis.Redis(
-                host=host,
-                port=port,
-                db=0,
+            # Preserve credentials, database number and TLS URL options just
+            # like TaskManager/ClusterManager instead of rebuilding anonymously.
+            test_client = redis.from_url(
+                redis_url.replace('localhost', '127.0.0.1'),
                 decode_responses=True,
                 socket_connect_timeout=1,
                 socket_timeout=1,
@@ -1762,17 +1753,10 @@ class ExportManager:
                 error("Export", f"加载任务失败: {e}")
     
     def _save_task(self, task_id):
-        """保存单个任务到文件"""
+        """跨进程合并后原子替换文件，避免并发覆盖及半写入 JSON。"""
         try:
-            all_tasks = {}
-            if os.path.exists(self.task_file):
-                with open(self.task_file, 'r', encoding='utf-8') as f:
-                    all_tasks = json.load(f)
-            
-            all_tasks[task_id] = self.exports[task_id]
-            
-            with open(self.task_file, 'w', encoding='utf-8') as f:
-                json.dump(all_tasks, f, ensure_ascii=False, indent=2)
+            from services.export_store import save_task
+            save_task(self.task_file, task_id, self.exports[task_id])
         except Exception as e:
             error("Export", f"保存任务失败: {e}")
     
