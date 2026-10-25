@@ -6,7 +6,29 @@ import re
 import requests
 import json
 import os
+import time
 import dotenv
+
+# 本地微服务熔断：连续失败达到阈值后冷却，避免服务离线时
+# 每次阅读/追更都完整付出超时与重试代价。
+_BREAKER_THRESHOLD = 3
+_BREAKER_COOLDOWN_SECONDS = 300
+_breaker = {'consecutive': 0, 'until': 0.0}
+
+
+def _breaker_open():
+    return time.time() < _breaker['until']
+
+
+def _breaker_record(ok):
+    if ok:
+        _breaker['consecutive'] = 0
+        return
+    _breaker['consecutive'] += 1
+    if _breaker['consecutive'] >= _BREAKER_THRESHOLD:
+        _breaker['until'] = time.time() + _BREAKER_COOLDOWN_SECONDS
+        _breaker['consecutive'] = 0
+        warn("FanqieLocal", f"本地微服务连续 {_BREAKER_THRESHOLD} 次失败，熔断 {_BREAKER_COOLDOWN_SECONDS // 60} 分钟")
 from urllib.parse import urljoin
 
 # --- 增强的环境变量加载 ---
@@ -58,6 +80,23 @@ class FanqieLocalAdapter:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
+    def _api_get(self, path, params):
+        """带熔断的微服务 GET；熔断期内直接返回 None，不发起网络请求。"""
+        if _breaker_open():
+            return None
+        try:
+            resp = requests.get(
+                f"{self.API_HOST}{path}",
+                params=params,
+                headers=self._get_headers(),
+                timeout=10
+            )
+        except Exception as e:
+            _breaker_record(False)
+            raise
+        _breaker_record(resp.status_code == 200)
+        return resp
+
     def can_handle(self, url):
         return "fanqienovel.com" in url or "fqnovel.com" in url
 
@@ -101,13 +140,10 @@ class FanqieLocalAdapter:
         if not book_id: return None
 
         try:
-            resp = requests.get(
-                f"{self.API_HOST}/get_catalog", 
-                params={"book_id": book_id}, 
-                headers=self._get_headers(),
-                timeout=10
-            )
-            
+            resp = self._api_get('/get_catalog', {"book_id": book_id})
+            if resp is None:
+                return None  # 熔断中
+
             if resp.status_code in [401, 403]:
                 error("System", f"❌ [FanqieAdapter] 目录接口鉴权失败")
                 return None
@@ -241,15 +277,10 @@ class FanqieLocalAdapter:
         返回: [{'item_id': '...', 'title': '...', 'url': '...'}, ...]
         """
         try:
-            url = f"{self.API_HOST}/get_catalog"
-            info("FanqieLocal", f"请求目录: {url} | BookID: {book_id}")
-            resp = requests.get(
-                url, 
-                params={"book_id": book_id}, 
-                headers=self._get_headers(),
-                timeout=10
-            )
-            
+            resp = self._api_get('/get_catalog', {"book_id": book_id})
+            if resp is None:
+                return []  # 熔断中，静默降级
+
             if resp.status_code != 200:
                 error("FanqieLocal", f"❌ 目录接口返回非200状态码: {resp.status_code}")
                 debug("FanqieLocal", f"响应内容前100字符: {resp.text[:100]}")
@@ -317,15 +348,9 @@ class FanqieLocalAdapter:
         # 4. [修复] 获取真实书名 (从微服务详情接口)
         book_title = "番茄小说"  # 默认值
         try:
-            detail_url = f"{self.API_HOST}/get_detail"
-            resp = requests.get(
-                detail_url, 
-                params={"book_id": book_id}, 
-                headers=self._get_headers(),
-                timeout=10
-            )
-            
-            if resp.status_code == 200:
+            resp = self._api_get('/get_detail', {"book_id": book_id})
+
+            if resp is not None and resp.status_code == 200:
                 try:
                     json_data = resp.json()
                     if isinstance(json_data, str):
@@ -362,19 +387,13 @@ class FanqieLocalAdapter:
         # 2. 并行获取内容 (Microservice)
         content_data = None
         try:
-            content_url = f"{self.API_HOST}/get_content"
-            resp = requests.get(
-                content_url, 
-                params={
-                    "item_id": current_item_id,
-                    "text_mode": 1,
-                    "image_mode": 0
-                },
-                headers=self._get_headers(),
-                timeout=10
-            )
-            
-            if resp.status_code == 200:
+            resp = self._api_get('/get_content', {
+                "item_id": current_item_id,
+                "text_mode": 1,
+                "image_mode": 0
+            })
+
+            if resp is not None and resp.status_code == 200:
                 try:
                     data = resp.json()
                     if isinstance(data, str): data = json.loads(data)
@@ -416,14 +435,11 @@ class FanqieLocalAdapter:
             
             # [修复] 获取真实书名
             try:
-                resp = requests.get(
-                    f"{self.API_HOST}/get_detail", 
-                    params={"book_id": book_id}, 
-                    headers=self._get_headers(),
-                    timeout=10
-                )
-                
-                if resp.status_code in [401, 403]:
+                resp = self._api_get('/get_detail', {"book_id": book_id})
+
+                if resp is None:
+                    pass  # 熔断中，沿用默认书名
+                elif resp.status_code in [401, 403]:
                     error("System", f"❌ [FanqieAdapter] 书名获取接口鉴权失败")
                 else:
                     json_data = resp.json()
