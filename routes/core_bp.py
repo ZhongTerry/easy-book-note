@@ -6,7 +6,7 @@ import json
 from shared import login_required, is_safe_url, BASE_DIR, DL_DIR, debug, info, warn, error
 import managers
 from spider_core import crawler_instance as crawler, searcher, epub_handler, parse_chapter_id
-from recognition import get_payload_issue, is_cacheable_payload
+from recognition import get_payload_issue
 from services.searxng_search import SearxngSearchError
 import re
 import hmac
@@ -397,16 +397,11 @@ def read_mode():
             
             data = epub_handler.get_chapter_content(filename, identifier, page_index)
         else:
-            # 网页逻辑
+            # 网页逻辑（临时缓存与全文缓存的读写统一收敛在 crawler.run 内）
             data = managers.offline_manager.get_chapter(k, u) if k and not force else None
-            if not data and not force: data = managers.cache.get(u)
             if not data:
                 # [关键修复] 当 force=True 时，告知爬虫跳过它内部的缓存
                 data = crawler.run(u, no_cache=force)
-                # 全文缓存命中本身已持久化，重复写进临时缓存只会制造
-                # 过期副本（曾导致缓存命中的章节拿不到翻章导航）
-                if is_cacheable_payload(data) and not data.get('from_fulltext_cache'):
-                    managers.cache.set(u, data)
 
     except Exception as e:
         return _reader_error_response(
@@ -1373,19 +1368,13 @@ def api_prefetch():
     u = (request.json or {}).get('url')
     if not u or not is_safe_url(u):
         return jsonify({"status": "error", "message": "Illegal URL"}), 403
-    
-    # 先检查缓存
-    if managers.cache.get(u): 
-        return jsonify({"status": "skipped", "msg": "已缓存"})
-    
-    # 检查是否有正在进行的爬取任务
+
+    # 缓存读写都在 crawler.run 内完成，这里只负责触发与去重
     if hasattr(crawler, '_active_tasks') and u in crawler._active_tasks:
         return jsonify({"status": "pending", "msg": "正在爬取中，请稍候"})
-    
-    # 提交爬取任务（自动去重）
+
     d = crawler.run(u)
     if d:
-        managers.cache.set(u, d)
         return jsonify({"status": "success"})
     return jsonify({"status": "failed"})
 

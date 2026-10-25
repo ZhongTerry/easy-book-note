@@ -17,7 +17,7 @@ from pypinyin import lazy_pinyin, Style
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ebooklib import epub
 from werkzeug.utils import secure_filename
-from recognition import PageType, RecognitionEngine, SourceHealthTracker, find_chapter_match, get_payload_issue
+from recognition import PageType, RecognitionEngine, SourceHealthTracker, find_chapter_match, get_payload_issue, is_cacheable_payload
 from recognition.chapter_numbers import parse_chapter_number
 from services.searxng_search import SearxngNovelSearch
 # [确保这里有 CACHE_DIR]
@@ -1211,28 +1211,28 @@ class NovelCrawler:
             return toc['chapters'][-1]
         return None
 
-    def run(self, url, no_cache=False):
+    def run(self, url, no_cache=False, username=None):
         """
         智能爬取：自动去重 + 结果共享
-        如果同一 URL 正在被其他请求爬取，则等待结果而非重复爬取
+        如果同一 URL 正在被其他请求爬取，则等待结果而非重复爬取。
+        username 显式传入时（导出/下载等无会话场景），全文缓存同样生效。
         """
         if not url:
             return None
-        
-        # [优化] 模拟环境检查
-        try:
-            from flask import session, has_request_context
-            # 只有在明确的 Web 会话中才启用全文缓存，避免导出任务（无 Session）报错
-            is_user_reading = has_request_context() and 'user' in session
-        except:
-            is_user_reading = False
 
-        # 0. 最优先：检查全文缓存（仅对正常 Web 阅读请求生效）。
+        if username is None:
+            try:
+                from flask import session, has_request_context
+                if has_request_context():
+                    username = session.get('user', {}).get('username')
+            except Exception:
+                username = None
+
+        # 0. 最优先：检查全文缓存（仅对明确的阅读者生效）。
         # managers 反向依赖 spider_core（导出/集群任务），因此保持惰性导入。
-        if is_user_reading and not no_cache and not url.startswith('epub:'):
+        if username and not no_cache and not url.startswith('epub:'):
             try:
                 import managers
-                username = managers.get_current_user()
                 book_key = managers.fulltext_cache_manager.find_book_for_url(url, username)
                 if book_key:
                     cached_chapter = managers.fulltext_cache_manager.get_chapter_from_cache(
@@ -1335,35 +1335,30 @@ class NovelCrawler:
         """
         实际执行爬取的逻辑（原 run 方法的核心部分）
         """
-        # 必须在函数内部导入，防止循环引用
-        import sys
-        if 'managers' in sys.modules:
-            managers = sys.modules['managers']
-        else:
-            import managers
-        cache = getattr(managers, 'cache', None)
+        import managers
+        cache = managers.cache
         if self.source_health.cooldown_remaining(url) > 0:
             return self._source_cooldown_payload(url)
-        
+
         # 1. 尝试远程集群爬取 (Pull/Push 模式通用)
         payload = {'url': url}
         if no_cache:
             payload['no_cache'] = True
-            
+
         remote_data = _remote_request('run', payload)
-        
+
         if remote_data:
             info("Crawler", f"📥 远程抓取成功，写入本地缓存")
             result = self._recognize_payload(remote_data, url)
             self._record_source_result(url, result)
-            if cache and not get_payload_issue(result):
+            if self._cacheable_result(result):
                 cache.set(url, result)
             return result
-        
+
         # 2. 降级回本地爬取 (原有逻辑)
         info("Run", f"🐢 远程不可用或未配置，开始本地爬取: {url}")
         info("Spider", f"\n[Run] 🚀 开始处理 URL: {url}")
-        
+
         # 3. 尝试匹配插件
         adapter = plugin_mgr.find_match(url)
         if adapter:
@@ -1375,13 +1370,26 @@ class NovelCrawler:
             info("Run", f"📦 插件返回书名: {result.get('book_name', '未知')}")
             result = self._recognize_payload(result, url)
             self._record_source_result(url, result)
+            if self._cacheable_result(result):
+                cache.set(url, result)
             return result
-        
+
         info("Run", f"🌐 未找到插件，使用通用逻辑...")
         # 4. 如果没插件，执行通用逻辑
         result = self._general_run_logic(url)
         self._record_source_result(url, result)
+        if self._cacheable_result(result):
+            cache.set(url, result)
         return result
+
+    @staticmethod
+    def _cacheable_result(result):
+        """章节结果才写入临时缓存。
+
+        目录误判页不缓存：否则章节 URL 会把 TOC payload 固化 30 天，
+        之后每次访问都直接重定向，没有重试机会。
+        """
+        return bool(is_cacheable_payload(result)) and result.get('page_type') != 'toc'
     
     def _general_run_logic(self, url):
         try:

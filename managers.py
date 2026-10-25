@@ -1330,7 +1330,7 @@ class FullTextCacheManager:
             
             try:
                 # 下载章节
-                content, title = self._fetch_chapter(ch['url'], crawler)
+                content, title = self._fetch_chapter(ch['url'], crawler, username=task.get('username'))
                 
                 if content:
                     ch_index = self.extract_chapter_index(title or ch.get('title', ''))
@@ -1411,10 +1411,10 @@ class FullTextCacheManager:
             conn.commit()
         self._invalidate_book(username, book_key, cache_data)
 
-    def _fetch_chapter(self, url, crawler):
-        """获取单个章节内容"""
+    def _fetch_chapter(self, url, crawler, username=None):
+        """获取单个章节内容（缓存读写统一在 crawler.run 内完成）"""
         try:
-            data = crawler.run(url)
+            data = crawler.run(url, username=username)
             if data and 'content' in data:
                 content = '\n'.join(data['content']) if isinstance(data['content'], list) else data['content']
                 return content, data.get('title', '')
@@ -1457,7 +1457,7 @@ class FullTextCacheManager:
             
             for ch in new_chapters:
                 try:
-                    content, title = self._fetch_chapter(ch['url'], crawler_instance)
+                    content, title = self._fetch_chapter(ch['url'], crawler_instance, username=u)
                     if content:
                         ch_index = self.extract_chapter_index(title or ch.get('title', ''))
                         cache_data['chapters'].append({
@@ -1865,7 +1865,7 @@ class ExportManager:
                 
                 try:
                     # 线性执行，不再 submit 到 pool
-                    results[idx] = self._fetch_chapter(chapter['url'], crawler, book_key=task.get('book_key'), username=task.get('username'))
+                    results[idx] = self._fetch_chapter(chapter['url'], crawler, username=task.get('username'))
                     completed.add(idx)
                     
                     # 更新进度
@@ -1918,40 +1918,10 @@ class ExportManager:
         
         self._save_task(task_id)
     
-    def _fetch_chapter(self, url, crawler, book_key=None, username=None):
-        """抓取单个章节（复用正常阅读逻辑，不再依赖 crawler.run 内部的 session 检查）"""
-        data = None
-        
-        # 1. 优先从全文缓存读取（如果用户之前已经"爬取全书"）
-        if book_key and username:
-            try:
-                from managers import fulltext_cache_manager
-                cached_chapter = fulltext_cache_manager.get_chapter_from_cache(book_key, url, username=username)
-                if cached_chapter:
-                    data = {
-                        'content': cached_chapter['content'].split('\n'),
-                        'title': cached_chapter['title']
-                    }
-                    info("Export", f"命中全文缓存: {url}")
-            except Exception as e:
-                error("Export", f"读取全文缓存失败: {e}")
+    def _fetch_chapter(self, url, crawler, username=None):
+        """抓取单个章节；全文缓存、临时缓存与写回全部由 crawler.run 统一处理。"""
+        data = crawler.run(url, no_cache=False, username=username)
 
-        # 2. 如果全文缓存没有，尝试从临时通用缓存获取
-        from managers import cache
-        if not data:
-            data = cache.get(url)
-            if data:
-                info("Export", f"命中临时缓存: {url}")
-        
-        if not data:
-            # 3. 如果缓存没有，执行真实爬取
-            # 此时 no_cache 传入 False，允许爬虫内部进行适配选择
-            data = crawler.run(url, no_cache=False)
-            
-            # 3. 爬取成功后存入通用缓存，模拟“点击进入阅读页并自动缓存”的行为
-            if data and data.get('content'):
-                cache.set(url, data)
-        
         if data and data.get('content'):
             return {
                 'title': data.get('title', '无标题'),
