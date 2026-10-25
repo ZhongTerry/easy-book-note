@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import session, g, has_request_context
 from shared import USER_DATA_DIR, CACHE_DIR, DL_DIR, debug, info, warn, error
+from config import VERSION_HISTORY_KEEP
 from recognition.chapter_numbers import parse_chapter_number
 import shared
 
@@ -221,19 +222,20 @@ class HistoryManager(BaseJsonManager):
     def __init__(self): super().__init__('history')
 
     def add_record(self, book_key, title, url, book_name=None):
-        data = self.load()
-        if "records" not in data: data["records"] = []
-        # 去重并置顶
-        records = [r for r in data["records"] if r.get('key') != book_key]
-        records.insert(0, {
-            "key": book_key,
-            "title": title,
-            "url": url,
-            "timestamp": int(time.time()),
-            "book_name": book_name or book_key
-        })
-        data["records"] = records[:50] # 保留最近50条
-        self.save(data)
+        # 写锁内原子合并：两个标签页同时开章节不会互相覆盖历史
+        def merge(data):
+            records = [r for r in data.get('records', []) if r.get('key') != book_key]
+            records.insert(0, {
+                "key": book_key,
+                "title": title,
+                "url": url,
+                "timestamp": int(time.time()),
+                "book_name": book_name or book_key
+            })
+            data["records"] = records[:50]  # 保留最近50条
+            return True
+
+        mutate_user_module(self.module_type, get_current_user(), merge)
 
     def get_history(self): return self.load().get("records", [])
     def clear(self): self.save({"records": []})
@@ -329,43 +331,50 @@ class UpdateManager(BaseJsonManager):
     def __init__(self): super().__init__('updates')
     
     def set_update(self, book_key, latest_data, username=None):
-        data = self.load(username)
-        # 兼容性处理
         title = latest_data.get('title') or latest_data.get('latest_title') or "未知"
         url = latest_data.get('url') or latest_data.get('latest_url')
         cid = latest_data.get('id') or latest_data.get('latest_id') or -1
-        
-        data[book_key] = {
-            "latest_title": title,
-            "latest_url": url,
-            "latest_id": cid,
-            "toc_url": latest_data.get('toc_url'),
-            "last_check": int(time.time())
-        }
-        self.save(data, username)
+
+        def merge(data):
+            data[book_key] = {
+                "latest_title": title,
+                "latest_url": url,
+                "latest_id": cid,
+                "toc_url": latest_data.get('toc_url'),
+                "last_check": int(time.time())
+            }
+            return True
+
+        mutate_user_module(self.module_type, username or get_current_user(), merge)
         
     def get_update(self, book_key):
         return self.load().get(book_key)
 
     def update_progress(self, book_key, unread_count, status_text, username=None):
-        data = self.load(username)
-        if book_key in data:
+        def merge(data):
+            if book_key not in data:
+                return False
             data[book_key]['unread_count'] = unread_count
             data[book_key]['status_text'] = status_text
-            self.save(data, username)
+            return True
+
+        mutate_user_module(self.module_type, username or get_current_user(), merge)
 
 class IsolatedStatsManager(BaseJsonManager):
     def __init__(self): super().__init__('stats')
 
     def update(self, t, w, c, bk):
-        d = self.load()
-        if "daily_stats" not in d: d["daily_stats"] = {}
+        # 写锁内原子累加：并发心跳不再丢计数
         k = datetime.now().strftime('%Y-%m-%d')
-        if k not in d["daily_stats"]: d["daily_stats"][k] = {"time":0,"words":0,"chapters":0,"books":[]}
-        r = d["daily_stats"][k]
-        r["time"]+=t; r["words"]+=w; r["chapters"]+=c
-        if bk and bk not in r["books"]: r["books"].append(bk)
-        self.save(d)
+
+        def merge(data):
+            daily = data.setdefault('daily_stats', {})
+            r = daily.setdefault(k, {"time": 0, "words": 0, "chapters": 0, "books": []})
+            r["time"] += t; r["words"] += w; r["chapters"] += c
+            if bk and bk not in r["books"]: r["books"].append(bk)
+            return True
+
+        mutate_user_module(self.module_type, get_current_user(), merge)
         
     def get_summary(self):
         today = datetime.now()
@@ -701,7 +710,7 @@ class IsolatedDB:
                         SELECT id FROM book_history 
                         WHERE username=? AND book_key=? 
                         ORDER BY recorded_at DESC 
-                        LIMIT -1 OFFSET 5
+                        LIMIT -1 OFFSET {VERSION_HISTORY_KEEP}
                     )
                 ''', (u, key))
                 conn.commit()
