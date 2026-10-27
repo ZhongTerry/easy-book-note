@@ -140,7 +140,8 @@ class FanqieLocalAdapter:
             return None
 
     def can_handle(self, url):
-        return "fanqienovel.com" in url or "fqnovel.com" in url
+        return (os.environ.get('FANQIE_ADAPTER', 'legacy').strip().lower() == 'legacy'
+                and ("fanqienovel.com" in url or "fqnovel.com" in url))
 
     def detect_url_type(self, url):
         """
@@ -456,7 +457,7 @@ class FanqieLocalAdapter:
         # [关键修复] 即使内容为空，也要返回基本结构和 page_type 标记
         # 避免被误判为目录页
         if not content_data:
-            content_data = ['❗ 内容获取失败，请稍后重试']
+            content_data = []
 
         # 3. [核心功能] 计算上下文 (Prev/Next/Toc)
         # 我们需要 BookID 才能获取目录。

@@ -27,6 +27,8 @@ def get_payload_issue(payload: dict[str, Any] | None) -> dict[str, str] | None:
     content = payload.get('content')
     chapters = payload.get('chapters')
     has_content = isinstance(content, list) and any(str(line).strip() for line in content)
+    if page_type == 'chapter' and content == ['❗ 内容获取失败，请稍后重试']:
+        has_content = False
     has_chapters = isinstance(chapters, list) and bool(chapters)
     if page_type == 'chapter' and not has_content:
         return {

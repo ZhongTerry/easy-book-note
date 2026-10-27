@@ -73,10 +73,14 @@ def _remote_request(endpoint, payload):
         return None
 
     # 4. 阻塞等待结果 (轮询 Redis) - 记录延迟
+    # fast_mode（换源验证/目录速取）自带 5 秒预算：等满 25 秒毫无意义，
+    # worker 卡死时每个候选都白付 25 秒。按请求档位裁剪等待窗口。
+    options = _toc_request_options.get()
+    wait_budget = 6.0 if options else 25.0
     start_time = time.time()
     result_key = f"crawler:result:{task_id}"
-    
-    while time.time() - start_time < 25:
+
+    while time.time() - start_time < wait_budget:
         res = cluster_manager.r.get(result_key)
         if res:
             # 计算延迟
@@ -1287,7 +1291,7 @@ class NovelCrawler:
             try:
                 import managers
                 cached_data = managers.cache.get(url)
-                if cached_data:
+                if cached_data and is_cacheable_payload(cached_data):
                     info("Crawler", f"✅ 命中临时缓存: {url[:50]}")
                     return self._recognize_payload(cached_data, url)
             except Exception as e:

@@ -1,6 +1,10 @@
 
 # 🛠️ Smart NoteDB 适配器插件开发手册
 
+## 番茄通道配置
+
+在 `config.env` 或进程环境中设置 `FANQIE_ADAPTER=legacy`（默认，旧本地服务）或 `FANQIE_ADAPTER=app`（新 App 通道）。切换后重启 noteDB 和爬虫进程；集群各节点需一致配置。App 通道使用 `FQ_SIGN_URL`（默认 `http://127.0.0.1:8090`）和可选的 `FQ_SIGN_TOKEN`。仅使用可信的本机或安全内网服务；跨不可信网络须使用 HTTPS 和鉴权，令牌不要提交到仓库。旧通道仍使用 `FANQIE_API_HOST`、`FANQIE_API_TOKEN`。新通道需要安装 requirements.txt 中的 pycryptodome。
+
 ## 1. 概述
 Smart NoteDB 采用 **Adapter Pattern (适配器模式)** 处理不同小说网站的差异。
 *   **通用爬虫逻辑**：负责处理 90% 的标准笔趣阁模板站点。
