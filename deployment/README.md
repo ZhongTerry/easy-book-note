@@ -11,6 +11,11 @@ Python `/www/server/pyporject_evn/versions/3.12.3/bin/python3.12`，端口 5000�
 `tencent-bj.example.json` 基于此快照，安装前应重新核对。
 `node1` 是另一份部署，不会连带更新；先单独配置节点的停止、启动和健康检查。
 
+端口 5000 只供本机 Nginx 反向代理使用。线上 `gunicorn_conf.py` 必须绑定
+`127.0.0.1:5000`，防火墙不得放行 5000；公网入口只有 Nginx 的 80/443。
+该配置属于受保护的运行时文件，更新器不会从 Git 覆盖它。每次维护后应确认
+5000 没有公网监听，避免外部扫描连接耗尽 Gunicorn worker。
+
 ## 安装（不执行更新）
 
 将 `update.py`、`service_control.py` 安装在代码目录外的
