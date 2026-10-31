@@ -959,7 +959,7 @@ def update():
 
     real_id = calculate_real_chapter_id(key, final_value, title)
 
-    if real_id <= 0:
+    if real_id <= 0 and not is_manual:
         info("Sync", f"未识别章节号，跳过更新: {key}")
         return jsonify({"status": "success", "message": "未识别章节号，已跳过更新"})
 

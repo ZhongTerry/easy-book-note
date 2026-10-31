@@ -1910,6 +1910,7 @@ body.dark-mode .source-title-input, body.dark-mode #settingsModal select.p-input
     function closeSyncAlert() {
         document.getElementById('syncAlert').classList.remove('active')
         autoSyncProgress(true);
+        showToast('✅ 已保存当前进度，不再提示本次远端进度');
     }
     // 执行保存 (更新阅读进度)
     // 执行保存
