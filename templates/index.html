@@ -881,8 +881,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
 
             <!-- <button class="p-btn p-btn-outline" onclick="doAction('list')">📜 书架</button> -->
             <button class="p-btn p-btn-outline" onclick="openHistory()">⏳ 历史</button>
-            <button class="p-btn p-btn-outline" onclick="openExportHistory()">📦 导出</button>
-            <button class="p-btn p-btn-outline" onclick="openDownloadsManager()">💾 下载</button>
+            <button class="p-btn p-btn-outline" onclick="openExportHistory()">📦 导出与文件</button>
             <!-- <button class="p-btn p-btn-outline" style="color: #f59e0b; border-color: #f59e0b;" onclick="doRollback()">⏪ 撤销</button> -->
             <button class="p-btn p-btn-outline" onclick="openBooklists()">📚 书单</button>
             <button class="p-btn p-btn-outline" onclick="openLibraryBackup()">↻ 备份</button>
@@ -1038,7 +1037,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     <div class="p-modal-content" style="max-width: 500px; max-height: 80vh; overflow-y: auto;">
         <div style="display:flex; justify-content:space-between; margin-bottom:15px; position: sticky; top: -20px; background: white; z-index: 10; padding: 10px 0;">
             <h3 style="margin:0" id="markedModalTitle">📌 标记章节</h3>
-            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('markedModal')">✕</button>
+            <button aria-label="关闭" class="p-btn p-btn-sm" data-modal-close onclick="PureUI.modal.close('markedModal')">✕</button>
         </div>
         <div id="markedChaptersList">
             <!-- 标记列表将在这里加载 -->
@@ -1050,7 +1049,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     <div class="p-modal-content" style="max-width: 600px; max-height: 80vh; overflow-y: auto;">
         <div style="display:flex; justify-content:space-between; margin-bottom:15px; position: sticky; top: -20px; background: white; z-index: 10; padding: 10px 0;">
             <h3 style="margin:0" id="memoModalTitle">📝 备忘</h3>
-            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('memoModal')">✕</button>
+            <button aria-label="关闭" class="p-btn p-btn-sm" data-modal-close onclick="PureUI.modal.close('memoModal')">✕</button>
         </div>
         <div id="memoList">
             <!-- 备忘列表将在这里加载 -->
@@ -1062,7 +1061,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     <div class="p-modal-content" style="max-width: 420px;">
         <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
             <h3 style="margin:0">🏷️ 编辑备忘标签</h3>
-            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('memoTagModal')">✕</button>
+            <button aria-label="关闭" class="p-btn p-btn-sm" data-modal-close onclick="PureUI.modal.close('memoTagModal')">✕</button>
         </div>
         <div style="font-size:12px; color:#666; margin-bottom:8px;">用逗号或空格分隔标签</div>
         <input id="memoTagInput" class="p-input" placeholder="例如: 设定 伏笔" />
@@ -1154,7 +1153,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     <div class="p-modal-content more-menu-content">
         <div style="padding: 15px; border-bottom: 1px solid #eee; font-weight: bold; text-align: center; color: #333; display:flex; justify-content:space-between; align-items:center;">
             <span id="moreMenuTitle">书籍操作</span>
-            <span style="cursor:pointer; font-size:20px; color:#999;" onclick="PureUI.modal.close('moreMenuModal')">×</span>
+            <button type="button" aria-label="关闭" style="border:0; background:transparent; cursor:pointer; font-size:20px; color:#999;" data-modal-close onclick="PureUI.modal.close('moreMenuModal')">×</button>
         </div>
         
         <div class="menu-list" id="moreMenuItems">
@@ -1168,7 +1167,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     <div class="p-modal-content" style="max-width:450px; border-radius:12px;">
         <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
             <h3 style="margin:0; font-size:18px; color:#333;">📦 导出全书</h3>
-            <span style="cursor:pointer; font-size:24px; color:#999; line-height:1;" onclick="PureUI.modal.close('exportModal')">×</span>
+            <button type="button" aria-label="关闭" style="border:0; background:transparent; cursor:pointer; font-size:24px; color:#999; line-height:1;" data-modal-close onclick="PureUI.modal.close('exportModal')">×</button>
         </div>
         
         <div style="padding:20px;">
@@ -1240,13 +1239,15 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
 <div id="exportHistoryModal" class="p-modal">
     <div class="p-modal-content" style="max-width:600px; border-radius:12px;">
         <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
-            <h3 style="margin:0; font-size:18px; color:#333;">📦 导出记录</h3>
-            <span style="cursor:pointer; font-size:24px; color:#999; line-height:1;" onclick="PureUI.modal.close('exportHistoryModal')">×</span>
+            <h3 style="margin:0; font-size:18px; color:#333;">📦 导出与文件</h3>
+            <button type="button" data-modal-close onclick="PureUI.modal.close('exportHistoryModal')" aria-label="关闭导出与文件" style="border:0; background:transparent; cursor:pointer; font-size:24px; color:#999;">×</button>
         </div>
-        
-        <div style="padding:20px; max-height:500px; overflow-y:auto;" id="exportHistoryList">
-            <!-- JS 渲染列表 -->
+        <div style="display:flex; gap:8px; padding:12px 20px 0;">
+            <button type="button" class="p-btn p-btn-outline" id="exportTasksTab" style="flex:1" onclick="showExportPanel('tasks')" aria-pressed="true">导出记录</button>
+            <button type="button" class="p-btn p-btn-outline" id="exportFilesTab" style="flex:1" onclick="showExportPanel('files')" aria-pressed="false">下载文件</button>
         </div>
+        <div style="padding:20px; max-height:500px; overflow-y:auto;" id="exportHistoryList"></div>
+        <div style="display:none; padding:20px; max-height:500px; overflow-y:auto;" id="downloadsList"></div>
     </div>
 </div>
 
@@ -1279,7 +1280,7 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
     <div class="p-modal-content" style="max-width:440px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
             <h3 style="margin:0;">书架备份</h3>
-            <button class="p-btn p-btn-sm" onclick="PureUI.modal.close('libraryBackupModal')" aria-label="关闭">×</button>
+            <button class="p-btn p-btn-sm" data-modal-close onclick="PureUI.modal.close('libraryBackupModal')" aria-label="关闭">×</button>
         </div>
         <p style="margin:0 0 16px; color:#60727b; line-height:1.65; font-size:13px;">备份会保存书籍、进度、标签、标记、书内笔记和书单。目录与正文缓存会在需要时重新获取。</p>
         <div style="display:flex; gap:8px; margin-bottom:20px;">
@@ -1289,22 +1290,6 @@ h1 { margin:0 0 26px; color:var(--shelf-text); text-align:left; font-size:25px; 
             <label class="p-label" for="libraryBackupFile">恢复备份</label>
             <input id="libraryBackupFile" class="p-input" type="file" accept="application/json,.json" style="margin:8px 0 12px;">
             <button class="p-btn p-btn-outline" onclick="restoreLibraryBackup()">恢复到书架</button>
-        </div>
-    </div>
-</div>
-
-<div id="downloadsManagerModal" class="p-modal">
-    <div class="p-modal-content" style="max-width:700px; border-radius:12px;">
-        <div style="padding:20px 20px 15px; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center;">
-            <div>
-                <h3 style="margin:0; font-size:18px; color:#333;">💾 下载管理</h3>
-                <div style="font-size:12px; color:#666; margin-top:4px;">管理已导出的书籍文件</div>
-            </div>
-            <span style="cursor:pointer; font-size:24px; color:#999; line-height:1;" onclick="PureUI.modal.close('downloadsManagerModal')">×</span>
-        </div>
-        
-        <div style="padding:20px; max-height:500px; overflow-y:auto;" id="downloadsList">
-            <!-- JS 渲染列表 -->
         </div>
     </div>
 </div>
@@ -3998,7 +3983,26 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
         // ==========================================
         // 导出历史记录
         // ==========================================
-        async function openExportHistory() {
+        function openExportHistory() {
+            PureUI.modal.open('exportHistoryModal');
+            showExportPanel('tasks');
+        }
+
+        function showExportPanel(panel) {
+            const files = panel === 'files';
+            document.getElementById('exportHistoryList').style.display = files ? 'none' : 'block';
+            document.getElementById('downloadsList').style.display = files ? 'block' : 'none';
+            document.getElementById('exportTasksTab').setAttribute('aria-pressed', String(!files));
+            document.getElementById('exportFilesTab').setAttribute('aria-pressed', String(files));
+            document.getElementById('exportTasksTab').style.fontWeight = files ? 'normal' : 'bold';
+            document.getElementById('exportFilesTab').style.fontWeight = files ? 'bold' : 'normal';
+            if (files) openDownloadsManager();
+            else loadExportHistory();
+        }
+
+        async function loadExportHistory() {
+            const list = document.getElementById('exportHistoryList');
+            list.textContent = '正在加载导出记录…';
             try {
                 const res = await fetch('/api/export/list');
                 const json = await res.json();
@@ -4047,13 +4051,12 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
                         }).join('');
                     }
                     
-                    PureUI.modal.open('exportHistoryModal');
                 } else {
-                    PureUI.toast('error', json.msg || '获取导出历史失败');
+                    list.textContent = json.msg || json.message || '获取导出记录失败';
                 }
             } catch (e) {
                 console.error('获取导出历史失败:', e);
-                PureUI.toast('error', '获取导出历史失败：' + e.message);
+                list.textContent = '获取导出记录失败，请稍后重试。';
             }
         }
         
@@ -4061,8 +4064,14 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
         // 下载管理功能（Pro 专属）
         // ==========================================
         async function openDownloadsManager() {
+            const list = document.getElementById('downloadsList');
+            list.textContent = '正在加载下载文件…';
             try {
                 const res = await fetch('/api/pro/list_downloads');
+                if (res.status === 403) {
+                    list.textContent = '下载文件管理需要 Pro 或管理员权限。';
+                    return;
+                }
                 const json = await res.json();
                 
                 if (json.success) {
@@ -4071,46 +4080,38 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
                     if (json.files.length === 0) {
                         list.innerHTML = '<div style="text-align:center; color:#999; padding:40px;">暂无下载文件</div>';
                     } else {
-                        list.innerHTML = json.files.map(file => {
-                            const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
-                            const date = new Date(file.modified * 1000).toLocaleString('zh-CN');
-                            const ext = file.filename.split('.').pop().toUpperCase();
-                            const icon = ext === 'EPUB' ? '' : '';
-                            
-                            return `
-                                <div style="border:1px solid #e5e7eb; border-radius:8px; padding:15px; margin-bottom:10px;">
-                                    <div style="display:flex; align-items:start; gap:12px;">
-                                        <div style="font-size:32px;">${icon}</div>
-                                        <div style="flex:1;">
-                                            <div style="font-weight:500; color:#333; margin-bottom:5px; word-break:break-all;">${file.filename}</div>
-                                            <div style="font-size:12px; color:#999;">
-                                                ${ext}  ${sizeInMB} MB  ${date}
-                                            </div>
-                                        </div>
-                                    </div>
-                                    
-                                    <div style="display:flex; gap:8px; margin-top:12px;">
-                                        <button onclick="downloadLocalFile('${file.filename}')" 
-                                            style="flex:1; padding:8px; border:1px solid #4f46e5; background:#fff; color:#4f46e5; border-radius:6px; cursor:pointer; font-size:13px;">
-                                             下载到本地
-                                        </button>
-                                        <button onclick="deleteLocalFile('${file.filename}')" 
-                                            style="padding:8px 16px; border:1px solid #ef4444; background:#fff; color:#ef4444; border-radius:6px; cursor:pointer; font-size:13px;">
-                                            
-                                        </button>
-                                    </div>
-                                </div>
-                            `;
-                        }).join('');
+                        list.replaceChildren();
+                        json.files.forEach(file => {
+                            const card = document.createElement('div');
+                            card.style.cssText = 'border:1px solid #e5e7eb; border-radius:8px; padding:15px; margin-bottom:10px';
+                            const name = document.createElement('div');
+                            name.style.cssText = 'font-weight:500; color:#333; margin-bottom:5px; word-break:break-all';
+                            name.textContent = file.filename;
+                            const details = document.createElement('div');
+                            details.style.cssText = 'font-size:12px; color:#999';
+                            details.textContent = `${(file.size / (1024 * 1024)).toFixed(2)} MB · ${new Date(file.modified * 1000).toLocaleString('zh-CN')}`;
+                            const actions = document.createElement('div');
+                            actions.style.cssText = 'display:flex; gap:8px; margin-top:12px';
+                            const download = document.createElement('button');
+                            download.className = 'p-btn p-btn-outline';
+                            download.textContent = '下载到本地';
+                            download.addEventListener('click', () => downloadLocalFile(file.filename));
+                            const remove = document.createElement('button');
+                            remove.className = 'p-btn p-btn-outline';
+                            remove.textContent = '删除';
+                            remove.addEventListener('click', () => deleteLocalFile(file.filename));
+                            actions.append(download, remove);
+                            card.append(name, details, actions);
+                            list.appendChild(card);
+                        });
                     }
                     
-                    PureUI.modal.open('downloadsManagerModal');
                 } else {
-                    PureUI.toast('error', json.msg || '获取文件列表失败');
+                    list.textContent = res.status === 403 ? '下载文件管理需要 Pro 或管理员权限。' : (json.msg || json.message || '获取文件列表失败');
                 }
             } catch (e) {
                 console.error('获取下载列表失败:', e);
-                PureUI.toast('error', '获取下载列表失败：' + e.message);
+                list.textContent = '获取文件列表失败，请稍后重试。';
             }
         }
         
@@ -4140,10 +4141,10 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                PureUI.toast('success', '开始下载');
+                PureUI.toast('开始下载', 'success');
             } catch (e) {
                 console.error('下载失败:', e);
-                PureUI.toast('error', '下载失败：' + e.message);
+                PureUI.toast('下载失败：' + e.message, 'error');
             }
         }
         
@@ -4160,15 +4161,15 @@ async function handleUpdateSuccess(d_raw, key, originalHtml) {
                 const json = await res.json();
                 
                 if (json.success) {
-                    PureUI.toast('success', '删除成功');
+                    PureUI.toast('删除成功', 'success');
                     // 重新加载列表
                     openDownloadsManager();
                 } else {
-                    PureUI.toast('error', json.msg || '删除失败');
+                    PureUI.toast(json.msg || '删除失败', 'error');
                 }
             } catch (e) {
                 console.error('删除失败:', e);
-                PureUI.toast('error', '删除失败：' + e.message);
+                PureUI.toast('删除失败：' + e.message, 'error');
             }
         }
         

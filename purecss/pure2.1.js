@@ -144,9 +144,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2. 自动注入关闭按钮 (如果内容里没有的话)
         const content = m.querySelector('.p-modal-content');
-        if (content && !content.querySelector('.p-modal-close-btn')) {
+        if (content && !content.querySelector('.p-modal-close-btn, [data-modal-close]')) {
             const closeBtn = document.createElement('button');
             closeBtn.className = 'p-modal-close-btn';
+            closeBtn.type = 'button';
+            closeBtn.setAttribute('aria-label', '关闭');
             closeBtn.innerHTML = '×';
             closeBtn.onclick = () => PureUI.modal.close(m.id);
             content.appendChild(closeBtn);
